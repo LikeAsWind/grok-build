@@ -2428,6 +2428,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "daemonize"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab8bfdaacb3c887a54d41bdf48d3af8873b3f5566469f8ba21b92057509f116e"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "dagre_rust"
 version = "0.0.5"
 dependencies = [
@@ -8935,6 +8944,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-embed"
+version = "8.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e7760e252aaba7b09f4be00e36476cf585bdb68a53552ac954cdf504ab4bc9"
+dependencies = [
+ "rust-embed-impl",
+ "rust-embed-utils",
+ "walkdir",
+]
+
+[[package]]
+name = "rust-embed-impl"
+version = "8.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bcfc4d6f53af43755f7a723e4b6b8794fcce052a178dd8c6c1dadc5f5343097"
+dependencies = [
+ "mime_guess",
+ "proc-macro2",
+ "quote",
+ "rust-embed-utils",
+ "shellexpand",
+ "syn 2.0.117",
+ "walkdir",
+]
+
+[[package]]
+name = "rust-embed-utils"
+version = "8.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42ffa149f6aa81b58a5b3011d01a857c4ed12c7a732d2c51947a4c7c692185f0"
+dependencies = [
+ "sha2 0.11.0",
+ "walkdir",
+]
+
+[[package]]
 name = "rust-stemmers"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13713,6 +13758,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "webbrowser",
  "xai-acp-lib",
  "xai-crash-handler",
  "xai-grok-config",
@@ -13723,6 +13769,7 @@ dependencies = [
  "xai-grok-telemetry",
  "xai-grok-update",
  "xai-grok-version",
+ "xai-grok-web",
  "xai-grok-workspace",
  "xai-tty-utils",
 ]
@@ -14402,6 +14449,23 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "xai-tty-utils",
+]
+
+[[package]]
+name = "xai-grok-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "daemonize",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "webbrowser",
+ "xai-grok-shell",
 ]
 
 [[package]]

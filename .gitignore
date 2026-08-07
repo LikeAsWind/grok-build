@@ -1,3 +1,9 @@
 /target
 **/*.rs.bk
 .DS_Store
+.codegraph/
+.claude/
+# Web UI build artifacts (not checked in — built via scripts/build-web.sh)
+web/dist/
+web/node_modules/
+web/bun.lock

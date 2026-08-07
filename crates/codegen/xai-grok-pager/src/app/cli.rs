@@ -143,6 +143,8 @@ See ~/.grok/README.md for more information.
     /// `~/.grok/config.toml` or when the `GROK_AGENT_DASHBOARD=0` env
     /// var is set.
     Dashboard,
+    /// Serve the Grok web UI and open it in a browser
+    Web(WebArgs),
 }
 /// Arguments for the `wrap` subcommand: the command to run, then its args.
 #[derive(Debug, clap::Args, Clone)]
@@ -377,6 +379,34 @@ impl ServeArgs {
 fn generate_random_key(len: usize) -> String {
     let raw = uuid::Uuid::new_v4().to_string().replace('-', "");
     raw.chars().cycle().take(len).collect()
+}
+/// Arguments for the `grok web` subcommand.
+#[derive(Debug, clap::Args, Clone)]
+pub struct WebArgs {
+    /// Address for the server to listen on
+    #[arg(long, default_value = "127.0.0.1:2420")]
+    pub bind: SocketAddr,
+    /// Secret token for client authentication (auto-generated if not provided)
+    #[arg(long, env = "GROK_AGENT_SECRET")]
+    pub secret: Option<String>,
+    /// Open the web UI in the default browser after starting
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    pub open: bool,
+    /// Run in the background as a daemon (Linux only)
+    #[cfg(target_os = "linux")]
+    #[arg(long)]
+    pub daemon: bool,
+    /// Authentication and WebSocket URL overrides
+    #[command(flatten)]
+    pub headless: HeadlessArgs,
+}
+impl WebArgs {
+    /// Get the secret, generating a random one if not provided.
+    pub fn get_secret(&self) -> String {
+        self.secret
+            .clone()
+            .unwrap_or_else(|| generate_random_key(12))
+    }
 }
 /// Arguments for the `agent leader` subcommand.
 #[derive(Debug, clap::Args, Clone)]

@@ -103,6 +103,84 @@ fn print_serve_startup_info(bind_addr: SocketAddr, secret: &str) {
 }
 /// Entrypoint tag for `grok -p`; keys the quiet stderr default in `init_tracing_simple`.
 const HEADLESS_ENTRYPOINT: &str = "headless";
+/// Print startup information for the web command.
+fn print_web_startup_info(bind_addr: SocketAddr, secret: &str) {
+    eprintln!();
+    eprintln!("   Grok web UI starting...");
+    eprintln!();
+    eprintln!("   Address:  {}:{}", bind_addr.ip(), bind_addr.port());
+    eprintln!("   Secret:   {}", secret);
+    eprintln!();
+    eprintln!("   URL: http://{}/#key={}", bind_addr, secret);
+    eprintln!();
+}
+/// Run the `grok web` subcommand: serve the web UI + ACP agent endpoint.
+async fn run_web_command(web_args: xai_grok_pager::app::WebArgs, no_auto_update: bool) -> Result<()> {
+    xai_grok_shell::agent::app::suppress_otel();
+    init_tracing_simple("web");
+    let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
+    xai_grok_telemetry::instrumentation::install_panic_hook();
+    eprintln!(
+        "Grok Build (web) - v{}",
+        xai_grok_version::display_version_with_commit(
+            env!("VERSION_WITH_COMMIT"),
+            xai_grok_update::channel_label(),
+        )
+    );
+    if should_check_for_updates(no_auto_update) {
+        auto_update::run_update_if_available(
+            auto_update::UpdateRunMode::NonBlocking,
+            false,
+            &build_update_config(),
+        )
+        .await
+        .ok();
+    }
+    let raw_config = xai_grok_shell::config::load_effective_config()
+        .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
+    let mut agent_config = AgentConfig::new_from_toml_cfg(&raw_config)
+        .map_err(|e| anyhow::anyhow!("Failed to create agent config: {}", e))?;
+    agent_config.client_version = Some(PAGER_CLIENT_VERSION.to_string());
+    apply_headless_args_to_config(&web_args.headless, &mut agent_config);
+    agent_config.resolve_runtime_fields(&xai_grok_shell::agent::config::RuntimeResolutionContext {
+        raw_config: &raw_config,
+        remote_settings: None,
+        is_headless: true,
+        cli_subagents: None,
+        cli_web_search_model: None,
+        cli_session_summary_model: None,
+        cli_experimental_memory: false,
+        cli_no_memory: false,
+        disable_web_search: false,
+        todo_gate: false,
+        laziness_debug_log: None,
+        storage_mode: None,
+    });
+    // Refuse silent secrets on non-loopback binds: the key rides in the URL,
+    // so exposure beyond localhost must be a deliberate choice.
+    if !web_args.bind.ip().is_loopback() && web_args.secret.is_none() {
+        anyhow::bail!(
+            "refusing to auto-generate a secret for non-loopback bind {}; \
+             pass --secret or set GROK_AGENT_SECRET",
+            web_args.bind
+        );
+    }
+    let secret = web_args.get_secret();
+    print_web_startup_info(web_args.bind, &secret);
+    let web_config = xai_grok_web::WebConfig {
+        bind_addr: web_args.bind,
+        secret: secret.clone(),
+        version: env!("VERSION_WITH_COMMIT").to_string(),
+        cwd: std::env::current_dir().unwrap_or_default(),
+    };
+    if web_args.open {
+        let url = format!("http://{}/#key={}", web_args.bind, secret);
+        if let Err(e) = webbrowser::open(&url) {
+            tracing::warn!(error = %e, "failed to open browser");
+        }
+    }
+    xai_grok_web::run_web_server(web_config, agent_config).await
+}
 /// Initialize simple tracing for non-TUI agent modes.
 fn init_tracing_simple(app_entrypoint: &'static str) {
     use tracing_subscriber::{EnvFilter, Layer as _, fmt, layer::SubscriberExt as _};
@@ -1819,6 +1897,44 @@ fn dispatch_doctor_if_requested(args: &PagerArgs) -> bool {
     }
     true
 }
+/// `grok web --daemon`: pin the secret, print connection info, then fork into
+/// the background. Runs in sync `main` before the tokio runtime is created.
+/// Returns the (possibly updated) args; exits the parent process on fork.
+#[cfg(target_os = "linux")]
+fn daemonize_web_if_requested(mut args: PagerArgs) -> PagerArgs {
+    let Some(xai_grok_pager::app::Command::Web(web_args)) = &mut args.command else {
+        return args;
+    };
+    if !web_args.daemon {
+        return args;
+    }
+    if !web_args.bind.ip().is_loopback() && web_args.secret.is_none() {
+        eprintln!(
+            "grok web: refusing to auto-generate a secret for non-loopback bind {}; \
+             pass --secret or set GROK_AGENT_SECRET",
+            web_args.bind
+        );
+        std::process::exit(1);
+    }
+    // Resolve the secret now so the URL printed here matches the server.
+    let secret = web_args.get_secret();
+    web_args.secret = Some(secret.clone());
+    // A daemon has no browser session to open into.
+    web_args.open = false;
+    let paths = xai_grok_web::daemon::daemon_paths();
+    eprintln!();
+    eprintln!("   Grok web UI daemonizing...");
+    eprintln!();
+    eprintln!("   URL:  http://{}/#key={}", web_args.bind, secret);
+    eprintln!("   Log:  {}", paths.log_file.display());
+    eprintln!("   Pid:  {}", paths.pid_file.display());
+    eprintln!();
+    if let Err(e) = xai_grok_web::daemon::daemonize() {
+        eprintln!("grok web: failed to daemonize: {e:#}");
+        std::process::exit(1);
+    }
+    args
+}
 fn main() {
     xai_grok_telemetry::startup::mark_process_start();
     if let Some(code) = xai_grok_pager::app::mermaid_worker::maybe_run_render_subprocess() {
@@ -1831,6 +1947,10 @@ fn main() {
     if dispatch_version_if_requested(&args) || dispatch_doctor_if_requested(&args) {
         return;
     }
+    // `grok web --daemon` (Linux): fork into the background before the tokio
+    // runtime exists — forking after runtime threads start is unsound.
+    #[cfg(target_os = "linux")]
+    let args = daemonize_web_if_requested(args);
     xai_grok_pager_minimal::install();
     #[cfg(all(feature = "jemalloc", unix))]
     xai_grok_pager::memory_release::install_release_hook(purge_jemalloc_retained_pages);
@@ -2159,6 +2279,10 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             Command::Dashboard => {
                 args.command = Some(Command::Dashboard);
                 flag_dashboard_at_startup_if_requested(&mut args)?;
+            }
+            Command::Web(web_args) => {
+                enforce_version_policy_or_exit();
+                return run_web_command(web_args, args.no_auto_update).await;
             }
         }
     }

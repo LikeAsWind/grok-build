@@ -437,6 +437,23 @@ fn setup_acp_connection(
     });
 }
 
+/// Build the axum router exposing the agent's ACP WebSocket endpoint at `/ws`.
+///
+/// Extracted from [`run_agent_server`] so other servers (e.g. the web UI) can
+/// mount the same endpoint alongside additional routes. The persistent agent
+/// thread is lazily spawned on the first WebSocket connection.
+pub fn agent_ws_router(config: ServerConfig, agent_config: AgentConfig) -> Router {
+    let state = Arc::new(ServerState {
+        agent_config,
+        secret: config.secret,
+        agent_conn_tx: tokio::sync::Mutex::new(None),
+    });
+
+    Router::new()
+        .route("/ws", get(ws_handler))
+        .with_state(state)
+}
+
 /// Run the agent WebSocket server.
 ///
 /// This starts a WebSocket server that accepts authenticated connections from
@@ -460,22 +477,15 @@ pub async fn run_agent_server(
     config: ServerConfig,
     agent_config: AgentConfig,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(ServerState {
-        agent_config,
-        secret: config.secret,
-        agent_conn_tx: tokio::sync::Mutex::new(None),
-    });
+    let bind_addr = config.bind_addr;
+    let app = agent_ws_router(config, agent_config);
 
-    let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .with_state(state);
-
-    let listener = TcpListener::bind(config.bind_addr).await?;
-    info!("Agent server listening on ws://{}/ws", config.bind_addr);
+    let listener = TcpListener::bind(bind_addr).await?;
+    info!("Agent server listening on ws://{}/ws", bind_addr);
     info!(
         "Clients should connect with: --remote ws://{}:{}/ws --secret <token>",
-        config.bind_addr.ip(),
-        config.bind_addr.port()
+        bind_addr.ip(),
+        bind_addr.port()
     );
 
     axum::serve(
