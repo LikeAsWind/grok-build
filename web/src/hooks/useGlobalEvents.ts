@@ -279,6 +279,48 @@ export function useGlobalEvents(directories?: string[]) {
   const directoriesRef = useRef<string[] | undefined>(directories)
   const refreshRef = useRef<((strategy?: 'replace' | 'merge') => void) | null>(null)
   const initializedDirectoriesRef = useRef(false)
+  const permissionListenersRegistered = useRef(false)
+
+  useEffect(() => {
+    if (permissionListenersRegistered.current) return
+    permissionListenersRegistered.current = true
+
+    import('../api/acpPermissionBridge').then(({ mapAcpPermissionToApi, mapAcpQuestionToApi, registerAcpResponder }) => {
+      // 1. ACP permission → permission.asked
+      window.addEventListener('acp:requestPermission', ((e: CustomEvent) => {
+        const { params, respond } = e.detail as { params: Record<string, unknown>; respond: (r: Record<string, unknown>) => void }
+        const mapped = mapAcpPermissionToApi(params)
+        if (!mapped) return
+        registerAcpResponder(mapped.id, respond)
+        dispatchToConsumers(mapped.sessionID, cb => cb.onPermissionAsked?.(mapped))
+        // 兜底：没有匹配的消费者时，通知所有注册的消费者
+        if (!hasConsumerForSession(mapped.sessionID)) {
+          sessionConsumers.forEach(consumer => consumer.callbacks.onPermissionAsked?.(mapped))
+        }
+      }) as EventListener)
+
+      // 2. ACP question → question.asked
+      window.addEventListener('acp:askUserQuestion', ((e: CustomEvent) => {
+        const { params, respond } = e.detail as { params: unknown; respond: (r: unknown) => void }
+        const mapped = mapAcpQuestionToApi(params)
+        if (!mapped) return
+        registerAcpResponder(mapped.id, respond as (r: Record<string, unknown>) => void)
+        dispatchToConsumers(mapped.sessionID, cb => cb.onQuestionAsked?.(mapped))
+        if (!hasConsumerForSession(mapped.sessionID)) {
+          sessionConsumers.forEach(consumer => consumer.callbacks.onQuestionAsked?.(mapped))
+        }
+      }) as EventListener)
+
+      // 3. exit_plan_mode
+      window.addEventListener('acp:exitPlanMode', ((e: CustomEvent) => {
+        const { params, respond } = e.detail as { params: unknown; respond: (r: unknown) => void }
+        // TODO Step 3c: plan approval UI component
+        console.log('[ACP] exit_plan_mode:', params)
+        // 暂时自动批准，避免阻塞
+        ;(respond as (r: unknown) => void)({ approved: true })
+      }) as EventListener)
+    })
+  }, [])
 
   useEffect(() => {
     // 节流滚动

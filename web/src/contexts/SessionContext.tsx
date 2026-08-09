@@ -8,6 +8,7 @@ import {
   type SessionListParams,
 } from '../api'
 import { todoStore } from '../store/todoStore'
+import { markSessionFresh } from '../hooks/useSessionManager'
 import { serverStore } from '../store/serverStore'
 import { pinnedSessionsStore } from '../store/pinnedSessionsStore'
 import { useDirectory } from './useDirectory'
@@ -253,6 +254,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         title,
         directory: targetDir,
       })
+      markSessionFresh(newSession.id)
       return newSession
     },
     [currentDirectory],

@@ -43,6 +43,7 @@ import {
   type ModelInfo,
 } from '../api'
 import { getMessageText, isUserMessage, type AssistantMessageInfo, type Message as UIMessage } from '../types/message'
+import { markSessionFresh } from './useSessionManager'
 import { clipboardErrorHandler, copyTextToClipboard, createErrorHandler } from '../utils'
 import { clearSessionRuntimeState } from '../utils/sessionLifecycle'
 import { serverStorage } from '../utils/perServerStorage'
@@ -632,7 +633,7 @@ export function useChatSession({
       attachments: Attachment[]
       directory: string
       model: { providerID: string; modelID: string }
-      options?: { agent?: string; variant?: string }
+      options?: { agent?: string; variant?: string; mode?: string }
       allowCreateSession?: boolean
     }) => {
       let sessionId = input.sessionId ?? routeSessionId
@@ -650,7 +651,7 @@ export function useChatSession({
       try {
         if (!sessionId) {
           if (!input.allowCreateSession) return false
-          const newSession = await createSession()
+          const newSession = await createSession(); markSessionFresh(newSession.id)
           sessionId = newSession.id
           navigateToSession(sessionId, newSession.directory)
         }
@@ -659,12 +660,10 @@ export function useChatSession({
           messageStore.truncateAfterRevert(sessionId)
         }
 
-        // 记录发送前的消息数量，作为判断 SSE 是否推送新消息的基线
+        // 记录发送前的消息数量，作为判断 ACP 是否推送新消息的基线
         const msgCountBeforeSend = messageStore.getSessionState(sessionId)?.messages.length ?? 0
 
-        // 不要在 send 前 setStreaming：新 user 往往还没入列，过程折叠会把
-        // 「上一轮已收工」误判成最新 Working 再展开，造成一闪。
-        // streaming 在 send 成功后、或 SSE 推到 assistant 时再打开。
+        // streaming 现在由 acpPrompt 内部控制（发 prompt 前设置）
         await sendMessageAsync({
           sessionId,
           text: input.content,
@@ -672,10 +671,9 @@ export function useChatSession({
           model: input.model,
           agent: input.options?.agent,
           variant: input.options?.variant,
+          mode: input.options?.mode,
           directory: input.directory,
         })
-
-        messageStore.setStreaming(sessionId, true)
 
         // 兜底：等待短暂时间后检查 SSE 是否已推送用户消息，
         // 若未收到则主动拉取补齐，避免 SSE 断流导致用户消息不显示
@@ -727,7 +725,7 @@ export function useChatSession({
 
   // Send message handler
   const handleSend = useCallback(
-    async (content: string, attachments: Attachment[], options?: { agent?: string; variant?: string }) => {
+    async (content: string, attachments: Attachment[], options?: { agent?: string; variant?: string; mode?: string }) => {
       if (!currentModel) {
         handleError('send message', new Error('No model selected'))
         return false
@@ -754,6 +752,7 @@ export function useChatSession({
           },
           variant: options?.variant,
           agent: options?.agent,
+          mode: options?.mode,
         })
         messageStore.upsertLocalMessage(
           buildLocalQueuedMessage({
@@ -978,7 +977,7 @@ export function useChatSession({
 
         // Create session if needed (like handleSend does)
         if (!sessionId) {
-          const newSession = await createSession()
+          const newSession = await createSession(); markSessionFresh(newSession.id)
           sessionId = newSession.id
           navigateToSession(sessionId, newSession.directory)
         }

@@ -1,98 +1,64 @@
-// ACP connection provider — wraps the WebSocket lifecycle
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import { AcpClient, connectAcp, disconnectAcp, getAcp } from "../api/acp";
-
-type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+// ACP connection provider — 基于 acpBridge 的连接状态封装
+import React, { createContext, useContext, useEffect, useSyncExternalStore } from 'react'
+import {
+  ensureAcp,
+  disconnectAcpBridge,
+  getAcpStatus,
+  getAcpStatusError,
+  getServerCwd,
+  hasAcpSecret,
+  subscribeAcpStatus,
+  type AcpStatus,
+} from '../api/acpBridge'
 
 interface AcpContextValue {
-  status: ConnectionStatus;
-  error: string | null;
-  sessionId: string | null;
-  cwd: string | null;
-  connect: (secret: string) => Promise<void>;
-  disconnect: () => void;
-  client: AcpClient | null;
+  status: AcpStatus
+  error: string | null
+  cwd: string | null
+  connect: () => Promise<void>
+  disconnect: () => void
 }
 
 const AcpCtx = createContext<AcpContextValue>({
-  status: "disconnected",
+  status: 'disconnected',
   error: null,
-  sessionId: null,
   cwd: null,
   connect: async () => {},
   disconnect: () => {},
-  client: null,
-});
+})
 
 export function useAcp() {
-  return useContext(AcpCtx);
+  return useContext(AcpCtx)
 }
 
-// Read secret from URL fragment (#key=...) and store in sessionStorage
-function readSecret(): string | null {
-  const hash = window.location.hash;
-  if (!hash) return sessionStorage.getItem("grok-secret");
-  const params = new URLSearchParams(hash.slice(1));
-  const key = params.get("key");
-  if (key) {
-    sessionStorage.setItem("grok-secret", key);
-    const url = new URL(window.location.href);
-    url.hash = "";
-    window.history.replaceState(null, "", url.toString());
-  }
-  return key ?? sessionStorage.getItem("grok-secret");
+async function connect() {
+  await ensureAcp()
 }
 
 export function AcpProvider({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<ConnectionStatus>("disconnected");
-  const [error, setError] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [cwd, setCwd] = useState<string | null>(null);
-  const clientRef = useRef<AcpClient | null>(null);
+  const status = useSyncExternalStore(subscribeAcpStatus, getAcpStatus)
+  const error = useSyncExternalStore(subscribeAcpStatus, getAcpStatusError)
 
-  const connect = useCallback(async (secret: string) => {
-    setStatus("connecting");
-    setError(null);
-    try {
-      const c = await connectAcp(secret);
-      clientRef.current = c;
-      setSessionId((c as any)._sessionId ?? null); // stored after newSession
-      setCwd((c as any)._cwd ?? null);
-      setStatus("connected");
-    } catch (err) {
-      setStatus("error");
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
-
-  const disconnect = useCallback(() => {
-    disconnectAcp();
-    clientRef.current = null;
-    setStatus("disconnected");
-    setSessionId(null);
-  }, []);
-
-  // Auto-connect if secret is present in URL
+  // 有密钥就自动连接（URL #key、sessionStorage 或服务器面板配置的密钥）
   useEffect(() => {
-    const secret = readSecret();
-    if (secret && status === "disconnected") {
-      void connect(secret);
+    if (hasAcpSecret() && getAcpStatus() === 'disconnected') {
+      void ensureAcp().catch(() => {
+        // 状态已在 acpBridge 内置为 error，界面通过 status 呈现
+      })
     }
-  }, []);
+  }, [])
 
   return (
     <AcpCtx.Provider
       value={{
         status,
         error,
-        sessionId,
-        cwd,
+        cwd: getServerCwd() || null,
         connect,
-        disconnect,
-        client: clientRef.current,
+        disconnect: disconnectAcpBridge,
       }}
     >
       {children}
     </AcpCtx.Provider>
-  );
+  )
 }

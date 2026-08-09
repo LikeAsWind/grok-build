@@ -19,6 +19,7 @@ import {
   extractUserMessageContent,
   type ApiMessageWithParts,
 } from '../api'
+import { acpLoadSession } from '../api/acpBridge'
 import { sessionErrorHandler } from '../utils'
 import { isSessionNotFoundError } from '../utils/sessionErrors'
 import { INITIAL_MESSAGE_LIMIT, HISTORY_LOAD_BATCH_SIZE } from '../constants'
@@ -106,6 +107,13 @@ function mergeWithLocalStreamingMessages(
   })
 }
 
+/** 刚通过 createSession 创建的 sessionId，loadSession 里跳过历史回放 */
+const freshSessionIds = new Set<string>()
+
+export function markSessionFresh(sessionId: string) {
+  freshSessionIds.add(sessionId)
+}
+
 export function useSessionManager({ sessionId, directory, onLoadComplete, onError, onSessionMissing }: UseSessionManagerOptions) {
   const loadSequenceRef = useRef<Map<string, number>>(new Map())
   /** 每个 session 当前已请求的消息 limit（cursor），loadMore 时递增 */
@@ -176,6 +184,32 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
 
       messageStore.setLoadState(sid, 'loading')
 
+      // 加载期间 acpPrompt 可能已往 messageStore 放了消息，跳过覆盖
+      const preLoadMessages = messageStore.getSessionState(sid)?.messages.length ?? 0
+
+      // ACP 历史回放
+      const isFresh = freshSessionIds.has(sid)
+      console.log('[LOAD]', sid.slice(0,12), 'existing:', hasExistingMessages, 'fresh:', isFresh)
+      if (isFresh) {
+        freshSessionIds.delete(sid)
+        console.log('[LOAD] fresh — skip')
+      } else if (!hasExistingMessages) {
+        console.log('[LOAD] calling session/load...')
+        await acpLoadSession(sid)
+        // 给足够时间让 history 事件通过 session/update 流入 messageStore
+        await new Promise(resolve => setTimeout(resolve, 500))
+        const msgs = messageStore.getSessionState(sid)?.messages.length ?? 0
+        console.log('[LOAD] after load, msgs in store:', msgs)
+        if (msgs > 0) {
+          // history 已通过 session/update 进入 store，直接标记 loaded，跳过后续 setMessages 覆盖
+          messageStore.updateSessionMetadata(sid, { loadState: 'loaded' })
+          messageStore.handleSessionIdle(sid)
+          onLoadComplete?.()
+          return
+        }
+        console.log('[LOAD] no msgs after load, falling through to snapshot')
+      }
+
       try {
         // 并行加载 session 信息和消息（传递 directory）
         const [sessionInfo, apiMessages] = await Promise.all([
@@ -184,6 +218,19 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
         ])
 
         if (isStale()) return
+
+        // ACP: 加载期间 acpPrompt 已放入消息，不覆盖
+        if (preLoadMessages > 0) {
+          messageStore.updateSessionMetadata(sid, {
+            hasMoreHistory: apiMessages.length >= INITIAL_MESSAGE_LIMIT,
+            directory: sessionInfo?.directory ?? dir ?? '',
+            title: sessionInfo?.title,
+            loadState: 'loaded',
+            shareUrl: sessionInfo?.share?.url,
+          })
+          onLoadComplete?.()
+          return
+        }
 
         // 再次检查：加载期间 SSE 可能已经推送了更多消息
         // force 模式下（重连）始终用服务器数据覆盖，因为本地数据可能不完整
@@ -220,6 +267,8 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
           revertState: sessionInfo?.revert ?? null,
           shareUrl: sessionInfo?.share?.url,
         })
+        // 历史回放完成后，消息可能缺 completed 时间戳导致 isStreaming 误判
+        messageStore.handleSessionIdle(sid)
 
         cursorRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, apiMessages.length))
 
