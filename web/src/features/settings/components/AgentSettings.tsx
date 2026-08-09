@@ -32,8 +32,8 @@ export function AgentSettings() {
     themeStore.setImmersiveMode(next)
     setInlineToolRequests(next)
     setDescriptiveToolSteps(next)
-    setToolCardStyle(next ? 'compact' : 'classic')
     setCompactInlinePermission(next)
+    // 不再强制覆盖 toolCardStyle —— 用户显式选择的工具输出风格保持不变
   }
 
   const toggleApprovePending = () => {

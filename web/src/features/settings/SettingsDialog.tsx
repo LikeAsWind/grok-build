@@ -23,11 +23,12 @@ import { AppearanceSettings } from './components/AppearanceSettings'
 import { AboutSettings } from './components/AboutSettings'
 import { ChatSettings } from './components/ChatSettings'
 import { ModelsSettings } from './components/ModelsSettings'
+import { CustomModelsSettings } from './components/CustomModelsSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ServiceSettings } from './components/ServiceSettings'
 import { ServersSettings } from './components/ServersSettings'
 import { WorkspaceSettings } from './components/WorkspaceSettings'
-import { ConfigSettings } from './components/ConfigSettings'
+import { GrokConfigSettings } from './components/GrokConfigSettings'
 import { SettingsSearch } from './SettingsSearch'
 import { SETTINGS_SEARCH_DEFINITIONS, type SettingsSearchItem } from './settingsSearchCatalog'
 
@@ -118,13 +119,20 @@ function TabContent({ tab }: { tab: SettingsTab }) {
     case 'chat':
       return <ChatSettings />
     case 'models':
-      return <ModelsSettings />
+      // 上：模型目录可见性（modelState）；下：config.toml 自定义模型/供应商表格
+      return (
+        <>
+          <ModelsSettings />
+          <CustomModelsSettings />
+        </>
+      )
     case 'notifications':
       return <NotificationSettings />
     case 'service':
       return <ServiceSettings />
     case 'config':
-      return <ConfigSettings />
+      // grok: 配置 tab 编辑后端的 ~/.grok/config.toml（原 opencode 结构化编辑器保留在 ConfigSettings，未挂载）
+      return <GrokConfigSettings />
     case 'servers':
       return <ServersSettings />
     case 'keybindings':

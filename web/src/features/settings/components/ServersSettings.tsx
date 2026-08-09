@@ -48,7 +48,7 @@ function ServerItem({
   isActive: boolean
   onSelect: () => void
   onDelete: () => void
-  onEdit: (updates: { name: string; url: string; username?: string; password?: string }) => void
+  onEdit: (updates: { name: string; url: string; password?: string }) => void
   onCheckHealth: () => void
 }) {
   const { t } = useTranslation(['settings', 'common'])
@@ -68,7 +68,7 @@ function ServerItem({
       case 'checking':
         return t('servers.checking')
       case 'online':
-        return `${t('servers.onlineLatency', { latency: health.latency })}${health.version ? ` · OpenCode v${health.version}` : ''}`
+        return `${t('servers.onlineLatency', { latency: health.latency })}${health.version ? ` · grok v${health.version}` : ''}`
       case 'unauthorized':
         return t('servers.invalidCredentials')
       case 'offline':
@@ -139,33 +139,32 @@ function ServerItem({
           >
             {statusIcon()}
           </button>
+          {/* 默认服务器也允许编辑（grok 需要在这里给 Local 配访问密钥），仅删除限制为非默认 */}
+          <button
+            type="button"
+            className="p-1.5 rounded-md text-text-400 hover:text-accent-main-100 hover:bg-accent-main-100/10 transition-colors"
+            onClick={e => {
+              e.stopPropagation()
+              setEditing(true)
+            }}
+            title={t('servers.editServer')}
+            aria-label={t('servers.editServer')}
+          >
+            <PencilIcon size={13} />
+          </button>
           {!server.isDefault && (
-            <>
-              <button
-                type="button"
-                className="p-1.5 rounded-md text-text-400 hover:text-accent-main-100 hover:bg-accent-main-100/10 transition-colors"
-                onClick={e => {
-                  e.stopPropagation()
-                  setEditing(true)
-                }}
-                title={t('servers.editServer')}
-                aria-label={t('servers.editServer')}
-              >
-                <PencilIcon size={13} />
-              </button>
-              <button
-                type="button"
-                className="p-1.5 rounded-md text-text-400 hover:text-danger-100 hover:bg-danger-100/10 transition-colors"
-                onClick={e => {
-                  e.stopPropagation()
-                  setConfirmDelete(true)
-                }}
-                title={t('common:remove')}
-                aria-label={t('common:remove')}
-              >
-                <TrashIcon size={13} />
-              </button>
-            </>
+            <button
+              type="button"
+              className="p-1.5 rounded-md text-text-400 hover:text-danger-100 hover:bg-danger-100/10 transition-colors"
+              onClick={e => {
+                e.stopPropagation()
+                setConfirmDelete(true)
+              }}
+              title={t('common:remove')}
+              aria-label={t('common:remove')}
+            >
+              <TrashIcon size={13} />
+            </button>
           )}
         </div>
       </div>
@@ -197,13 +196,12 @@ function EditServerForm({
   onCancel,
 }: {
   server: ServerConfig
-  onSave: (updates: { name: string; url: string; username?: string; password?: string }) => void
+  onSave: (updates: { name: string; url: string; password?: string }) => void
   onCancel: () => void
 }) {
   const { t } = useTranslation(['settings', 'common'])
   const [name, setName] = useState(server.name)
   const [url, setUrl] = useState(server.url)
-  const [username, setUsername] = useState(server.auth?.username || '')
   const [password, setPassword] = useState(server.auth?.password || '')
   const [showAuth, setShowAuth] = useState(!!server.auth?.password)
   const [error, setError] = useState('')
@@ -229,7 +227,6 @@ function EditServerForm({
     onSave({
       name: trimmedName,
       url: url.trim(),
-      username: password.trim() ? username.trim() || 'opencode' : undefined,
       password: password.trim() || undefined,
     })
   }
@@ -280,34 +277,19 @@ function EditServerForm({
       </button>
 
       {showAuth && (
-        <>
-          <div>
-            <label className="block text-[length:var(--fs-xs)] font-medium text-text-300 mb-1">{t('servers.username')}</label>
-            <input
-              type="text"
-              value={username}
-              onChange={e => {
-                setUsername(e.target.value)
-                setError('')
-              }}
-              placeholder={t('servers.usernamePlaceholder')}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label className="block text-[length:var(--fs-xs)] font-medium text-text-300 mb-1">{t('servers.password')}</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => {
-                setPassword(e.target.value)
-                setError('')
-              }}
-              placeholder={t('servers.passwordPlaceholder')}
-              className={inputCls}
-            />
-          </div>
-        </>
+        <div>
+          <label className="block text-[length:var(--fs-xs)] font-medium text-text-300 mb-1">{t('servers.password')}</label>
+          <input
+            type="password"
+            value={password}
+            onChange={e => {
+              setPassword(e.target.value)
+              setError('')
+            }}
+            placeholder={t('servers.passwordPlaceholder')}
+            className={inputCls}
+          />
+        </div>
       )}
 
       {showHttpsIpWarning && (
@@ -337,13 +319,12 @@ function AddServerForm({
   onAdd,
   onCancel,
 }: {
-  onAdd: (name: string, url: string, username?: string, password?: string) => void
+  onAdd: (name: string, url: string, password?: string) => void
   onCancel: () => void
 }) {
   const { t } = useTranslation(['settings', 'common'])
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
-  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showAuth, setShowAuth] = useState(false)
   const [error, setError] = useState('')
@@ -366,23 +347,9 @@ function AddServerForm({
       return
     }
 
-    onAdd(
-      trimmedName,
-      url.trim(),
-      password.trim() ? username.trim() || 'opencode' : undefined,
-      password.trim() || undefined,
-    )
+    onAdd(trimmedName, url.trim(), password.trim() || undefined)
   }
 
-  const isCrossOrigin = (() => {
-    if (!url.trim()) return false
-    try {
-      const serverUrl = new URL(url)
-      return serverUrl.origin !== window.location.origin
-    } catch {
-      return false
-    }
-  })()
   const showHttpsIpWarning = isHttpsIpUrl(url)
 
   const inputCls = settingsFieldClass
@@ -430,19 +397,6 @@ function AddServerForm({
       {showAuth && (
         <>
           <div>
-            <label className="block text-[length:var(--fs-xs)] font-medium text-text-300 mb-1">{t('servers.username')}</label>
-            <input
-              type="text"
-              value={username}
-              onChange={e => {
-                setUsername(e.target.value)
-                setError('')
-              }}
-              placeholder={t('servers.usernamePlaceholder')}
-              className={inputCls}
-            />
-          </div>
-          <div>
             <label className="block text-[length:var(--fs-xs)] font-medium text-text-300 mb-1">{t('servers.password')}</label>
             <input
               type="password"
@@ -455,20 +409,6 @@ function AddServerForm({
               className={inputCls}
             />
           </div>
-
-          {isCrossOrigin && password.trim() && (
-            <div className="text-[length:var(--fs-xs)] text-warning-100 bg-warning-bg border border-warning-100/20 rounded-md px-2.5 py-2 leading-relaxed">
-              {t('servers.crossOriginWarning')}{' '}
-              <a
-                href="https://github.com/anomalyco/opencode/issues/10047"
-                target="_blank"
-                rel="noopener"
-                className="underline hover:no-underline"
-              >
-                #10047
-              </a>
-            </div>
-          )}
 
           <div className="text-[length:var(--fs-xs)] text-text-400 leading-relaxed">{t('servers.credentialsStorage')}</div>
         </>
@@ -574,9 +514,8 @@ export function ServersSettings() {
             onSelect={() => handleSelectServer(s.id)}
             onDelete={() => removeServer(s.id)}
             onEdit={updates => {
-              const auth = updates.password
-                ? { username: updates.username || 'opencode', password: updates.password }
-                : undefined
+              // grok 后端只有 server-key，无用户名概念；username 仅为兼容 ServerAuth 结构
+              const auth = updates.password ? { username: 'grok', password: updates.password } : undefined
               updateServer(s.id, { name: updates.name, url: updates.url, auth })
               void checkHealth(s.id)
             }}
@@ -586,8 +525,8 @@ export function ServersSettings() {
 
         {addingServer && (
           <AddServerForm
-            onAdd={(n, u, user, pass) => {
-              const auth = pass ? { username: user || 'opencode', password: pass } : undefined
+            onAdd={(n, u, pass) => {
+              const auth = pass ? { username: 'grok', password: pass } : undefined
               const s = addServer({ name: n, url: u, auth })
               setAddingServer(false)
               void checkHealth(s.id)
