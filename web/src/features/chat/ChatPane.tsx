@@ -975,7 +975,7 @@ export const ChatPane = memo(function ChatPane({
       {!inlineToolRequests && pendingPermissionRequests.length === 0 && pendingQuestionRequests.length > 0 && (
         <QuestionDialog
           request={pendingQuestionRequests[0]}
-          onReply={answers => handleQuestionReply(pendingQuestionRequests[0].id, answers, effectiveDirectory)}
+          onReply={answers => handleQuestionReply(pendingQuestionRequests[0].id, answers, effectiveDirectory, pendingQuestionRequests[0].questions)}
           onReject={() => handleQuestionReject(pendingQuestionRequests[0].id, effectiveDirectory)}
           queueLength={pendingQuestionRequests.length}
           isReplying={isReplying}

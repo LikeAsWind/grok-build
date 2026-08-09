@@ -31,7 +31,7 @@ export interface UsePermissionHandlerResult {
     directory?: string,
     sessionId?: string,
   ) => Promise<boolean>
-  handleQuestionReply: (requestId: string, answers: QuestionAnswer[], directory?: string) => Promise<boolean>
+  handleQuestionReply: (requestId: string, answers: QuestionAnswer[], directory?: string, questions?: { header?: string; question?: string }[]) => Promise<boolean>
   handleQuestionReject: (requestId: string, directory?: string) => Promise<boolean>
   // Refresh (fallback sync for pending requests) - 支持单个或多个 session IDs
   refreshPendingRequests: (sessionIds?: string | string[], directory?: string) => Promise<void>
@@ -124,7 +124,7 @@ export function usePermissionHandler(): UsePermissionHandlerResult {
   )
 
   const handleQuestionReply = useCallback(
-    async (requestId: string, answers: QuestionAnswer[], directory?: string): Promise<boolean> => {
+    async (requestId: string, answers: QuestionAnswer[], directory?: string, questions?: { header?: string; question?: string }[]): Promise<boolean> => {
       if (replyingIdsRef.current.has(requestId)) {
         console.warn(`[Question] Already replying to ${requestId}`)
         return false
@@ -134,7 +134,7 @@ export function usePermissionHandler(): UsePermissionHandlerResult {
       setIsReplying(true)
 
       try {
-        await withRetry(() => replyQuestion(requestId, answers, directory))
+        await withRetry(() => replyQuestion(requestId, answers, directory, questions))
         setPendingQuestionRequests(prev => prev.filter(r => r.id !== requestId))
         activeSessionStore.resolvePendingRequest(requestId)
         return true

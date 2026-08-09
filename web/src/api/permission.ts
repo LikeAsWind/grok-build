@@ -90,18 +90,17 @@ export async function replyQuestion(
   requestId: string,
   answers: QuestionAnswer[],
   directory?: string,
+  questions?: { header?: string; question?: string }[],
 ): Promise<boolean> {
   const { consumeAcpResponder } = await import('./acpPermissionBridge')
   const respond = consumeAcpResponder(requestId)
   if (respond) {
     // ACP AskUserQuestionExtResponse 格式: { outcome: "accepted", answers: { "header": ["answer"] } }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // QuestionAnswer = string[], parallel to questions[] — 用 question header 做 key
     const answersMap: Record<string, string[]> = {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    answers.forEach((a: any) => {
-      const key = a.question || a.header || ''
-      const val = a.answer ?? a.response ?? ''
-      if (key) answersMap[key] = [val]
+    answers.forEach((selected, idx) => {
+      const key = questions?.[idx]?.header || questions?.[idx]?.question || `q${idx}`
+      answersMap[key] = Array.isArray(selected) ? selected : [String(selected)]
     })
     respond({ outcome: 'accepted', answers: answersMap })
     return true

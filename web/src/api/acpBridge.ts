@@ -637,10 +637,6 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       handleToolCallUpdate(sessionId, turn, update)
       break
     }
-    case 'user_message_chunk': {
-      handleUserMessageChunk(sessionId, turn, update.content)
-      break
-    }
     case 'plan': {
       handlePlan(sessionId, update)
       break
@@ -751,6 +747,51 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       })
       break
     }
+    // ── Subagent 生命周期 ──────────────────────────────────────────
+    case 'subagent_spawned': {
+      const sa = update as Record<string, unknown>
+      const subagentType = typeof sa.subagentType === 'string' ? sa.subagentType : 'agent'
+      const desc = typeof sa.description === 'string' ? sa.description : ''
+      const msg = `🤖 Subagent started: **${subagentType}**${desc ? ` — ${desc}` : ''}`
+      const id = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      emitPartUpdated(sessionId, id, { id: `${id}:sub:${Date.now()}`, type: 'text', text: msg })
+      break
+    }
+    case 'subagent_finished': {
+      const sf = update as Record<string, unknown>
+      const subagentType = typeof sf.subagentType === 'string' ? sf.subagentType : 'agent'
+      const tokens = typeof sf.tokensUsed === 'number' ? sf.tokensUsed : 0
+      const msg = `✅ Subagent finished: **${subagentType}**${tokens ? ` (${tokens} tokens)` : ''}`
+      const id = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      emitPartUpdated(sessionId, id, { id: `${id}:sub:${Date.now()}`, type: 'text', text: msg })
+      break
+    }
+    // subagent_progress: high-frequency ticks, don't emit UI parts
+    case 'subagent_progress':
+      break
+    // ── Compaction 通知 ────────────────────────────────────────────
+    case 'auto_compact_started': {
+      const ac = update as Record<string, unknown>
+      const pct = typeof ac.percentage === 'number' ? ac.percentage : 0
+      const id = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      emitPartUpdated(sessionId, id, { id: `${id}:compact:${Date.now()}`, type: 'text', text: `🔄 Compacting context (${pct}% used)...` })
+      break
+    }
+    case 'auto_compact_completed': {
+      const acc = update as Record<string, unknown>
+      const after = typeof acc.tokensAfter === 'number' ? acc.tokensAfter : 0
+      const id = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      emitPartUpdated(sessionId, id, { id: `${id}:compact:${Date.now()}`, type: 'text', text: `✅ Context compacted (${after} tokens)` })
+      break
+    }
+    case 'auto_compact_failed':
+    case 'auto_compact_cancelled':
+      // log-only for now
+      break
     default:
       break
   }
