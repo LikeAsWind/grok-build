@@ -6,6 +6,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getCommands, type Command } from '../../api/command'
+import { getAvailableCommands } from '../../api/acpBridge'
 import { apiErrorHandler } from '../../utils'
 import { scrollItemIntoView } from '../../utils/scrollUtils'
 
@@ -13,10 +14,25 @@ import { scrollItemIntoView } from '../../utils/scrollUtils'
 // Types
 // ============================================
 
+interface AcpCommandWire {
+  name?: string
+  description?: string
+  argument_hint?: string
+}
+
+function mapAcp(c: AcpCommandWire): Command {
+  return {
+    name: c.name || '',
+    description: c.description,
+    source: 'api',
+  }
+}
+
 interface SlashCommandMenuProps {
   isOpen: boolean
   query: string // "/" 之后的文本
   rootPath?: string // 用于 API 调用
+  sessionId?: string | null // ACP 命令的 session 上下文
   onSelect: (command: Command) => void
   onClose: () => void
 }
@@ -34,7 +50,7 @@ export interface SlashCommandMenuHandle {
 // ============================================
 
 export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandMenuProps>(function SlashCommandMenu(
-  { isOpen, query, rootPath, onSelect, onClose },
+  { isOpen, query, rootPath, sessionId, onSelect, onClose },
   ref,
 ) {
   const { t } = useTranslation(['commands', 'common'])
@@ -121,7 +137,7 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
     }
   }, [isOpen])
 
-  // 加载命令列表
+  // 加载命令列表（REST API + ACP 合并）
   useEffect(() => {
     if (!isOpen) return
 
@@ -129,10 +145,20 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
       const requestId = ++requestIdRef.current
       setLoading(true)
 
-      getCommands(rootPath)
-        .then(cmds => {
+      // 并行取 REST 和 ACP 命令
+      Promise.all([
+        getCommands(rootPath),
+        sessionId ? Promise.resolve(getAvailableCommands(sessionId)) : Promise.resolve([]),
+      ])
+        .then(([restCmds, acpCmds]) => {
           if (requestId !== requestIdRef.current) return
-          setCommands(cmds)
+          // ACP 命令优先（同名覆盖 REST），转成 Command 格式
+          const restNames = new Set(restCmds.map(c => c.name))
+          const acpMapped = (acpCmds as unknown as AcpCommandWire[])
+            .filter(c => typeof c?.name === 'string' && c.name.length > 0)
+            .map(mapAcp)
+            .filter(c => !restNames.has(c.name))
+          setCommands([...restCmds, ...acpMapped])
           setSelectedIndex(0)
         })
         .catch(err => {

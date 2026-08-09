@@ -1289,6 +1289,7 @@ function InputBoxComponent({
               isOpen={slashOpen}
               query={slashQuery}
               rootPath={rootPath}
+              sessionId={sessionId}
               onSelect={handleSlashSelect}
               onClose={handleSlashClose}
             />

@@ -118,7 +118,7 @@ export function useModelSelection({ models, sessionId = null }: UseModelSelectio
     serverStorage.remove(STORAGE_KEY_SELECTED_MODEL)
   }, [resolvedModelKey, resolvedSelectedVariant, sessionId, sessionSelection])
 
-  // 切换模型
+  // 切换模型 — 立即同步到后端
   const handleModelChange = useCallback(
     (modelKey: string, _model: ModelInfo) => {
       // 先保存当前模型的 variant 偏好
@@ -131,8 +131,15 @@ export function useModelSelection({ models, sessionId = null }: UseModelSelectio
         selectedModelKey: modelKey,
         selectedVariant: getModelVariantPref(modelKey),
       })
+
+      // 立即同步到后端（非仅在 prompt 时）
+      if (sessionId) {
+        import('../api/acpBridge').then(({ ensureAcp }) => {
+          ensureAcp().then(client => client.setModel(sessionId!, modelKey)).catch(() => {})
+        })
+      }
     },
-    [resolvedModelKey, resolvedSelectedVariant],
+    [resolvedModelKey, resolvedSelectedVariant, sessionId],
   )
 
   // Variant 变化时保存偏好
