@@ -659,6 +659,14 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       }
       break
     }
+    case 'model_changed': {
+      // 后端 x.ai/session_notification model_changed 推送（多客户端同步）
+      const mc = update as Record<string, unknown>
+      if (typeof mc.modelId === 'string') {
+        sessionModelIds.set(sessionId, mc.modelId)
+      }
+      break
+    }
     case 'session_info_update': {
       if (typeof update.title === 'string' && update.title) {
         emit(
@@ -670,14 +678,41 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       break
     }
     case 'retry_state': {
-      // 后端 RetryState 推送：failed/exhausted 是终态错误
-      const rs = (update as Record<string, unknown>).retryState as Record<string, unknown> | undefined
-      const kind = rs?.type ? String(rs.type) : ''
-      const message = String(rs?.message ?? rs?.reason ?? '采样失败')
-      const errorType = String(rs?.error_type ?? rs?.errorType ?? 'unknown')
+      // 后端 RetryState 推送（failed/exhausted 是终态错误）。
+      // XaiSessionUpdate::RetryState 序列化为 flat JSON：
+      //   { sessionUpdate: "retry_state", type: "failed", error_type: "...", message: "..." }
+      const up = update as Record<string, unknown>
+      // 兼容两种格式：flat（x.ai/session_notification）和 nested（acp session/update）
+      const rs = (up.retryState as Record<string, unknown> | undefined) ?? up
+      const kind = rs.type ? String(rs.type) : ''
+      const message = String(rs.message ?? rs.reason ?? '采样失败')
+      const errorType = String(rs.error_type ?? rs.errorType ?? 'unknown')
       if (kind === 'failed' || kind === 'exhausted') {
         turn.promptInFlight = false
+        // 把错误作为 RetryPart 内联到 assistant 消息中，
+        // 由 RetryPartView 渲染为可展开的结构化错误卡片。
+        const assistantId = ensureAssistant(sessionId, turn)
+        breakActiveParts(turn)
+        const attempt = typeof rs.attempt === 'number' ? rs.attempt
+          : typeof rs.attempts === 'number' ? rs.attempts
+          : 1
+        const retryPartId = `${assistantId}:retry:${Date.now()}`
+        emitPartUpdated(sessionId, assistantId, {
+          id: retryPartId,
+          type: 'retry',
+          attempt,
+          error: {
+            name: 'APIError',
+            data: {
+              message,
+              isRetryable: kind === 'exhausted',
+              metadata: { errorType, kind },
+            },
+          },
+          time: { created: Date.now() },
+        })
         finalizeTurn(turn)
+        // 保留 loadError 供无消息时的 fallback 显示（ChatArea 的 MessageErrorView）
         import('../store/messageStore').then(({ messageStore }) => {
           messageStore.setLoadError(sessionId, {
             name: 'APIError',
@@ -698,6 +733,26 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       }
       break
     }
+    case 'task_completed': {
+      // 后台任务完成 → 作为系统消息内联到会话
+      const t = update as Record<string, unknown>
+      const taskId = typeof t.taskId === 'string' ? t.taskId
+        : (t.task_snapshot as Record<string, unknown> | undefined)?.task_id
+      const taskIdStr = typeof taskId === 'string' ? taskId : 'unknown'
+      const agentId = typeof t.agentId === 'string' ? t.agentId
+        : (t.task_snapshot as Record<string, unknown> | undefined)?.agent_id
+      const message = typeof t.message === 'string' ? t.message
+        : `Task \`${taskIdStr}\` completed${agentId ? ` (agent: ${agentId})` : ''}`
+      const assistantId = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      const taskPartId = `${assistantId}:task:${Date.now()}`
+      emitPartUpdated(sessionId, assistantId, {
+        id: taskPartId,
+        type: 'text',
+        text: `✅ ${message}`,
+      })
+      break
+    }
     default:
       break
   }
@@ -706,6 +761,13 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
 function handleExtNotification(method: string, params: unknown) {
   if (method === 'x.ai/models/update' && isRecord(params)) {
     _modelState = params as unknown as AcpModelState
+    return
+  }
+  // x.ai/session_notification 携带 RetryState 等 xAI 扩展更新，
+  // 结构与 session/update 兼容（{ sessionId, update: { sessionUpdate, ... } }），
+  // 走同一个转译入口以触发 session.error / messageStore.setLoadError。
+  if (method === 'x.ai/session_notification' && isRecord(params)) {
+    handleAcpSessionUpdate(params)
     return
   }
   window.dispatchEvent(new CustomEvent('acp:extNotification', { detail: { method, params } }))
