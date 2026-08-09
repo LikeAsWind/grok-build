@@ -59,6 +59,7 @@ export interface SendMessageParams {
   agent?: string
   variant?: string
   directory?: string
+  mode?: string
 }
 
 export interface SendMessageResponse {

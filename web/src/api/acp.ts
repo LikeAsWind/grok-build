@@ -10,6 +10,16 @@ export type NotificationHandler = (method: string, params: unknown) => void;
 
 const METHOD_NOT_FOUND = -32601;
 
+// ACP 扩展方法在 wire 上带 "_" 前缀（如 "_x.ai/session/list"）；
+// 解码器只把带前缀的自定义方法路由到 ext_method。对调用方隐藏此细节。
+function addExtPrefix(method: string): string {
+  return method.startsWith("_") ? method : `_${method}`;
+}
+
+function stripExtPrefix(method: string): string {
+  return method.startsWith("_") ? method.slice(1) : method;
+}
+
 class JsonRpc {
   private ws: WebSocket;
   private nextId = 1;
@@ -93,21 +103,25 @@ export interface AcpCallbacks {
 export class AcpClient {
   ws: WebSocket;
   rpc: JsonRpc;
+  private cb: AcpCallbacks;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(ws: WebSocket, private cb: AcpCallbacks) {
+  constructor(ws: WebSocket, cb: AcpCallbacks) {
     this.ws = ws;
+    this.cb = cb;
     this.rpc = new JsonRpc(ws);
     this.rpc.onNotification((m, p) => {
-      if (m === "session/update") this.cb.onSessionUpdate(p as Record<string, unknown>);
-      else this.cb.onExtNotification(m, p);
+      const method = stripExtPrefix(m);
+      if (method === "session/update") this.cb.onSessionUpdate(p as Record<string, unknown>);
+      else this.cb.onExtNotification(method, p);
     });
     this.rpc.onServerRequest((m, p) => {
-      if (m === "session/request_permission")
+      const method = stripExtPrefix(m);
+      if (method === "session/request_permission")
         return new Promise((r) => this.cb.onRequestPermission(p as Record<string, unknown>, r));
-      if (m === "x.ai/ask_user_question")
+      if (method === "x.ai/ask_user_question")
         return new Promise((r) => this.cb.onAskUserQuestion(p, r));
-      if (m === "x.ai/exit_plan_mode")
+      if (method === "x.ai/exit_plan_mode")
         return new Promise((r) => this.cb.onExitPlanMode(p, r));
       return Promise.reject({ code: METHOD_NOT_FOUND, message: "not found" });
     });
@@ -171,11 +185,11 @@ export class AcpClient {
   }
 
   async extRequest(method: string, params?: unknown): Promise<unknown> {
-    return await this.rpc.request(method, params);
+    return await this.rpc.request(addExtPrefix(method), params ?? {});
   }
 
   extNotify(method: string, params?: unknown): void {
-    this.rpc.notify(method, params);
+    this.rpc.notify(addExtPrefix(method), params ?? {});
   }
 
   close() {
@@ -186,53 +200,5 @@ export class AcpClient {
 }
 
 // ── Singleton ───────────────────────────────────────────────────────
+// 连接单例与事件转译由 ./acpBridge.ts 管理（ensureAcp / acpPrompt / ...）
 
-let acpInstance: AcpClient | null = null;
-
-export function getAcp(): AcpClient {
-  if (!acpInstance) throw new Error("ACP not connected");
-  return acpInstance;
-}
-
-export async function connectAcp(secret: string): Promise<AcpClient> {
-  const cfgResp = await fetch("/config");
-  if (!cfgResp.ok) throw new Error(`/config failed: ${cfgResp.status}`);
-  const cfg = (await cfgResp.json()) as { wsPath: string; version: string; cwd: string };
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const wsUrl = `${proto}://${window.location.host}${cfg.wsPath}`;
-
-  const client = await AcpClient.connect(wsUrl, secret, {
-    onSessionUpdate: (p) => {
-      window.dispatchEvent(new CustomEvent("acp:sessionUpdate", { detail: p }));
-    },
-    onRequestPermission: (p, respond) => {
-      window.dispatchEvent(new CustomEvent("acp:requestPermission", { detail: { params: p, respond } }));
-    },
-    onAskUserQuestion: (p, respond) => {
-      window.dispatchEvent(new CustomEvent("acp:askUserQuestion", { detail: { params: p, respond } }));
-    },
-    onExitPlanMode: (p, respond) => {
-      window.dispatchEvent(new CustomEvent("acp:exitPlanMode", { detail: { params: p, respond } }));
-    },
-    onExtNotification: (method, params) => {
-      window.dispatchEvent(new CustomEvent("acp:extNotification", { detail: { method, params } }));
-    },
-  });
-
-  const init = await client.initialize();
-  const meta = (init._meta ?? {}) as Record<string, unknown>;
-  const methods = (init.authMethods ?? []) as { id: string; name: string }[];
-  const defaultId = typeof meta.defaultAuthMethodId === "string" ? meta.defaultAuthMethodId : null;
-  const method = methods.find((m) => m.id === defaultId) ?? methods.find((m) => m.id === "cached_token") ?? methods[0];
-  if (!method) throw new Error("no auth methods");
-  await client.authenticate(method.id);
-
-  const session = await client.newSession(cfg.cwd);
-  acpInstance = client;
-  return client;
-}
-
-export function disconnectAcp() {
-  acpInstance?.close();
-  acpInstance = null;
-}

@@ -1,14 +1,11 @@
 // ============================================
 // SDK Client - 基于 @opencode-ai/sdk 的统一客户端
 //
-// 职责：
-// 1. 根据当前活动服务器动态创建 SDK client
-// 2. 整合 baseUrl / auth / tauri fetch
-// 3. 为上层 API 模块提供统一的 client 获取方式
+// ACP 模式：opencode REST 后端不存在，返回安全 stub（空数据 / 静默忽略），
+// 防止调用方因未处理 reject 导致白屏。已接入 ACP 的 API 函数（client.ts 的
+// getActiveModels、session.ts、message.ts、permission.ts 等）不经过此路径。
 // ============================================
 
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk/v2/client'
-import { serverStore, makeBasicAuthHeader } from '../store/serverStore'
 import { isTauri } from '../utils/tauri'
 
 // Tauri fetch 缓存
@@ -27,114 +24,64 @@ async function getTauriFetch(): Promise<typeof globalThis.fetch> {
   return _tauriFetchLoading
 }
 
-function getFetchImpl(): typeof globalThis.fetch {
-  return isTauri() && _tauriFetch ? _tauriFetch : globalThis.fetch
-}
-
-function createAbortError(message: string) {
-  return new DOMException(message, 'AbortError')
-}
-
-async function trackedFetch(input: RequestInfo | URL, init: RequestInit | undefined, generation: number): Promise<Response> {
-  const controller = new AbortController()
-  const externalSignal = init?.signal
-  const abortFromExternal = () => controller.abort(externalSignal?.reason)
-
-  if (externalSignal?.aborted) {
-    abortFromExternal()
-  } else {
-    externalSignal?.addEventListener('abort', abortFromExternal, { once: true })
-  }
-
-  _apiRequestControllers.add(controller)
-
-  try {
-    if (generation !== _apiRequestGeneration) {
-      throw createAbortError('Stale API request')
-    }
-
-    return await getFetchImpl()(input, {
-      ...init,
-      signal: controller.signal,
-    })
-  } finally {
-    externalSignal?.removeEventListener('abort', abortFromExternal)
-    _apiRequestControllers.delete(controller)
-  }
-}
-
 export function abortInFlightApiRequests(reason = 'Server endpoint changed'): void {
   _apiRequestGeneration++
   for (const controller of _apiRequestControllers) {
-    controller.abort(createAbortError(reason))
+    controller.abort(new DOMException(reason, 'AbortError'))
   }
   _apiRequestControllers.clear()
 }
 
-// Client 缓存：按 "baseUrl + authHash" 缓存实例，避免重复创建
-let _cachedClient: OpencodeClient | null = null
-let _cachedKey = ''
-
-function buildCacheKey(): string {
-  const baseUrl = serverStore.getActiveBaseUrl()
-  const auth = serverStore.getActiveAuth()
-  const authPart = auth?.password ? `${auth.username}:${auth.password}` : ''
-  return `${baseUrl}|${authPart}`
-}
-
-function buildHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {}
-  const auth = serverStore.getActiveAuth()
-  if (auth?.password) {
-    headers['Authorization'] = makeBasicAuthHeader(auth)
-  }
-  return headers
-}
-
 /**
- * 同步获取 SDK client（浏览器环境 or tauri fetch 已加载）
- * 如果 tauri fetch 还没加载完，先用原生 fetch
+ * ACP 模式：opencode REST 后端不存在，返回安全 stub。
+ * 所有仍通过此函数调用的 API（file.ts、skill.ts、command.ts、mcp.ts 等）
+ * 均收到 `{ data: undefined }` 的 unwrap 兼容值，不会因 fetch reject 白屏。
  */
-export function getSDKClient(): OpencodeClient {
-  const key = buildCacheKey()
-  if (_cachedClient && _cachedKey === key) {
-    return _cachedClient
-  }
-
-  const baseUrl = serverStore.getActiveBaseUrl()
-  const headers = buildHeaders()
-  const generation = _apiRequestGeneration
-
-  _cachedClient = createOpencodeClient({
-    baseUrl,
-    headers,
-    fetch: (input, init) => trackedFetch(input, init, generation),
-  })
-  _cachedKey = key
-  return _cachedClient
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getSDKClient(): any {
+  return SAFE_STUB
 }
 
-/**
- * 异步获取 SDK client（确保 tauri fetch 已加载）
- * 在应用初始化时应该先调一次这个
- */
-export async function getSDKClientAsync(): Promise<OpencodeClient> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function getSDKClientAsync(): Promise<any> {
   if (isTauri()) {
     await getTauriFetch()
   }
-  // 使 cache 失效以便用新的 tauri fetch 重建
-  _cachedClient = null
-  _cachedKey = ''
-  return getSDKClient()
+  return SAFE_STUB
+}
+
+export function invalidateSDKClient(): void {
+  // no-op
 }
 
 /**
- * 强制重建 client（服务器切换时调用）
+ * 安全 stub：所有 .xxx.yyy() 调用返回 { data: undefined }；
+ * unwrap 拿到 undefined → 调用方自行处理（通常静默渲染空状态）
  */
-export function invalidateSDKClient(): void {
-  _cachedClient = null
-  _cachedKey = ''
+const STUB_RESULT = { data: undefined }
+
+function stubMethod() {
+  return STUB_RESULT
 }
+
+const SAFE_STUB = new Proxy(
+  {},
+  {
+    get(_target, _prop) {
+      const nested: Record<string, unknown> = {}
+      return new Proxy(nested, {
+        get(_n, _p) {
+          if (_p === 'then') return undefined // 防止被当成 Promise
+          // 函数调用返回 { data: undefined } 兼容 unwrap
+          return stubMethod
+        },
+        apply() {
+          return STUB_RESULT
+        },
+      })
+    },
+  },
+)
 
 /**
  * 从 SDK 返回值中提取 data，如果有 error 则抛出
