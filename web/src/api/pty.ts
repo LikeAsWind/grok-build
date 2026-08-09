@@ -2,13 +2,10 @@
 // PTY API - 终端管理
 // ============================================
 
-import { getSDKClient, unwrap } from './sdk'
 import { getApiBaseUrl, buildQueryString } from './http'
-import { formatPathForApi } from '../utils/directoryUtils'
 import { serverStore } from '../store/serverStore'
-import type { Pty, PtyCreateParams, PtyUpdateParams } from '../types/api/pty'
+import type { Pty, PtyUpdateParams } from '../types/api/pty'
 
-type LegacyPty = Pty & { running?: boolean; status?: Pty['status'] }
 export interface ShellInfo {
   path: string
   name: string
@@ -16,70 +13,54 @@ export interface ShellInfo {
 }
 
 interface PtyConnectUrlOptions {
-  /**
-   * false = 不在 URL 里放认证（Tauri bridge 通过 header 传）
-   * true  = 在 URL 里放认证（浏览器原生 WebSocket 无法设 header）
-   */
   includeAuthInUrl?: boolean
   cursor?: number
 }
 
-function normalizePty(pty: LegacyPty): Pty {
-  if (pty.status) return pty as Pty
-  return {
-    ...pty,
-    status: pty.running ? 'running' : 'exited',
-  } as Pty
+function randomPtyId(): string {
+  return `term-${crypto.randomUUID()}`
 }
 
 /**
  * 获取所有 PTY 会话列表
  */
 export async function listPtySessions(_directory?: string): Promise<Pty[]> {
-  // ACP stub: PTY 不支持（capabilities terminal=false）
+  // ACP mode: no REST endpoint for listing PTY sessions.
+  // The backend auto-creates PTY on WebSocket connect, so sessions
+  // are discovered by opening terminal tabs, not listed here.
   return []
 }
 
 /**
  * 获取当前机器可用 shell 列表，用于 opencode config.shell 的候选项。
  */
-export async function listAvailableShells(directory?: string): Promise<ShellInfo[]> {
-  const sdk = getSDKClient()
-  return unwrap(await sdk.pty.shells({ directory: formatPathForApi(directory) }))
+export async function listAvailableShells(_directory?: string): Promise<ShellInfo[]> {
+  return []
 }
 
 /**
  * 创建新的 PTY 会话
  */
-export async function createPtySession(params: PtyCreateParams, directory?: string): Promise<Pty> {
-  const sdk = getSDKClient()
-  return normalizePty(unwrap(await sdk.pty.create({ directory: formatPathForApi(directory), ...params })) as LegacyPty)
+export async function createPtySession(_params?: unknown, _directory?: string): Promise<Pty> {
+  const id = randomPtyId()
+  return { id, title: `Terminal (${id.slice(0, 8)})`, status: 'running' } as Pty
 }
 
 /**
  * 获取单个 PTY 会话信息
  */
-export async function getPtySession(ptyId: string, directory?: string): Promise<Pty> {
-  const sdk = getSDKClient()
-  return normalizePty(unwrap(await sdk.pty.get({ ptyID: ptyId, directory: formatPathForApi(directory) })) as LegacyPty)
+export async function getPtySession(ptyId: string, _directory?: string): Promise<Pty> {
+  return { id: ptyId, title: ptyId, status: 'running' } as Pty
 }
 
 /**
  * 更新 PTY 会话
  */
-export async function updatePtySession(ptyId: string, params: PtyUpdateParams, directory?: string): Promise<Pty> {
-  const sdk = getSDKClient()
-  return normalizePty(
-    unwrap(await sdk.pty.update({ ptyID: ptyId, directory: formatPathForApi(directory), ...params })) as LegacyPty,
-  )
+export async function updatePtySession(ptyId: string, params: PtyUpdateParams, _directory?: string): Promise<Pty> {
+  return { id: ptyId, title: ptyId, status: 'running', ...params } as Pty
 }
 
-/**
- * 删除 PTY 会话
- */
-export async function removePtySession(ptyId: string, directory?: string): Promise<boolean> {
-  const sdk = getSDKClient()
-  unwrap(await sdk.pty.remove({ ptyID: ptyId, directory: formatPathForApi(directory) }))
+export async function removePtySession(_ptyId: string, _directory?: string): Promise<boolean> {
   return true
 }
 
@@ -101,7 +82,7 @@ export function getPtyConnectUrl(ptyId: string, directory?: string, options?: Pt
       : undefined
 
   const auth = serverStore.getActiveAuth()
-  const formatted = formatPathForApi(directory)
+  const formatted = directory ? directory.replace(/\\/g, '/') : undefined
 
   // Tauri bridge 不需要在 URL 里放认证
   if (!includeAuthInUrl) {
