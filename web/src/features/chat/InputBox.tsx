@@ -120,7 +120,7 @@ export interface InputBoxProps {
   onSend: (
     text: string,
     attachments: Attachment[],
-    options?: { agent?: string; variant?: string },
+    options?: { agent?: string; variant?: string; mode?: string },
   ) => Promise<boolean> | boolean
   onAbort?: () => void
   onCommand?: (command: string) => Promise<boolean> | boolean // 斜杠命令回调，接收完整命令字符串如 "/help"
@@ -133,6 +133,8 @@ export interface InputBoxProps {
   variants?: string[]
   selectedVariant?: string
   onVariantChange?: (variant: string | undefined) => void
+  mode?: string
+  onModeChange?: (mode: string) => void
   supportsImages?: boolean // 保留向后兼容（deprecated，优先用 fileCapabilities）
   fileCapabilities?: FileCapabilities
   // Model（移动端 InputToolbar 用）
@@ -179,6 +181,8 @@ function InputBoxComponent({
   variants = [],
   selectedVariant,
   onVariantChange,
+  mode,
+  onModeChange,
   supportsImages = false,
   fileCapabilities: fileCapabilitiesProp,
   models = [],
@@ -527,6 +531,7 @@ function InputBoxComponent({
         onSend(text, attachments, {
           agent: mentionedAgent || selectedAgent,
           variant: selectedVariant,
+          mode: mode,
         }),
       () => {
         resetDraft()
@@ -1387,6 +1392,8 @@ function InputBoxComponent({
                       variants={variants}
                       selectedVariant={selectedVariant}
                       onVariantChange={onVariantChange}
+                      mode={mode}
+                      onModeChange={onModeChange}
                       fileCapabilities={fileCaps}
                       onFilesSelected={handleFilesSelected}
                       isStreaming={isStreaming}

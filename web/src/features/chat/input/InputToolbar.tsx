@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDownIcon, SendIcon, StopIcon, PaperclipIcon, AgentIcon, ThinkingIcon } from '../../../components/Icons'
+import { ChevronDownIcon, SendIcon, StopIcon, PaperclipIcon, AgentIcon, ThinkingIcon, CpuIcon } from '../../../components/Icons'
 import { DropdownMenu, MenuItem, IconButton, AnimatedPresence } from '../../../components/ui'
 import { ModelSelector, type ModelSelectorHandle } from '../ModelSelector'
 import { useChatViewport } from '../chatViewport'
@@ -16,6 +16,10 @@ interface InputToolbarProps {
   variants?: string[]
   selectedVariant?: string
   onVariantChange?: (variant: string | undefined) => void
+
+  /** 当前模式：default / plan / ask */
+  mode?: string
+  onModeChange?: (mode: string) => void
 
   fileCapabilities?: FileCapabilities
   onFilesSelected: (files: File[]) => void
@@ -44,6 +48,8 @@ export function InputToolbar({
   variants = [],
   selectedVariant,
   onVariantChange,
+  mode,
+  onModeChange,
   fileCapabilities,
   onFilesSelected,
   isStreaming,
@@ -302,6 +308,11 @@ export function InputToolbar({
     return () => clearTimeout(timerId)
   }, [variantMenuOpen, focusMenuItem])
 
+  // Mode 切换（default / plan / ask）
+  const MODES = ['default', 'plan', 'ask'] as const
+  const modeLabel = (m: string) => m === 'default' ? 'Default' : m.charAt(0).toUpperCase() + m.slice(1)
+  const currentMode = mode && MODES.includes(mode as typeof MODES[number]) ? mode : 'default'
+
   const selectableAgents = agents.filter(a => a.mode !== 'subagent' && !a.hidden)
   const currentAgent = agents.find(a => a.name === selectedAgent)
 
@@ -488,6 +499,24 @@ export function InputToolbar({
               </div>
             </DropdownMenu>
           </div>
+        </AnimatedPresence>
+
+        {/* Mode 切换: default / plan / ask */}
+        <AnimatedPresence show={!!onModeChange}>
+          <button
+            type="button"
+            onClick={() => {
+              const idx = MODES.indexOf(currentMode as typeof MODES[number])
+              const next = MODES[(idx + 1) % MODES.length]
+              onModeChange?.(next)
+            }}
+            disabled={controlsDisabled}
+            title={`Mode: ${modeLabel(currentMode)}（点击切换）`}
+            className="flex items-center gap-1.5 px-2 py-1.5 text-[length:var(--fs-sm)] rounded-lg transition-all duration-150 hover:bg-bg-200 active:scale-95 cursor-pointer text-text-300"
+          >
+            <CpuIcon />
+            <span className={isCompact ? 'hidden' : ''}>{modeLabel(currentMode)}</span>
+          </button>
         </AnimatedPresence>
       </div>
 

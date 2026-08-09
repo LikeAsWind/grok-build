@@ -314,7 +314,7 @@ export const ChatPane = memo(function ChatPane({
   // 对齐 oc：session 消息 ready 后再 mount ChatArea，避免空 virtualizer 先建再跳
   const messagesReady = !routeSessionId || loadState === 'loaded' || loadState === 'error'
   const chatAreaMountKey = messagesReady ? (routeSessionId ?? 'home') : null
-  const inputDisabled = !!routeSessionId && loadState === 'error' && messages.length === 0
+  const inputDisabled = (!!routeSessionId && loadState === 'error' && messages.length === 0) || modelsLoading
   const chatPageViewModel = useChatPageViewModel(renderedMessages)
 
   // 切 session remount 时默认视为贴底，避免回底按钮闪一下
@@ -735,6 +735,14 @@ export const ChatPane = memo(function ChatPane({
   }, [paneId, routeSessionId, effectiveDirectory, contextLimit, stableControllerActions, isStreaming])
 
   // ============================================
+  // Mode state (default / plan / ask) — ACP session-level
+  // ============================================
+  const [currentMode, setCurrentMode] = useState('default')
+  const handleModeChange = useCallback((newMode: string) => {
+    setCurrentMode(newMode)
+  }, [])
+
+  // ============================================
   // Dialog Collapsed State
   // ============================================
   const [permissionCollapsed, setPermissionCollapsed] = useState(false)
@@ -888,6 +896,8 @@ export const ChatPane = memo(function ChatPane({
           variants={currentModel?.variants ?? []}
           selectedVariant={selectedVariant}
           onVariantChange={handleVariantChange}
+          mode={currentMode}
+          onModeChange={handleModeChange}
           fileCapabilities={
             currentModel
               ? {

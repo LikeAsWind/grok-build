@@ -13,7 +13,6 @@ import {
   SidebarIcon,
   FolderIcon,
   GlobeIcon,
-  PlusIcon,
   NewChatIcon,
   TrashIcon,
   SearchIcon,
@@ -42,6 +41,8 @@ import {
 } from '../../../api'
 import { getDirectoryName, isSameDirectory, normalizeToForwardSlash } from '../../../utils'
 import { uiErrorHandler } from '../../../utils'
+import { getServerCwd } from '../../../api/acpBridge'
+import { DirBrowserModal } from './DirBrowserModal'
 
 // 侧边栏设计模式：
 // - 按钮结构统一，不因 expanded/collapsed 改变 DOM
@@ -107,7 +108,6 @@ export function SidePanel({
   onSelectSession,
   onCloseMobile,
   selectedSessionId,
-  onAddProject,
   isMobile = false,
   isExpanded = true,
   onToggleSidebar,
@@ -124,6 +124,19 @@ export function SidePanel({
     reorderDirectories,
     recentProjects,
   } = useDirectory()
+  // grok: 首次加载默认用后端启动目录
+  const [dirInit, setDirInit] = useState(false)
+  if (!dirInit && !currentDirectory) {
+    const sc = getServerCwd(); if (sc) { addDirectory(sc); setDirInit(true) }
+  }
+  // 目录浏览模态框
+  const [dirModalOpen, setDirModalOpen] = useState(false)
+  const [dirModalPath, setDirModalPath] = useState('')
+  const handleDirSelect = (path: string) => {
+    const c = path.trim().replace(/\\/g, '/')
+    if (c) { addDirectory(c); setCurrentDirectory(c) }
+  }
+
   const catalogDirectories = useMemo(
     () =>
       Array.from(
@@ -1091,11 +1104,21 @@ export function SidePanel({
           </div>
           <ChevronDownIcon
             size={14}
-            className={`ml-auto text-text-400 transition-all duration-200 shrink-0 ${
+            className={`text-text-400 transition-all duration-200 shrink-0 ${
               projectsExpanded && showLabels ? '' : '-rotate-90'
             }`}
             style={{ opacity: showLabels ? 1 : 0 }}
           />
+          {/* grok: 打开目录浏览器模态框 */}
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); setDirModalPath(currentDirectory || getServerCwd() || ''); setDirModalOpen(true) }}
+            className="ml-0.5 p-0.5 rounded text-text-400 hover:text-accent-main-100 hover:bg-accent-main-100/10 shrink-0"
+            title="浏览并选择目录"
+            style={{ opacity: showLabels ? 1 : 0 }}
+          >
+            <FolderIcon size={12} />
+          </button>
         </button>
 
         {/* Projects Dropdown */}
@@ -1186,11 +1209,11 @@ export function SidePanel({
               <div className="pointer-events-none absolute inset-x-3 top-0 h-px bg-border-200/30" />
               <button
                 type="button"
-                onClick={onAddProject}
+                onClick={() => { setDirModalPath(currentDirectory || getServerCwd() || ''); setDirModalOpen(true) }}
                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[length:var(--fs-sm)] text-text-300 hover:text-text-100 hover:bg-bg-200/50 transition-colors"
               >
-                <PlusIcon size={14} />
-                {t('sidebar.addProject')}
+                <FolderIcon size={14} />
+                浏览目录...
               </button>
             </div>
           </div>
@@ -1534,6 +1557,14 @@ export function SidePanel({
         description={t('sidebar.batchRemoveProjectsConfirm', { count: selectedProjectIds.size })}
         confirmText={t('common:remove')}
         variant="warning"
+      />
+
+      {/* 目录浏览器模态框 */}
+      <DirBrowserModal
+        isOpen={dirModalOpen}
+        initialPath={dirModalPath}
+        onSelect={handleDirSelect}
+        onClose={() => setDirModalOpen(false)}
       />
     </div>
   )

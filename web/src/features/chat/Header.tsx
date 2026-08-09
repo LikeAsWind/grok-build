@@ -141,7 +141,7 @@ export function Header({
   useEffect(() => {
     document.title = currentSessionTitle ? `${currentSessionTitle} - OpenCode` : 'OpenCode'
     return () => {
-      document.title = 'OpenCode'
+      document.title = 'Grok'
     }
   }, [currentSessionTitle])
 
