@@ -94,8 +94,16 @@ export async function replyQuestion(
   const { consumeAcpResponder } = await import('./acpPermissionBridge')
   const respond = consumeAcpResponder(requestId)
   if (respond) {
+    // ACP AskUserQuestionExtResponse 格式: { outcome: "accepted", answers: { "header": ["answer"] } }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    respond({ answers: answers.map((a: any) => ({ question: a.question, answer: a.answer ?? a.response })) })
+    const answersMap: Record<string, string[]> = {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    answers.forEach((a: any) => {
+      const key = a.question || a.header || ''
+      const val = a.answer ?? a.response ?? ''
+      if (key) answersMap[key] = [val]
+    })
+    respond({ outcome: 'accepted', answers: answersMap })
     return true
   }
   const sdk = getSDKClient()
@@ -110,7 +118,7 @@ export async function rejectQuestion(requestId: string, directory?: string): Pro
   const { consumeAcpResponder } = await import('./acpPermissionBridge')
   const respond = consumeAcpResponder(requestId)
   if (respond) {
-    respond({ rejected: true })
+    respond({ outcome: 'cancelled' })
     return true
   }
   const sdk = getSDKClient()

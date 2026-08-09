@@ -103,6 +103,13 @@ export function defaultExtractData(part: ToolPart): ExtractedToolData {
         additions: file.additions,
         deletions: file.deletions,
       }))
+    } else if (typeof metadata.diff === 'object' && metadata.diff !== null) {
+      // ACP diff 对象格式: { path, oldText, newText }（edit 工具输出）
+      const d = metadata.diff as { path?: string; oldText?: string; newText?: string }
+      if (d.oldText !== undefined || d.newText !== undefined) {
+        result.diff = { before: d.oldText ?? '', after: d.newText ?? '' }
+        if (d.path) result.files = [{ filePath: d.path, before: d.oldText, after: d.newText }]
+      }
     } else if (typeof metadata.diff === 'string') {
       // 优先使用 unified diff
       result.diff = metadata.diff

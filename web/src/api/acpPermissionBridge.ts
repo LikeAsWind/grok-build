@@ -58,6 +58,7 @@ export function mapAcpQuestionToApi(params: unknown): ApiQuestionRequest | null 
   const questions = Array.isArray(params.questions) ? params.questions : []
   if (!sessionId || questions.length === 0) return null
   const id = String(params.questionId ?? params.question_id ?? `q-${sessionId}-${Date.now()}`)
+  const toolCallId = typeof params.toolCallId === 'string' ? params.toolCallId : ''
   return {
     id,
     sessionID: sessionId,
@@ -69,5 +70,6 @@ export function mapAcpQuestionToApi(params: unknown): ApiQuestionRequest | null 
         options: Array.isArray(q.options) ? q.options : undefined,
       }
     }),
+    ...(toolCallId ? { tool: { callID: toolCallId, messageID: '' } } : {}),
   } as unknown as ApiQuestionRequest
 }

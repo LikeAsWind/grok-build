@@ -542,11 +542,9 @@ function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<str
 
   if (rec.state.status === 'completed' || rec.state.status === 'error') {
     rec.state.time.end = Date.now()
-    if (rec.state.status === 'completed') {
-      rec.state.output ??= ''
-      rec.state.title ??= rec.tool
-      rec.state.metadata ??= {}
-    }
+    rec.state.output ??= ''
+    rec.state.title ??= rec.tool
+    rec.state.metadata ??= {}
   }
 
   emitToolPart(sessionId, messageId, rec)
