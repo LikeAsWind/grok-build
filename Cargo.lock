@@ -14462,9 +14462,12 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
+ "toml_edit 0.22.27",
  "tower-http",
  "tracing",
  "webbrowser",
+ "xai-grok-config",
  "xai-grok-shell",
 ]
 

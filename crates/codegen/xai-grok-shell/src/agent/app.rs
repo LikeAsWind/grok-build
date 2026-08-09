@@ -1779,6 +1779,18 @@ pub async fn run_leader(
                             });
                             let _ = ipc_tx_for_config.send(notification.to_string());
                         }
+                        ConfigUpdate::GeneralConfigChanged { config } => {
+                            info!("General config change detected — reloading features/session/toolset/...");
+                            let line = internal_reload_request_line(
+                                "config-reload-general",
+                                InternalMethod::ReloadConfig,
+                                serde_json::json!({"config": config}),
+                            );
+                            let mut tx = acp_tx_for_config.lock().await;
+                            if let Err(e) = tx.write_all(line.as_bytes()).await {
+                                warn!(error = %e, "failed to inject general config reload into ACP stream");
+                            }
+                        }
                     }
                 }
             });

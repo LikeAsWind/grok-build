@@ -68,6 +68,7 @@ async fn handle_internal(
         InternalMethod::ReloadWorkflows => handle_reload_workflows(agent),
         InternalMethod::ReloadModels => handle_reload_models(agent),
         InternalMethod::ReloadModelsCache => handle_reload_models_cache(agent),
+        InternalMethod::ReloadConfig => handle_reload_config(agent, args),
         InternalMethod::AuthCleared => handle_auth_cleared(agent),
         // Arrives as a notification, so it never reaches this request path.
         InternalMethod::EvictSessions => Err(acp::Error::method_not_found()),
@@ -638,6 +639,45 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
     let count = agent.models_manager.models().len();
     tracing::info!(count, "model list reloaded from config.toml");
     ExtMethodResult::success(serde_json::json!({ "models": count }))
+        .to_ext_response()
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+}
+
+/// Reload features / session / toolset / tools / subagents / permission
+/// sections from config.toml into the agent's in-memory Config. Only these
+/// non-model, non-MCP sections are updated; the model list and MCP servers
+/// are handled by their own dedicated reload paths.
+fn handle_reload_config(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    let disk_config = crate::config::load_effective_config()
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    let toml_config = crate::agent::config::Config::new_from_toml_cfg(&disk_config)
+        .map_err(|e| acp::Error::internal_error().data(e))?;
+
+    // Update only features / session / toolset / tools / subagents /
+    // permission / shell_environment_policy — preserving model, MCP,
+    // and runtime-only fields (#[serde(skip)])
+    let mut agent_config = agent.cfg.borrow_mut();
+    agent_config.features = toml_config.features.clone();
+    agent_config.session = toml_config.session.clone();
+    agent_config.toolset = toml_config.toolset.clone();
+    agent_config.ui = toml_config.ui.clone();
+    agent_config.permission = toml_config.permission.clone();
+    agent_config.shell_environment_policy = toml_config.shell_environment_policy.clone();
+    agent_config.subagents = toml_config.subagents.clone();
+    agent_config.tools = toml_config.tools.clone();
+
+    let sections = serde_json::json!({
+        "features": true,
+        "toolset": true,
+        "ui": true,
+        "permission": true,
+        "session": true,
+        "subagents": true,
+    });
+    drop(agent_config);
+
+    tracing::info!("general config reloaded (features/session/toolset/ui/permission/subagents)");
+    ExtMethodResult::success(sections)
         .to_ext_response()
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }

@@ -76,6 +76,13 @@ pub enum ConfigUpdate {
         yolo: bool,
         fork_secondary_model: Option<String>,
     },
+    /// Features / session / toolset / tools / subagents / permission etc.
+    /// sections changed. The agent re-reads the full config from the parsed
+    /// TOML and applies it to the in-memory Config (no restart needed for
+    /// these sections).
+    GeneralConfigChanged {
+        config: toml::Value,
+    },
 }
 
 /// Runs on `tokio::spawn` (`Send`). Receives raw [`ConfigChangeEvent`]s from
@@ -402,6 +409,39 @@ impl ConfigReloader {
                 yolo: new_ui.1,
                 fork_secondary_model: new_ui.2,
             });
+        }
+
+        // General config: features, session, toolset, tools, subagents,
+        // permission, auth, shell_environment_policy — any remaining section.
+        // We only need to know IF anything outside the tracked sections changed.
+        {
+            let tracked: &[&str] = &[
+                "mcp_servers", "memory", "compaction", "skills", "compat",
+                "model", "models", "ui", "marketplace",
+            ];
+            let old_rest: toml::map::Map<String, toml::Value> = self
+                .last_global_config
+                .as_table()
+                .map(|t| t.iter()
+                    .filter(|(k, _)| !tracked.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect())
+                .unwrap_or_default();
+            let new_rest: toml::map::Map<String, toml::Value> = new_global
+                .as_table()
+                .map(|t| t.iter()
+                    .filter(|(k, _)| !tracked.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect())
+                .unwrap_or_default();
+            if old_rest != new_rest {
+                info!("General config change detected (features/session/toolset/...)");
+                let _ = self.config_update_tx.send(
+                    ConfigUpdate::GeneralConfigChanged {
+                        config: new_global.clone(),
+                    },
+                );
+            }
         }
 
         self.last_global_config = new_global;
