@@ -16,7 +16,7 @@ use crate::terminal::runner::{
 use crate::terminal::{TerminalInfo, TerminalStatus};
 use xai_grok_tools::types::output::{BashOutput, ToolOutput};
 
-const DEFAULT_NOTIFICATION_INTERVAL_MS: u64 = 100;
+const DEFAULT_NOTIFICATION_INTERVAL_MS: u64 = 30;
 const READ_BUFFER_SIZE: usize = 8192;
 
 /// Upper bound on how long terminal teardown waits for a SIGKILL'd child to be
@@ -86,7 +86,11 @@ impl SessionNotificationSender for xai_acp_lib::AcpAgentGatewaySender {
         &self,
         notification: acp::SessionNotification,
     ) -> Result<(), acp::Error> {
-        self.send(notification).await
+        // Fire-and-forget: don't block the streaming ticker on oneshot ack.
+        // forward_fire_and_forget returns false only when the gateway channel
+        // is gone (shutdown); the tool bridge tolerates dropped notifications.
+        self.forward_fire_and_forget(notification);
+        Ok(())
     }
 }
 
