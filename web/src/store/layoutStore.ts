@@ -305,7 +305,7 @@ export class LayoutStore {
       right: 'files',
     },
     sidebarExpanded: true,
-    sidebarFolderRecents: false,
+    sidebarFolderRecents: true,
     sidebarFolderRecentsShowDiff: true,
     sidebarShowChildSessions: false,
     rightPanelOpen: false,

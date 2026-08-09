@@ -127,7 +127,7 @@ const DEFAULT_CODE_FONT_SCALE = 0
 
 /** 工具输出渲染风格：classic = 经典（input+output 分离），compact = 精简（只展示 output，header 更矮） */
 export type ToolCardStyle = 'classic' | 'compact'
-const DEFAULT_TOOL_CARD_STYLE: ToolCardStyle = 'compact'
+const DEFAULT_TOOL_CARD_STYLE: ToolCardStyle = 'classic'
 const DEFAULT_IMMERSIVE_MODE = true
 const DEFAULT_COMPACT_INLINE_PERMISSION = true
 const DEFAULT_GLASS_EFFECT = true

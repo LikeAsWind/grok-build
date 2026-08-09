@@ -376,12 +376,15 @@ class ServerStore {
 
   /**
    * 更新服务器配置
+   * 若更新的是当前活跃服务器且入口信息（url/auth）变了，触发 serverChange 让连接层重连
    */
   updateServer(id: string, updates: Partial<Omit<ServerConfig, 'id'>>): boolean {
     const index = this.servers.findIndex(s => s.id === id)
     if (index === -1) return false
 
     const server = this.servers[index]
+    const prevUrl = server.url
+    const prevAuthKey = server.auth ? `${server.auth.username}\0${server.auth.password}` : ''
     this.servers[index] = {
       ...server,
       ...updates,
@@ -393,6 +396,12 @@ class ServerStore {
     }
     this.saveToStorage()
     this.notify()
+
+    const next = this.servers[index]
+    const nextAuthKey = next.auth ? `${next.auth.username}\0${next.auth.password}` : ''
+    if (this.activeServerId === id && (next.url !== prevUrl || nextAuthKey !== prevAuthKey)) {
+      this.notifyServerChange(id, 'server-switch')
+    }
     return true
   }
 
@@ -479,7 +488,8 @@ class ServerStore {
     const server = this.withRuntimeServerUrl(storedServer)
     const checkSeq = (this.healthCheckSeqMap.get(serverId) ?? 0) + 1
     this.healthCheckSeqMap.set(serverId, checkSeq)
-    const healthUrl = `${server.url}/global/health`
+    // grok 后端的健康探测端点：/config 返回 {wsPath, version, cwd}
+    const healthUrl = `${server.url}/config`
 
     const commitHealth = (health: ServerHealth) => {
       if (this.healthCheckSeqMap.get(serverId) === checkSeq) {
@@ -522,8 +532,8 @@ class ServerStore {
             latency,
             lastCheck: Date.now(),
             error: contentType.includes('text/html')
-              ? 'Server returned HTML instead of OpenCode health JSON. Check the URL path.'
-              : 'Server did not return OpenCode health JSON',
+              ? 'Server returned HTML instead of grok config JSON. Check the URL path.'
+              : 'Server did not return grok config JSON',
             details,
           }
           return commitHealth(health)
@@ -537,18 +547,18 @@ class ServerStore {
             status: 'error',
             latency,
             lastCheck: Date.now(),
-            error: 'Invalid OpenCode health JSON',
+            error: 'Invalid grok config JSON',
             details,
           }
           return commitHealth(health)
         }
 
-        if (!isRecord(data) || data.healthy !== true || typeof data.version !== 'string' || !data.version.trim()) {
+        if (!isRecord(data) || typeof data.wsPath !== 'string' || typeof data.version !== 'string' || !data.version.trim()) {
           const health: ServerHealth = {
             status: 'error',
             latency,
             lastCheck: Date.now(),
-            error: 'Not an OpenCode server',
+            error: 'Not a grok web server',
             details,
           }
           return commitHealth(health)

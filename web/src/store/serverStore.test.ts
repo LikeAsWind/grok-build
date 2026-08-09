@@ -80,13 +80,14 @@ describe('serverStore local runtime URL', () => {
   it('uses the detected local service URL without persisting it as the configured URL', async () => {
     const { serverStore } = await import('./serverStore')
 
-    expect(serverStore.getActiveBaseUrl()).toBe('http://127.0.0.1:4096')
+    // 默认本地地址 = 同源（jsdom 环境即 window.location.origin）
+    expect(serverStore.getActiveBaseUrl()).toBe(window.location.origin)
 
     expect(serverStore.setLocalServerRuntimeUrl('http://127.0.0.1:58231/')).toBe(true)
 
     expect(serverStore.getActiveBaseUrl()).toBe('http://127.0.0.1:58231')
     expect(serverStore.getLocalServerUrl()).toBe('http://127.0.0.1:58231')
-    expect(serverStore.getStoredServers().find(server => server.id === 'local')?.url).toBe('http://127.0.0.1:4096')
+    expect(serverStore.getStoredServers().find(server => server.id === 'local')?.url).toBe(window.location.origin)
   })
 
   it('notifies listeners when the active local runtime URL changes', async () => {
@@ -127,8 +128,8 @@ describe('serverStore health check', () => {
     vi.unstubAllGlobals()
   })
 
-  it('marks a valid OpenCode health response as online', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ healthy: true, version: '1.16.0' }))
+  it('marks a valid grok config response as online', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ wsPath: '/ws', version: '1.16.0', cwd: '/tmp' }))
     const { serverStore } = await import('./serverStore')
 
     const health = await serverStore.checkHealth('local')
@@ -152,14 +153,14 @@ describe('serverStore health check', () => {
     expect(health.error).toMatch(/HTML/)
   })
 
-  it('rejects JSON that is not an OpenCode health response', async () => {
+  it('rejects JSON that is not a grok config response', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ ok: true }))
     const { serverStore } = await import('./serverStore')
 
     const health = await serverStore.checkHealth('local')
 
     expect(health.status).toBe('error')
-    expect(health.error).toBe('Not an OpenCode server')
+    expect(health.error).toBe('Not a grok web server')
   })
 
   it('reports unauthorized credentials separately', async () => {
@@ -175,7 +176,7 @@ describe('serverStore health check', () => {
     const staleResponse = createDeferred<Response>()
     vi.mocked(fetch)
       .mockImplementationOnce(() => staleResponse.promise)
-      .mockResolvedValueOnce(jsonResponse({ healthy: true, version: '1.16.0' }))
+      .mockResolvedValueOnce(jsonResponse({ wsPath: '/ws', version: '1.16.0', cwd: '/tmp' }))
 
     const { serverStore } = await import('./serverStore')
 

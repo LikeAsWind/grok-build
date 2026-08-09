@@ -14,6 +14,7 @@ export interface QueuedFollowupDraft {
   }
   variant?: string
   agent?: string
+  mode?: string
   createdAt: number
 }
 
