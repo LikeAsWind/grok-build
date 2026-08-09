@@ -493,6 +493,23 @@ body {
   margin: 0;
   font-family: var(--font-ui-sans);
   line-height: 1.5;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 输入区域恢复正常文本光标 */
+input, textarea, [contenteditable] {
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 可点击元素恢复手型光标 */
+button, a, [role="button"], select, .cursor-pointer {
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* ============================================
@@ -507,6 +524,16 @@ body {
 .markdown-content .katex-display > .katex,
 .markdown-content .katex .base {
   color: inherit;
+}
+
+/* 聊天消息区域可选中复制 */
+.markdown-content {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.markdown-content .cursor-pointer {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .markdown-content .katex svg {

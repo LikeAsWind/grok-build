@@ -1,6 +1,6 @@
 {
   "header": {
-    "openCode": "OpenCode",
+    "openCode": "weave",
     "newChat": "New Chat",
     "openSidebar": "Open sidebar",
     "clickToRename": "Click to rename",
@@ -120,7 +120,7 @@
   "sidebar": {
     "allProjects": "All projects",
     "global": "Global",
-    "globalProjectHint": "Non-Git workspace, usually where opencode started",
+    "globalProjectHint": "Non-Git workspace, grok startup directory",
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
     "newChat": "New chat",

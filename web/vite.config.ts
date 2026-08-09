@@ -69,6 +69,18 @@ export default defineConfig({
     allowedHosts: true,
 
     proxy: {
+      // grok web 后端（默认 2420）：/config 元数据 + /ws ACP WebSocket
+      // 用 GROK_BACKEND 环境变量指向其他实例
+      '/config': {
+        target: process.env.GROK_BACKEND || 'http://127.0.0.1:2420',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: process.env.GROK_BACKEND || 'http://127.0.0.1:2420',
+        changeOrigin: true,
+        ws: true,
+      },
+
       // 开发环境代理 - 将 /api 前缀的请求转发到 OpenCode 后端
       // 注意：Tauri 模式下前端直接请求后端（通过 plugin-http），不走此代理
       '/api': {
