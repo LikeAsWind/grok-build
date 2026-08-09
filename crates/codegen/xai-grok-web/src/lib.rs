@@ -8,6 +8,7 @@
 
 pub mod assets;
 pub mod daemon;
+pub mod pty;
 pub mod router;
 
 pub use router::WebConfig;

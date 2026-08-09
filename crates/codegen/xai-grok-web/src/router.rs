@@ -13,6 +13,7 @@ use axum::{
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::assets;
+use crate::pty;
 
 /// Runtime configuration for the web server.
 #[derive(Debug, Clone)]
@@ -39,6 +40,7 @@ pub fn web_routes(config: &WebConfig) -> Router {
     Router::new()
         .route("/config", get(config_endpoint))
         .route("/browse-dir", get(browse_dir_endpoint))
+        .route("/pty/{pty_id}/connect", get(pty::pty_ws_handler))
         .route(
             "/config-file",
             get(config_file_get).put(config_file_put).patch(config_file_patch),

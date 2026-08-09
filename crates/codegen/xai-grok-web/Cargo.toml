@@ -7,7 +7,9 @@ description = "Web UI server for Grok Build (OpenCode-style frontend)"
 
 [dependencies]
 anyhow = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+futures-util = { workspace = true }
+ptyctl = { workspace = true }
 rust-embed = { workspace = true, optional = true }
 # Reused from xai-grok-shell: the ACP agent WebSocket server router.
 xai-grok-shell = { workspace = true }
