@@ -311,13 +311,23 @@ export function useGlobalEvents(directories?: string[]) {
         }
       }) as EventListener)
 
-      // 3. exit_plan_mode
+      // 3. exit_plan_mode — 存入 planApprovalStore，由 PlanApprovalModal 展示
       window.addEventListener('acp:exitPlanMode', ((e: CustomEvent) => {
-        const { params, respond } = e.detail as { params: unknown; respond: (r: unknown) => void }
-        // TODO Step 3c: plan approval UI component
-        console.log('[ACP] exit_plan_mode:', params)
-        // 暂时自动批准，避免阻塞
-        ;(respond as (r: unknown) => void)({ approved: true })
+        const { params, respond } = e.detail as { params: Record<string, unknown>; respond: (r: Record<string, unknown>) => void }
+        const entries = (Array.isArray(params?.entries) ? params.entries : []) as Record<string, unknown>[]
+        import('../store/planApprovalStore').then(({ setPlanApprovalRequest }) => {
+          setPlanApprovalRequest({
+            entries: entries.map(e => ({
+              content: typeof e.content === 'string' ? e.content : '',
+              status: typeof e.status === 'string' ? e.status : 'pending',
+              priority: typeof e.priority === 'string' ? e.priority : undefined,
+            })),
+            respond: result => {
+              setPlanApprovalRequest(null)
+              respond(result as Record<string, unknown>)
+            },
+          })
+        })
       }) as EventListener)
     })
   }, [])
@@ -524,7 +534,13 @@ export function useGlobalEvents(directories?: string[]) {
           if (!belongsToCurrentSession(error.sessionID)) {
             const meta = activeSessionStore.getSessionMeta(error.sessionID)
             const sessionLabel = meta?.title || error.sessionID.slice(0, 8)
-            notificationStore.push('error', sessionLabel, 'Session error', error.sessionID, meta?.directory)
+            // 提取实际错误信息替代泛泛的 "Session error"
+            const raw = error as unknown as Record<string, unknown>
+            const errMsg = raw.data && typeof raw.data === 'object'
+              ? (raw.data as Record<string, unknown>).message
+              : undefined
+            const detail = typeof errMsg === 'string' ? errMsg : error.name
+            notificationStore.push('error', sessionLabel, detail, error.sessionID, meta?.directory)
           } else if (isSessionDirectlyOpen(error.sessionID) && soundStore.getSnapshot().currentSessionEnabled) {
             playNotificationSoundDeduped('error')
           }
@@ -696,6 +712,16 @@ export function useGlobalEvents(directories?: string[]) {
         ) {
           playNotificationSoundDeduped('completed')
         }
+      },
+
+      // ============================================
+      // Todo Events → todoStore
+      // ============================================
+
+      onTodoUpdated: data => {
+        import('../store/todoStore').then(({ todoStore: ts }) => {
+          ts.setTodos(data.sessionID, data.todos)
+        })
       },
 
       // ============================================

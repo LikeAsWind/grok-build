@@ -10,6 +10,7 @@ import { memo, useRef, useEffect, useState, useCallback, useMemo, useDeferredVal
 import { Trans, useTranslation } from 'react-i18next'
 
 import { ChatArea, Header, InputBox, PermissionDialog, QuestionDialog, type ChatAreaHandle } from '.'
+import PlanApprovalModal from './PlanApprovalModal'
 import { type ModelSelectorHandle } from './ModelSelector'
 import { OutlineIndex } from '../../components/OutlineIndex'
 import { PaneHeader } from './PaneHeader'
@@ -982,6 +983,9 @@ export const ChatPane = memo(function ChatPane({
           onCollapsedChange={setQuestionCollapsed}
         />
       )}
+
+      {/* Plan Approval Modal — x.ai/exit_plan_mode */}
+      <PlanApprovalModal />
     </div>
   )
 
