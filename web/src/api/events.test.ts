@@ -81,6 +81,13 @@ function createEventChunk(payload: object): Uint8Array[] {
   return [encoder.encode(`data: ${JSON.stringify({ directory: 'global', payload })}\n\n`)]
 }
 
+// ACP 模式下 SSE 连接被禁用；这些用例测试传统 SSE 路径，先切回
+async function importEventsSseMode() {
+  const mod = await import('./events')
+  mod.__setSseModeForTests(true)
+  return mod
+}
+
 describe('subscribeToEvents', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -95,7 +102,7 @@ describe('subscribeToEvents', () => {
     const fetchMock = vi.fn().mockResolvedValue(createFetchResponse(createEventChunks('中文', 2)))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { subscribeToEvents } = await import('./events')
+    const { subscribeToEvents } = await importEventsSseMode()
 
     const received = await new Promise<string>((resolve, reject) => {
       const unsubscribe = subscribeToEvents({
@@ -117,7 +124,7 @@ describe('subscribeToEvents', () => {
     const fetchMock = vi.fn().mockResolvedValue(createFetchResponse(createEventChunks('𠮷😀', 3)))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { subscribeToEvents } = await import('./events')
+    const { subscribeToEvents } = await importEventsSseMode()
 
     const received = await new Promise<string>((resolve, reject) => {
       const unsubscribe = subscribeToEvents({
@@ -146,7 +153,7 @@ describe('subscribeToEvents', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const { subscribeToEvents } = await import('./events')
+    const { subscribeToEvents } = await importEventsSseMode()
 
     const received = await new Promise<unknown>((resolve, reject) => {
       const unsubscribe = subscribeToEvents({
@@ -173,7 +180,7 @@ describe('subscribeToEvents', () => {
       .mockImplementationOnce(() => secondFetch.promise)
     vi.stubGlobal('fetch', fetchMock)
 
-    const { subscribeToEvents, reconnectSSE } = await import('./events')
+    const { subscribeToEvents, reconnectSSE } = await importEventsSseMode()
     const received: string[] = []
 
     const unsubscribe = subscribeToEvents({
@@ -224,7 +231,7 @@ describe('subscribeToEvents', () => {
       .mockImplementationOnce(() => secondFetch.promise)
     vi.stubGlobal('fetch', fetchMock)
 
-    const { subscribeToEvents, reconnectSSE, getConnectionInfo } = await import('./events')
+    const { subscribeToEvents, reconnectSSE, getConnectionInfo } = await importEventsSseMode()
     const onError = vi.fn()
 
     const unsubscribe = subscribeToEvents({

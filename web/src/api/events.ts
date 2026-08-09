@@ -29,6 +29,27 @@ export interface ConnectionInfo {
   error?: string
 }
 
+// ============================================
+// ACP 模式：事件由 acpBridge 转译注入，不建立 SSE 连接
+// ============================================
+let ACP_MODE = true
+
+/** 测试专用：切回传统 SSE 连接路径 */
+export function __setSseModeForTests(sse: boolean) {
+  ACP_MODE = !sse
+}
+
+/** acpBridge 转译后的事件入口 — 直接走原 SSE 广播路径 */
+export function injectGlobalEvent(event: GlobalEvent) {
+  updateConnectionState({ lastEventTime: Date.now() })
+  broadcastEvent(event)
+}
+
+/** acpBridge 同步 WS 连接状态到 ConnectionInfo（UI 状态指示用） */
+export function setAcpConnectionState(state: ConnectionState, error?: string) {
+  updateConnectionState({ state, error, lastEventTime: Date.now() })
+}
+
 // 全局连接状态（可以被外部订阅）
 let connectionInfo: ConnectionInfo = {
   state: 'disconnected',
@@ -240,6 +261,12 @@ function scheduleReconnect() {
 }
 
 function connectSingleton() {
+  // ACP 模式下事件来自 acpBridge 注入，连接状态由 setAcpConnectionState 同步
+  if (ACP_MODE) {
+    isConnecting = false
+    return
+  }
+
   if (isConnecting || allSubscribers.size === 0) return
 
   // 如果状态声称 connected，验证连接是否真的活着
@@ -878,6 +905,7 @@ function normalizeSessionError(properties: unknown): SessionErrorPayload {
  * 断开当前连接 → 重置状态 → 立即重连（新 URL 由 getApiBaseUrl() 动态解析）
  */
 export function reconnectSSE() {
+  if (ACP_MODE) return // ACP 模式下连接由 acpBridge 管理
   if (allSubscribers.size === 0) return // 没有订阅者不需要重连
 
   if (import.meta.env.DEV) {
