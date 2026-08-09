@@ -35,11 +35,9 @@ function normalizePty(pty: LegacyPty): Pty {
 /**
  * 获取所有 PTY 会话列表
  */
-export async function listPtySessions(directory?: string): Promise<Pty[]> {
-  const sdk = getSDKClient()
-  return unwrap(await sdk.pty.list({ directory: formatPathForApi(directory) })).map(pty =>
-    normalizePty(pty as LegacyPty),
-  )
+export async function listPtySessions(_directory?: string): Promise<Pty[]> {
+  // ACP stub: PTY 不支持（capabilities terminal=false）
+  return []
 }
 
 /**

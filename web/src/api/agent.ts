@@ -1,18 +1,16 @@
 // ============================================
 // Agent API Functions
-// 基于 @opencode-ai/sdk: /agent 相关接口
+// ACP 模式：grok 无独立 agent 列表（模型/模式在 Composer 单独切换），
+// 返回空列表让 UI 隐藏 agent 选择器
 // ============================================
 
-import { getSDKClient, unwrap } from './sdk'
-import { formatPathForApi } from '../utils/directoryUtils'
 import type { ApiAgent } from './types'
 
 /**
  * 获取 agent 列表
  */
-export async function getAgents(directory?: string): Promise<ApiAgent[]> {
-  const sdk = getSDKClient()
-  return unwrap(await sdk.app.agents({ directory: formatPathForApi(directory) }))
+export async function getAgents(_directory?: string): Promise<ApiAgent[]> {
+  return []
 }
 
 /**

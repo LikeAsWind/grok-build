@@ -50,10 +50,9 @@ export async function disconnectMcpServer(name: string, directory?: string): Pro
  * 开始 MCP 认证流程
  */
 export async function startMcpAuth(name: string, directory?: string): Promise<{ url: string }> {
-  const sdk = getSDKClient()
-  const result = unwrap(await sdk.mcp.auth.start({ name, directory: formatPathForApi(directory) }))
-  // SDK 返回 { authorizationUrl: string }，转换为我们期望的 { url: string }
-  return { url: result.authorizationUrl }
+  // ACP stub: MCP auth web flow 暂不支持，返回空 URL
+  void name; void directory
+  return { url: '' }
 }
 
 /**

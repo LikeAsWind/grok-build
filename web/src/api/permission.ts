@@ -13,15 +13,17 @@ import type { ApiPermissionRequest, PermissionReply, ApiQuestionRequest, Questio
 
 /**
  * 获取待处理的权限请求列表
+ * ACP 模式：权限请求由 session/request_permission 实时推送（交互对话框阶段接入），
+ * 无历史快照可拉取
  */
-export async function getPendingPermissions(sessionId?: string, directory?: string): Promise<ApiPermissionRequest[]> {
-  const sdk = getSDKClient()
-  const permissions = unwrap(await sdk.permission.list({ directory: formatPathForApi(directory) }))
-  return sessionId ? permissions.filter((p: ApiPermissionRequest) => p.sessionID === sessionId) : permissions
+export async function getPendingPermissions(_sessionId?: string, _directory?: string): Promise<ApiPermissionRequest[]> {
+  return []
 }
 
 /**
  * 回复权限请求
+ * ACP 模式优先：检查是否有待处理的 respond 回调（来自 acp:requestPermission），
+ * 有则直接回包给 ACP；无则走 REST（已 stub 安全返回）
  */
 export async function replyPermission(
   requestId: string,
@@ -30,8 +32,23 @@ export async function replyPermission(
   directory?: string,
   sessionId?: string,
 ): Promise<boolean> {
+  // ACP 模式：检查待处理的 respond 回调
+  const { consumeAcpResponder } = await import('./acpPermissionBridge')
+  const respond = consumeAcpResponder(requestId)
+  if (respond) {
+    // reply: 'once' | 'always' | 'reject'
+    const outcomeId = reply === 'always' ? 'allow_always' : reply === 'reject' ? 'reject' : 'allow_once'
+    respond({
+      outcome: {
+        outcome: reply === 'reject' ? 'cancelled' : 'selected',
+        ...(reply !== 'reject' ? { optionId: outcomeId } : {}),
+        ...(message ? { message } : {}),
+      },
+    })
+    return true
+  }
+  // 回退 REST
   const sdk = getSDKClient()
-
   if (sessionId) {
     unwrap(
       await sdk.permission.respond({
@@ -43,7 +60,6 @@ export async function replyPermission(
     )
     return true
   }
-
   unwrap(
     await sdk.permission.reply({
       requestID: requestId,
@@ -61,11 +77,10 @@ export async function replyPermission(
 
 /**
  * 获取待处理的问题请求列表
+ * ACP 模式：同权限请求，实时推送、无历史快照
  */
-export async function getPendingQuestions(sessionId?: string, directory?: string): Promise<ApiQuestionRequest[]> {
-  const sdk = getSDKClient()
-  const questions = unwrap(await sdk.question.list({ directory: formatPathForApi(directory) }))
-  return sessionId ? questions.filter((q: ApiQuestionRequest) => q.sessionID === sessionId) : questions
+export async function getPendingQuestions(_sessionId?: string, _directory?: string): Promise<ApiQuestionRequest[]> {
+  return []
 }
 
 /**
@@ -76,14 +91,15 @@ export async function replyQuestion(
   answers: QuestionAnswer[],
   directory?: string,
 ): Promise<boolean> {
+  const { consumeAcpResponder } = await import('./acpPermissionBridge')
+  const respond = consumeAcpResponder(requestId)
+  if (respond) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    respond({ answers: answers.map((a: any) => ({ question: a.question, answer: a.answer ?? a.response })) })
+    return true
+  }
   const sdk = getSDKClient()
-  unwrap(
-    await sdk.question.reply({
-      requestID: requestId,
-      directory: formatPathForApi(directory),
-      answers,
-    }),
-  )
+  unwrap(await sdk.question.reply({ requestID: requestId, directory: formatPathForApi(directory), answers }))
   return true
 }
 
@@ -91,12 +107,13 @@ export async function replyQuestion(
  * 拒绝问题请求
  */
 export async function rejectQuestion(requestId: string, directory?: string): Promise<boolean> {
+  const { consumeAcpResponder } = await import('./acpPermissionBridge')
+  const respond = consumeAcpResponder(requestId)
+  if (respond) {
+    respond({ rejected: true })
+    return true
+  }
   const sdk = getSDKClient()
-  unwrap(
-    await sdk.question.reject({
-      requestID: requestId,
-      directory: formatPathForApi(directory),
-    }),
-  )
+  unwrap(await sdk.question.reject({ requestID: requestId, directory: formatPathForApi(directory) }))
   return true
 }
