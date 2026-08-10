@@ -14458,6 +14458,8 @@ dependencies = [
  "anyhow",
  "axum",
  "daemonize",
+ "futures-util",
+ "ptyctl",
  "rust-embed",
  "serde",
  "serde_json",
