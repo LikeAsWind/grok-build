@@ -8,7 +8,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use portable_pty::{CommandBuilder, ExitStatus, PtySize, native_pty_system};
+#[cfg(unix)]
 use xai_grok_test_support::{TestProcessTree, TestSandbox, process_has_exited_without_reap};
+#[cfg(not(unix))]
+use xai_grok_test_support::{TestProcessTree, TestSandbox};
 
 const PTY_DROP_REAP_TIMEOUT: Duration = Duration::from_millis(250);
 const PTY_REAP_POLL: Duration = Duration::from_millis(10);
