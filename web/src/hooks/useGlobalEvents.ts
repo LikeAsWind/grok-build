@@ -311,21 +311,35 @@ export function useGlobalEvents(directories?: string[]) {
         }
       }) as EventListener)
 
-      // 3. exit_plan_mode — 存入 planApprovalStore，由 PlanApprovalModal 展示
+      // 3. exit_plan_mode — 检查 [ui] yolo 配置，yolo=true 则自动批准
       window.addEventListener('acp:exitPlanMode', ((e: CustomEvent) => {
         const { params, respond } = e.detail as { params: Record<string, unknown>; respond: (r: Record<string, unknown>) => void }
-        const entries = (Array.isArray(params?.entries) ? params.entries : []) as Record<string, unknown>[]
-        import('../store/planApprovalStore').then(({ setPlanApprovalRequest }) => {
-          setPlanApprovalRequest({
-            entries: entries.map(e => ({
-              content: typeof e.content === 'string' ? e.content : '',
-              status: typeof e.status === 'string' ? e.status : 'pending',
-              priority: typeof e.priority === 'string' ? e.priority : undefined,
-            })),
-            respond: result => {
-              setPlanApprovalRequest(null)
-              respond(result as Record<string, unknown>)
-            },
+        // 读取 yolo 配置（缓存友好，第一次 fetch 后续用缓存）
+        import('../api/grokConfig').then(({ getGrokConfigParsed }) =>
+          getGrokConfigParsed().catch(() => null)
+        ).then(cfg => {
+          const yolo = cfg?.parsed?.ui && typeof cfg.parsed.ui === 'object'
+            ? (cfg.parsed.ui as Record<string, unknown>).yolo === true
+            : false
+          if (yolo) {
+            // YOLO 模式：自动批准，不弹窗
+            respond({ approved: true })
+            return
+          }
+          // 非 YOLO：弹审批窗口
+          const entries = (Array.isArray(params?.entries) ? params.entries : []) as Record<string, unknown>[]
+          import('../store/planApprovalStore').then(({ setPlanApprovalRequest }) => {
+            setPlanApprovalRequest({
+              entries: entries.map(e => ({
+                content: typeof e.content === 'string' ? e.content : '',
+                status: typeof e.status === 'string' ? e.status : 'pending',
+                priority: typeof e.priority === 'string' ? e.priority : undefined,
+              })),
+              respond: result => {
+                setPlanApprovalRequest(null)
+                respond(result as Record<string, unknown>)
+              },
+            })
           })
         })
       }) as EventListener)
