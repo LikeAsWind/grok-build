@@ -40,7 +40,7 @@ xai-acp-lib / agent-client-protocol v0.10.x
 - `agent.ts` — `getAgents` 取自 `initialize.modelState.availableModels`
 - `permission.ts` — `request_permission` + `x.ai/ask_user_question` → `permission.asked` / `question.asked`
 - `mcp.ts` — `x.ai/mcp/list` + toggle
-- `pty.ts` — 客户端表面保留；ACP `terminal=false`，UI 提示"终端不可用"
+- `pty.ts` — PTY WebSocket（后端 WS 连接时自动建 PTY，`getPtyConnectUrl` 带 secret），前端 xterm.js 渲染
 - `grokConfig.ts` — `getGrokConfigFile / saveGrokConfigFile / getGrokConfigParsed / patchGrokConfig / reloadBackend / browseDirectory`
 - `constants/api.ts` — `API_BASE_URL` 默认同源；`VITE_API_BASE_URL` 覆盖
 
@@ -82,14 +82,14 @@ xai-acp-lib / agent-client-protocol v0.10.x
 | 2 | 会话管理（list / create / delete / fork / 历史回放） | ✅ |
 | 3a | 权限弹窗 | ✅ |
 | 3b | AskUserQuestion 弹窗 | ✅ |
-| 3c | Plan Approval（`x.ai/exit_plan_mode`） | ❌ **自动批准所有 plan——见下方"已知缺口"** |
+| 3c | Plan Approval（`x.ai/exit_plan_mode`） | ✅ `PlanApprovalModal` + `planApprovalStore`，尊重 `[ui] yolo` 配置（yolo=true 自动批准） |
 | 4 | 模型 / 模式切换（`set_model` + `set_mode`） | ✅ |
 | 5 | `/` 斜杠命令 + `@` 文件提及 | ✅ |
 | 6a | MCP 配置表单（持久化） | ✅ |
 | 6b | MCP 运行时面板（live 状态） | ❌ |
 | 6c | Skills 面板 | ❌ |
 | 6d | Worktree 生命周期面板 | ❌（`DirBrowserModal` 只选工作目录） |
-| 7a | Rewind（消息级 undo / redo） | ⚠️ 半成品——`useSessionManager.handleUndo/Redo` 调 `revertMessage`/`unrevertSession`；`x.ai/rewind/points` 检查点面板未做 |
+| 7a | Rewind（消息级 undo / redo） | ⚠️ 半成品——`useRevertState` / `useSessionManager` 调 `revertMessage`/`unrevertSession`；`x.ai/rewind/points` 检查点面板未做（后端 handler 已就绪） |
 | 7b | Cron / 定时任务 UI | ❌ |
 | 7c | 后台任务卡片（`TaskCompleted`） | ❌ |
 | 8 | 品牌 + 中英 i18n（标题 Grok Build） | ✅ |
@@ -98,10 +98,11 @@ xai-acp-lib / agent-client-protocol v0.10.x
 
 | 能力 | 状态 |
 |---|---|
-| 工具调用卡片（`tool_call` / `tool_call_update`） | ✅ `acpBridge.handleToolCall` → `emitToolPart` |
-| Plan / Todo 卡片（`plan` notification） | ⚠️ 后端 `handlePlan` 发 `todo.updated`，但 `useGlobalEvents` **无订阅者** |
-| Reasoning / Thinking 折叠 | ⚠️ 未确认——`acpBridge` 缺 `handleReasoning` |
-| Subagent / 子会话视图 | ⚠️ `childSessionStore.registerChildSession` 跟踪父子，**无 UI 切换视图** |
+| 工具调用卡片（`tool_call` / `tool_call_update`） | ✅ `acpBridge.handleToolCall` → `emitToolPart` → `features/message/tools/renderers/` |
+| Plan / Todo 卡片（`plan` notification） | ✅ `acpBridge.handlePlan` 发 `todo.updated` → `SessionContext.onTodoUpdated` → `todoStore` → `InputFooter` 渲染 |
+| Reasoning / Thinking 折叠 | ✅ `acpBridge` 处理 `agent_thought_chunk` → reasoning part；`themeStore` 提供 capsule / italic / markdown 三种显示模式 |
+| Subagent / 子会话视图 | ⚠️ `SubtaskPartView` 卡片可跳转子会话（`navigateToSession` + `childSessionStore`），无树状/并排视图 |
+| 内嵌终端（PTY） | ✅ PTY WebSocket + xterm.js（`pty.ts::getPtyConnectUrl`） |
 | 多后端服务器切换 | ✅ `serverStore` + acpBridge 自动重连 |
 | 工作目录选择 | ✅ `DirBrowserModal` + `browseDirectory` |
 | config.toml 全量表单编辑器 | ✅ `GrokConfigSettings` + `ConfigFieldControl` + `configFormOps` + `grokConfigSchema` |
@@ -110,17 +111,13 @@ xai-acp-lib / agent-client-protocol v0.10.x
 
 ### 已知缺口（按优先级排）
 
-> 标记 🔥 的修复优先级最高
-
-1. 🔥 **Plan Approval 自动批准**——`useGlobalEvents.ts:315-321` 显式写着 `TODO Step 3c: plan approval UI component`，目前所有 `x.ai/exit_plan_mode` 请求一律 `respond({ approved: true })`。**后端只要进入 plan 模式就会自动放行，与 plan 模式设计意图相反。** 修复：在 `useGlobalEvents` 加 `onExitPlanMode` 订阅 → 渲染 Plan Approval modal → 调 `respond({ approved: true|false })`。
-2. **MCP 运行时面板缺失**——目前只有配置表单，看不到 server live status / tool list / 调用统计。后端 `McpServersUpdated` 通知已存在但前端无订阅。修复：监听 `x.ai/mcp/status` 或类似通知 + 新建 `features/mcp/` 面板组件。
-3. **Skills 面板缺失**——同 MCP 模式，缺监听 + UI。
-4. **Cron / 后台任务卡片缺失**——`useGlobalEvents` 没有 `scheduled_task_*` / `task.completed` 订阅；后端类型已存在。修复：加订阅 + 在 ChatPane 渲染内联卡片。
-5. **Todo 卡片"事件发了没人接"**——`acpBridge.handlePlan` 已 emit `todo.updated`，但 `useGlobalEvents` 订阅表里没有 `onTodoUpdated`。修复成本最低（1 个订阅 + 1 个 ChatPane 渲染分支）。
-6. **Reasoning 折叠未确认**——`acpBridge` 缺 `handleReasoning`；OpenCodeUI 自己的 ReasoningPart 渲染依赖 messageStore 里有 reasoning 类型 part。先在 `acpBridge` 监听 agent_thought_chunk → 注入 `messageStore.handlePartUpdated` 试试。
-7. **Rewind 面板**——`useSessionManager` 的 undo/redo 走单条 message revert，但 `x.ai/rewind/points`（多检查点列表）UI 没做。
-8. **Subagent 子会话视图**——父子关系在 store 里跟踪了，但缺子会话切换 / 树状视图 UI。
-9. **Worktree 生命周期**——`DirBrowserModal` 只选目录，没有 create / list / delete worktree。
+1. **MCP 运行时面板缺失**——目前只有配置表单，看不到 server live status / tool list / 调用统计。后端 `McpServersUpdated` 通知已存在但前端无订阅。修复：监听 `x.ai/mcp/status` 或类似通知 + 新建 `features/mcp/` 面板组件。
+2. **Skills 面板缺失**——同 MCP 模式，缺监听 + UI（TUI 对应 `extensions_modal` / `subagent_catalog_pane`）。
+3. **Cron / 后台任务卡片缺失**——`useGlobalEvents` 没有 `scheduled_task_*` / `task.completed` 订阅；后端类型已存在。修复：加订阅 + 在 ChatPane 渲染内联卡片（TUI 对应 `tasks_pane`）。
+4. **Rewind 检查点面板**——消息级 revert/unrevert 已有（`useRevertState`），但 `x.ai/rewind/points`（多检查点列表）UI 没做，后端 handler 已就绪。
+5. **Subagent 树状视图**——`SubtaskPartView` 已可跳转子会话，但缺树状 / 并排切换视图。
+6. **Worktree 生命周期**——`DirBrowserModal` 只选目录，没有 create / list / delete worktree（TUI 对应 `new_worktree_dialog`）。
+7. **TUI 独有、Web 未移植的周边面板**——历史搜索（`history_search`）、Memory 面板（`memory_modal`）、Workflows 面板（`workflows_overlay`）、`/btw` 内联问答、完整 usage 面板（`usage_modal`，Web 只有 `useSessionStats` 数据）。
 
 > 新增/修缺口时按"先订阅 + 再渲染"两步走：先在 `useGlobalEvents`（或 `acpBridge`）加通知处理 → 再在 `ChatPane` 或新组件渲染。**别改 OpenCodeUI 自带 UI 组件**——按现有模式新增 grok 特有组件。
 
