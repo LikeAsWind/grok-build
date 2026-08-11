@@ -573,6 +573,8 @@ pub struct CompletionTokensDetails {
 pub struct ChatCompletionChunk {
     pub id: String,
     pub object: String,
+    /// Missing from some OpenAI-compatible providers' stream chunks (e.g. MiniMax).
+    #[serde(default)]
     pub created: u64,
     pub model: String,
     pub choices: Vec<ChatChunkChoice>,
