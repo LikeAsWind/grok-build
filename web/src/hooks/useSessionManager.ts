@@ -9,14 +9,13 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import { logger } from '../utils/logger'
-import { isUserUIMessage, toApiMessageWithParts } from '../utils/messageConversion'
-import { messageStore, type RevertState, type SessionState } from '../store'
+import { toApiMessageWithParts } from '../utils/messageConversion'
+import { messageStore, type SessionState } from '../store'
 import {
   getSessionMessages,
   getSession,
   revertMessage,
   unrevertSession,
-  extractUserMessageContent,
   type ApiMessageWithParts,
 } from '../api'
 import { acpLoadSession } from '../api/acpBridge'
@@ -195,7 +194,15 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
         console.log('[LOAD] fresh — skip')
       } else if (!hasExistingMessages) {
         console.log('[LOAD] calling session/load...')
-        await acpLoadSession(sid)
+        // acpLoadSession 可能因 ACP 未连接或后端报错（如 cwd 目录编码不匹配
+        // 导致 Path not found）而 reject。必须兜住：否则 loadState 停在
+        // 'loading'，UI 无限转圈。失败则落到下方 snapshot 路径，由它的
+        // catch 统一 setLoadError / onError。
+        try {
+          await acpLoadSession(sid)
+        } catch (loadErr) {
+          console.warn('[LOAD] session/load 失败，改走 snapshot 兜底:', loadErr)
+        }
         // 给足够时间让 history 事件通过 session/update 流入 messageStore
         await new Promise(resolve => setTimeout(resolve, 500))
         const msgs = messageStore.getSessionState(sid)?.messages.length ?? 0
@@ -333,47 +340,28 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
   // ============================================
 
   const handleUndo = useCallback(
-    async (userMessageId: string) => {
-      if (!sessionId) return
+    async (userMessageId: string): Promise<boolean> => {
+      if (!sessionId) return false
 
       // 获取当前 session 的 directory（优先用 store 中的，其次用传入的）
       const state = messageStore.getSessionState(sessionId)
-      if (!state) return
+      if (!state) return false
 
       const dir = state.directory || directoryRef.current
 
       try {
-        // 调用 API 设置 revert 点（传递 directory）
+        // 调用 API 执行 rewind（内部把消息 id 映射为后端 targetPromptIndex）
         await revertMessage(sessionId, userMessageId, undefined, dir)
 
-        // 找到 revert 点的索引
-        const revertIndex = state.messages.findIndex(m => m.info.id === userMessageId)
-        if (revertIndex === -1) return
-
-        // 收集被撤销的用户消息，构建 redo 历史
-        const revertedUserMessages = state.messages.slice(revertIndex).filter(isUserUIMessage)
-
-        const history = revertedUserMessages.map(m => {
-          const content = extractUserMessageContent(m)
-          const userInfo = m.info
-          return {
-            messageId: m.info.id,
-            text: content.text,
-            attachments: content.attachments,
-            model: userInfo.model,
-            variant: userInfo.model.variant,
-            agent: userInfo.agent,
-          }
-        })
-
-        // 更新 store 的 revert 状态
-        const revertState: RevertState = {
-          messageId: userMessageId,
-          history,
-        }
-        messageStore.setRevertState(sessionId, revertState)
+        // grok rewind 是破坏性截断（对齐 TUI）：后端已删除该 prompt 及其后
+        // 的全部历史，redo 不可能——本地同步截断，不留 redo 假象。
+        // （借用 truncateAfterRevert：先设 revert 点再截断，截断后清空 revertState）
+        messageStore.setRevertState(sessionId, { messageId: userMessageId, history: [] })
+        messageStore.truncateAfterRevert(sessionId)
+        return true
       } catch (error) {
         sessionErrorHandler('undo', error)
+        return false
       }
     },
     [sessionId],

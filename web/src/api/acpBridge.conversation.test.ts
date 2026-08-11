@@ -257,6 +257,52 @@ describe('Web 对话交互全量可用性', () => {
     expect(texts.some(p => p.text.includes('Task t-1 done'))).toBe(true)
   })
 
+  it('task_completed wire 帧（task_snapshot）渲染命令与退出状态', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: {
+        task_id: '019fef62-7d06',
+        command: 'bash -c "sleep 10 && echo background-task-done"',
+        exit_code: 0,
+        completed: true,
+      },
+      will_wake: false,
+    })
+    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
+    const card = texts.find(p => p.text.includes('019fef62-7d06'))
+    expect(card).toBeDefined()
+    expect(card!.text).toContain('✅')
+    expect(card!.text).toContain('exit 0')
+    expect(card!.text).toContain('sleep 10')
+  })
+
+  it('task_completed 失败任务（非零退出码）渲染失败态', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-fail', command: 'false', exit_code: 1, completed: true },
+    })
+    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
+    const card = texts.find(p => p.text.includes('t-fail'))
+    expect(card).toBeDefined()
+    expect(card!.text).toContain('❌')
+    expect(card!.text).toContain('exit 1')
+  })
+
+  it('system-reminder 回显不进入聊天流，cron prompt 剥框架后保留', () => {
+    // 模型侧注入的 reminder 整块隐藏
+    textChunk('<system-reminder>\nBackground task done. Use get_output(...)\n</system-reminder>', 'user_message_chunk')
+    expect(parts()).toHaveLength(0)
+
+    // cron 框架剥离后保留真正的用户 prompt
+    textChunk(
+      '<system-reminder>\nThis is a scheduled task execution...\n</system-reminder>\n\n检查部署状态',
+      'user_message_chunk',
+    )
+    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
+    expect(texts.some(p => p.text === '检查部署状态')).toBe(true)
+    expect(texts.some(p => p.text.includes('system-reminder'))).toBe(false)
+  })
+
   it('subagent 生命周期内联为系统消息', async () => {
     update({ sessionUpdate: 'subagent_spawned', subagentType: 'Explore', description: '查找代码' })
     update({ sessionUpdate: 'subagent_progress' }) // 高频 tick，不产出 part

@@ -1129,12 +1129,29 @@ export function useChatSession({
       const messageIndex = currentMessages.findIndex(m => m.info.id === userMessageId)
       if (messageIndex === -1) return
 
+      const target = currentMessages[messageIndex]
       const messageIdsToRemove = currentMessages.slice(messageIndex).map(m => m.info.id)
 
       await animateUndo(messageIdsToRemove)
-      await handleUndo(userMessageId)
+      const ok = await handleUndo(userMessageId)
+
+      // rewind 成功后把被撤销消息的内容恢复到输入框（对齐 TUI 行为）
+      if (ok && routeSessionId && isUserMessage(target.info)) {
+        const content = extractUserMessageContent(target)
+        setRestoredContent({
+          sessionId: routeSessionId,
+          content: {
+            messageId: target.info.id,
+            text: content.text,
+            attachments: content.attachments,
+            model: target.info.model,
+            variant: target.info.model.variant,
+            agent: target.info.agent,
+          },
+        })
+      }
     },
-    [animateUndo, handleUndo],
+    [animateUndo, handleUndo, routeSessionId],
   )
 
   // Redo with animation

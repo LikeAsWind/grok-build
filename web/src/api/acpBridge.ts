@@ -10,6 +10,7 @@
 
 import { AcpClient } from './acp'
 import { injectGlobalEvent, setAcpConnectionState } from './events'
+import { sessionCwdForWire } from './sessionCwd'
 import { serverStore } from '../store/serverStore'
 import type { GlobalEvent } from '../types/api/event'
 import type { ModelInfo } from './types'
@@ -599,11 +600,41 @@ function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<str
   emitToolPart(sessionId, messageId, rec)
 }
 
+/**
+ * 模型侧注入的用户内容不进聊天流（对齐 TUI 的
+ * user_message_hidden_from_scrollback）：hideFromScrollback 元数据、
+ * `<system-reminder>` / `<monitor-event>` 块、monitor 汇总行、分隔线。
+ * cron 定时任务的 prompt 例外——剥掉 reminder 框架后返回真正的用户 prompt。
+ * 返回 null 表示整块隐藏。
+ */
+function visibleUserChunkText(content: unknown, text: string): string | null {
+  if (isRecord(content) && isRecord(content._meta) && content._meta.hideFromScrollback === true) {
+    return null
+  }
+  const t = text.trimStart()
+  if (t.startsWith('<system-reminder>')) {
+    // cron 框架：<system-reminder>…scheduled task execution…</system-reminder>\n\n<prompt>
+    const endTag = '</system-reminder>'
+    const close = t.indexOf(endTag)
+    if (close >= 0 && t.slice(0, close).includes('scheduled task execution')) {
+      const body = t.slice(close + endTag.length).trim()
+      if (body) return body
+    }
+    return null
+  }
+  if (t.startsWith('<monitor-event')) return null
+  if (t.trim() === '---') return null
+  const first = t.split('\n', 1)[0]
+  if (/^\d/.test(first) && first.includes(' monitor events from ') && first.includes(' (use ')) return null
+  return text
+}
+
 function handleUserMessageChunk(sessionId: string, turn: TurnState, content: unknown) {
   // 本地发出的 prompt 已经合成过 user 消息，忽略回显
   if (turn.promptInFlight) return
 
-  const text = contentBlockText(content)
+  const text = visibleUserChunkText(content, contentBlockText(content))
+  if (text === null) return
   // 历史回放：user chunk 开启新回合
   if (turn.assistantId) {
     finalizeTurn(turn)
@@ -783,21 +814,26 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
     }
     case 'task_completed': {
       // 后台任务完成 → 作为系统消息内联到会话
+      // wire 形态（x.ai/task_completed 帧）：update.task_snapshot 为 TaskSnapshot
+      // （snake_case：task_id / command / exit_code / signal…）
       const t = update as Record<string, unknown>
+      const snap = isRecord(t.task_snapshot) ? t.task_snapshot : undefined
       const taskId = typeof t.taskId === 'string' ? t.taskId
-        : (t.task_snapshot as Record<string, unknown> | undefined)?.task_id
-      const taskIdStr = typeof taskId === 'string' ? taskId : 'unknown'
-      const agentId = typeof t.agentId === 'string' ? t.agentId
-        : (t.task_snapshot as Record<string, unknown> | undefined)?.agent_id
+        : typeof snap?.task_id === 'string' ? snap.task_id : 'unknown'
+      const command = typeof snap?.command === 'string' ? snap.command : ''
+      const exitCode = typeof snap?.exit_code === 'number' ? snap.exit_code : undefined
+      const signal = typeof snap?.signal === 'string' ? snap.signal : undefined
+      const ok = signal === undefined && (exitCode === undefined || exitCode === 0)
+      const status = signal ? `signal ${signal}` : exitCode !== undefined ? `exit ${exitCode}` : 'done'
       const message = typeof t.message === 'string' ? t.message
-        : `Task \`${taskIdStr}\` completed${agentId ? ` (agent: ${agentId})` : ''}`
+        : `Background task \`${taskId}\` ${ok ? 'completed' : 'failed'} (${status})${command ? `: \`${command.split('\n')[0].slice(0, 120)}\`` : ''}`
       const assistantId = ensureAssistant(sessionId, turn)
       breakActiveParts(turn)
-      const taskPartId = `${assistantId}:task:${Date.now()}`
+      const taskPartId = `${assistantId}:task:${taskId}:${Date.now()}`
       emitPartUpdated(sessionId, assistantId, {
         id: taskPartId,
         type: 'text',
-        text: `✅ ${message}`,
+        text: `${ok ? '✅' : '❌'} ${message}`,
       })
       break
     }
@@ -863,6 +899,12 @@ function handleExtNotification(method: string, params: unknown) {
     handleAcpSessionUpdate(params)
     return
   }
+  // x.ai/task_completed：后台任务完成帧（SessionNotification 同构序列化），
+  // 复用同一转译入口渲染完成卡片——不路由的话 task_completed 卡片永远不出现
+  if (method === 'x.ai/task_completed' && isRecord(params)) {
+    handleAcpSessionUpdate(params)
+    return
+  }
   window.dispatchEvent(new CustomEvent('acp:extNotification', { detail: { method, params } }))
 }
 
@@ -877,8 +919,10 @@ export interface AcpSessionInfo {
 
 export async function acpNewSession(directory?: string): Promise<AcpSessionInfo> {
   const client = await ensureAcp()
-  // 统一用正斜杠——服务端 session 文件键是 URL 编码的路径
-  const cwd = (directory || _serverCwd).replace(/\\/g, '/')
+  // cwd 保持后端原生斜杠方向（Windows 反斜杠），不得强转成正斜杠——
+  // 否则新建会话会落到与 TUI/原生会话不同的编码目录，造成割裂。
+  // 见 sessionCwd.ts 的根因注释。
+  const cwd = sessionCwdForWire(directory || _serverCwd)
   const resp = (await client.rpc.request('session/new', { cwd, mcpServers: [] })) as Record<string, unknown>
   const sessionId = String(resp.sessionId ?? '')
   if (!sessionId) throw new Error('session/new 未返回 sessionId')
@@ -1000,8 +1044,10 @@ export async function acpCancel(sessionId: string): Promise<void> {
 
 export async function acpLoadSession(sessionId: string): Promise<void> {
   const client = await ensureAcp()
-  // cwd 用正斜杠——服务端 session 键是 URL 编码的路径，session/new 用的也是正斜杠
-  const cwd = _serverCwd.replace(/\\/g, '/')
+  // cwd 必须保持后端原生斜杠方向（Windows 反斜杠），不得强转——
+  // 否则 session/load 会因目录编码不匹配而找不到会话（Path not found）。
+  // 见 sessionCwd.ts 的根因注释。
+  const cwd = sessionCwdForWire(_serverCwd)
   await client.loadSession(sessionId, cwd)
 }
 
