@@ -13,6 +13,7 @@ use axum::extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
     Path, Query, State,
 };
+use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use ptyctl::pty::PtyConfig;
 use ptyctl::session::{PtySession, SessionConfig};
@@ -92,7 +93,7 @@ fn resolve_shell() -> Vec<String> {
 // ── Query params ─────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize, Default)]
-struct PtyQuery {
+pub struct PtyQuery {
     #[serde(default)]
     auth_token: Option<String>,
     #[serde(default)]
