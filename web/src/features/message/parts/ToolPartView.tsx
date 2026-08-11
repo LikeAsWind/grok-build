@@ -55,7 +55,7 @@ export const ToolPartView = memo(function ToolPartView({
 }: ToolPartViewProps) {
   const { t } = useTranslation('message')
   const { state, tool: toolName } = part
-  const title = state.title || getInputDescription(part) || ''
+  const title = getToolSummary(part) || ''
 
   const isActive = state.status === 'running' || state.status === 'pending'
   const isError = state.status === 'error'
@@ -550,9 +550,27 @@ function getTaskChildSessionId(part: ToolPart): string | undefined {
 }
 
 /** Extract description from tool input as title fallback (available while running) */
-function getInputDescription(part: ToolPart): string | undefined {
+/**
+ * TUI 对齐的工具摘要（头部第二段）：优先取 rawInput 的关键参数——命令 / 文件
+ * 路径 / URL / query——和 TUI 的 tool_call_to_block 一致；其次是后端 title
+ * （等于工具名或其展示形式时忽略，避免 "Web Fetch / Web Fetch" 重复）；最后
+ * 兜底 input.description。
+ */
+function getToolSummary(part: ToolPart): string | undefined {
   const input = part.state.input as Record<string, unknown> | undefined
-  return (input?.description as string) || undefined
+  const str = (key: string): string | undefined => {
+    const v = input?.[key]
+    return typeof v === 'string' && v.trim() ? v : undefined
+  }
+  const fromInput =
+    str('command')?.split('\n')[0]
+    || str('file_path') || str('filePath') || str('target_file') || str('path')
+    || str('url')
+    || str('query') || str('pattern')
+  if (fromInput) return fromInput
+  const title = part.state.title
+  if (title && title !== part.tool && title !== formatToolName(part.tool)) return title
+  return str('description')
 }
 
 // ============================================

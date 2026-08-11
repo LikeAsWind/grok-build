@@ -499,8 +499,11 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
   const meta = extractToolMeta(tc._meta)
   const wireTitle = typeof tc.title === 'string' ? tc.title : ''
   const toolName = meta.name || wireTitle || 'tool'
-  const title = (meta.label && meta.label !== toolName) ? meta.label
-    : (wireTitle && wireTitle !== toolName) ? wireTitle : undefined
+  // wire title 信息量最高（后端按工具生成 "Fetch: url" / "Read `path`" 等，
+  // 与 TUI 头部行一致）；meta.label 只是展示名，仅作兜底。等于工具名时不设，
+  // 避免 ToolPartView 渲染重复。
+  const title = (wireTitle && wireTitle !== toolName) ? wireTitle
+    : (meta.label && meta.label !== toolName) ? meta.label : undefined
   const rec: ToolRec = {
     partId: `${messageId}:tool:${callId}`,
     callID: callId,
@@ -535,9 +538,12 @@ function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<str
   const meta = extractToolMeta(tc._meta)
   if (meta.name) rec.tool = meta.name
   if (tc.status != null) rec.state.status = mapToolStatus(tc.status)
-  // title 只在和 tool 名不同时才设，避免 ToolPartView 渲染重复
-  const updateTitle = meta.label || (typeof tc.title === 'string' ? tc.title : undefined)
-  if (updateTitle && updateTitle !== rec.tool) rec.state.title = updateTitle
+  // title 只在和 tool 名不同时才设，避免 ToolPartView 渲染重复；
+  // wire title 优先于 meta.label（同 handleToolCall）。
+  const wireUpdateTitle = typeof tc.title === 'string' ? tc.title : undefined
+  const updateTitle = (wireUpdateTitle && wireUpdateTitle !== rec.tool ? wireUpdateTitle : undefined)
+    ?? (meta.label && meta.label !== rec.tool ? meta.label : undefined)
+  if (updateTitle) rec.state.title = updateTitle
   if (isRecord(tc.rawInput)) rec.state.input = tc.rawInput
 
   const { output, metadata } = extractToolOutput(tc.content)
