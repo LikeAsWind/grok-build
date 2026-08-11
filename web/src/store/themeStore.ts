@@ -296,7 +296,7 @@ class ThemeStore {
       savedRenderUserMarkdown === null ? DEFAULT_RENDER_USER_MARKDOWN : savedRenderUserMarkdown === 'true'
     const savedReasoningDisplay = localStorage.getItem(STORAGE_KEY_REASONING_DISPLAY_MODE)
     const reasoningDisplayMode: ReasoningDisplayMode =
-      savedReasoningDisplay === 'italic' || savedReasoningDisplay === 'markdown'
+      savedReasoningDisplay === 'capsule' || savedReasoningDisplay === 'italic' || savedReasoningDisplay === 'markdown'
         ? savedReasoningDisplay
         : DEFAULT_REASONING_DISPLAY_MODE
 
@@ -1060,7 +1060,9 @@ function normalizeThemeBackup(raw: unknown): ThemeBackup {
         : DEFAULT_STEP_FINISH_DISPLAY,
     completedAtFormat: parsed?.completedAtFormat === 'dateTime' ? 'dateTime' : DEFAULT_COMPLETED_AT_FORMAT,
     reasoningDisplayMode:
-      parsed?.reasoningDisplayMode === 'italic' || parsed?.reasoningDisplayMode === 'markdown'
+      parsed?.reasoningDisplayMode === 'capsule' ||
+      parsed?.reasoningDisplayMode === 'italic' ||
+      parsed?.reasoningDisplayMode === 'markdown'
         ? parsed.reasoningDisplayMode
         : DEFAULT_REASONING_DISPLAY_MODE,
     wideMode: parsed?.wideMode === true,
