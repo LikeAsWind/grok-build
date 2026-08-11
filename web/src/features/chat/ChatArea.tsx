@@ -10,24 +10,27 @@
  * 6. directDomUpdates 滚动写 transform，不触发 React 重渲染
  */
 import {
-  useRef, useImperativeHandle, forwardRef, memo,
-  useCallback, useEffect, useLayoutEffect, useMemo, useState,
+  useRef,
+  useImperativeHandle,
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
 } from 'react'
-import {
-  useVirtualizer, elementScroll, defaultRangeExtractor,
-  type VirtualItem,
-} from '@tanstack/react-virtual'
+import { useVirtualizer, elementScroll, defaultRangeExtractor, type VirtualItem } from '@tanstack/react-virtual'
 import { useTranslation } from 'react-i18next'
-import {
-  MessageRenderer,
-  ProcessCollapseBlock,
-  messageHasFinalContent,
-  messageHasProcessContent,
-} from '../message'
+import { MessageRenderer, ProcessCollapseBlock, messageHasFinalContent, messageHasProcessContent } from '../message'
 import { MessageErrorView } from '../message/parts'
 import type { Message, MessageError } from '../../types/message'
 import { RetryStatusInline, type RetryStatusInlineData } from './RetryStatusInline'
-import { buildVisibleMessageEntries, getVisibleMessageForkTargetId } from './chatAreaVisibility'
+import {
+  buildVisibleMessageEntries,
+  getVisibleMessageForkTargetId,
+  type VisibleMessageEntry,
+} from './chatAreaVisibility'
 import { AT_BOTTOM_THRESHOLD_PX } from '../../constants'
 import { useChatViewport } from './chatViewport'
 import {
@@ -36,7 +39,6 @@ import {
   buildTurnLatestAssistantIdSet,
   reuseProcessTimelineItems,
   type ProcessTimelineItem,
-  type StableChatPage,
 } from './chatPageModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getStreamingHotIndexes, getTimelineRowYClass, mergeVirtualRangeIndexes } from './chatAreaUtils'
@@ -52,8 +54,7 @@ const EMPTY_WORKING_SHELL_EXTRA_DELAY_MS = 500
 const DEFAULT_BOTTOM_SPACER = 256
 const SESSION_CACHE_LIMIT = 16
 
-const bottomSpacerHeight = (bottomPadding: number) =>
-  bottomPadding > 0 ? bottomPadding + 48 : DEFAULT_BOTTOM_SPACER
+const bottomSpacerHeight = (bottomPadding: number) => (bottomPadding > 0 ? bottomPadding + 48 : DEFAULT_BOTTOM_SPACER)
 
 function estimateTimelineItemSize(item: ProcessTimelineItem | undefined): number {
   if (!item) return ROW_ESTIMATE
@@ -75,7 +76,7 @@ function sessionCacheKey(sessionId: string, processCollapseEnabled: boolean): st
 
 interface ChatAreaProps {
   messages: Message[]
-  pageRecords?: StableChatPage[]
+  visibleMessageEntries?: VisibleMessageEntry[]
   visibleMessages?: Message[]
   forkTargetIdMap?: Map<string, string | undefined>
   turnDurationMap?: Map<string, number>
@@ -201,136 +202,144 @@ interface RowProps {
   onRemoveQueued?: (userMessageId: string) => void
 }
 
-const VirtualRow = memo(function VirtualRow({
-  virtualItem,
-  item,
-  maxWidthClass,
-  paddingClass,
-  rowYClass,
-  registerMessage,
-  onUndo,
-  onFork,
-  canUndo,
-  forkMap,
-  turnDurationMap,
-  turnLatestAssistantIds,
-  allowStreamingLayoutAnimation,
-  measureElement,
-  onEntryGrowComplete,
-  onInterjectQueued,
-  onEditQueued,
-  onRemoveQueued,
-}: RowProps) {
-  const rowRef = useRef<HTMLDivElement | null>(null)
+const VirtualRow = memo(
+  function VirtualRow({
+    virtualItem,
+    item,
+    maxWidthClass,
+    paddingClass,
+    rowYClass,
+    registerMessage,
+    onUndo,
+    onFork,
+    canUndo,
+    forkMap,
+    turnDurationMap,
+    turnLatestAssistantIds,
+    allowStreamingLayoutAnimation,
+    measureElement,
+    onEntryGrowComplete,
+    onInterjectQueued,
+    onEditQueued,
+    onRemoveQueued,
+  }: RowProps) {
+    const rowRef = useRef<HTMLDivElement | null>(null)
 
-  const setRef = useCallback((el: HTMLDivElement | null) => {
-    rowRef.current = el
-    measureElement(el)
-  }, [measureElement])
+    const setRef = useCallback(
+      (el: HTMLDivElement | null) => {
+        rowRef.current = el
+        measureElement(el)
+      },
+      [measureElement],
+    )
 
-  useLayoutEffect(() => {
-    if (rowRef.current) measureElement(rowRef.current)
-  }, [measureElement, virtualItem.index, item.key, rowYClass])
+    useLayoutEffect(() => {
+      if (rowRef.current) measureElement(rowRef.current)
+    }, [measureElement, virtualItem.index, item, rowYClass])
 
-  return (
-    <div
-      ref={setRef}
-      data-timeline-key={item.key}
-      data-index={virtualItem.index}
-      style={{ position: 'absolute', top: 0, left: 0, width: '100%' }}
-    >
-      <div className={`w-full ${maxWidthClass} mx-auto ${paddingClass} ${rowYClass} transition-[max-width] duration-300 ease-in-out`}>
-        {item.kind === 'message' ? (
-          <MessageBody
-            message={item.message}
-            registerMessage={registerMessage}
-            onUndo={onUndo}
-            onFork={onFork}
-            canUndo={canUndo}
-            forkMessageId={forkMap.get(item.message.info.id)}
-            turnDuration={turnDurationMap.get(item.message.info.id)}
-            isTurnLatestAssistant={
-              item.message.info.role === 'assistant'
-                ? turnLatestAssistantIds.has(item.message.info.id)
-                : undefined
-            }
-            allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
-            processContentScope={item.processContentScope ?? 'all'}
-            onEntryGrowComplete={onEntryGrowComplete}
-            onInterjectQueued={onInterjectQueued}
-            onEditQueued={onEditQueued}
-            onRemoveQueued={onRemoveQueued}
-          />
-        ) : (
-          <div className="flex justify-start">
-            <div className="message-renderer-shell min-w-0 group w-full flex flex-col gap-2">
-              <ProcessCollapseBlock
-                stateKey={`turn-process:${item.userMessageId ?? item.key}`}
-                startedAt={item.startedAt}
-                durationMs={item.durationMs}
-                isActive={item.isActive}
-              >
-                {item.children.map(child => (
+    return (
+      <div
+        ref={setRef}
+        data-timeline-key={item.key}
+        data-index={virtualItem.index}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%' }}
+      >
+        <div
+          className={`w-full ${maxWidthClass} mx-auto ${paddingClass} ${rowYClass} transition-[max-width] duration-300 ease-in-out`}
+        >
+          {item.kind === 'message' ? (
+            <MessageBody
+              message={item.message}
+              registerMessage={registerMessage}
+              onUndo={onUndo}
+              onFork={onFork}
+              canUndo={canUndo}
+              forkMessageId={forkMap.get(item.message.info.id)}
+              turnDuration={turnDurationMap.get(item.message.info.id)}
+              isTurnLatestAssistant={
+                item.message.info.role === 'assistant' ? turnLatestAssistantIds.has(item.message.info.id) : undefined
+              }
+              allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
+              processContentScope={item.processContentScope ?? 'all'}
+              onEntryGrowComplete={onEntryGrowComplete}
+              onInterjectQueued={onInterjectQueued}
+              onEditQueued={onEditQueued}
+              onRemoveQueued={onRemoveQueued}
+            />
+          ) : (
+            <div className="flex justify-start">
+              <div className="message-renderer-shell min-w-0 group w-full flex flex-col gap-2">
+                <ProcessCollapseBlock
+                  stateKey={`turn-process:${item.userMessageId ?? item.key}`}
+                  startedAt={item.startedAt}
+                  durationMs={item.durationMs}
+                  isActive={item.isActive}
+                >
+                  {item.children.map(child => (
+                    <MessageBody
+                      key={`${child.message.info.id}:${child.processContentScope}`}
+                      message={child.message}
+                      registerMessage={registerMessage}
+                      onUndo={onUndo}
+                      onFork={onFork}
+                      canUndo={canUndo}
+                      forkMessageId={forkMap.get(child.message.info.id)}
+                      turnDuration={turnDurationMap.get(child.message.info.id)}
+                      isTurnLatestAssistant={turnLatestAssistantIds.has(child.message.info.id)}
+                      allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
+                      processContentScope={child.processContentScope}
+                      onInterjectQueued={onInterjectQueued}
+                      onEditQueued={onEditQueued}
+                      onRemoveQueued={onRemoveQueued}
+                    />
+                  ))}
+                </ProcessCollapseBlock>
+                {/* shell 的 gap-2 只服务 process 壳 ↔ final 文本，子消息间距由 processBody 管 */}
+                {item.finalMessage && (
                   <MessageBody
-                    key={`${child.message.info.id}:${child.processContentScope}`}
-                    message={child.message}
+                    message={item.finalMessage}
                     registerMessage={registerMessage}
                     onUndo={onUndo}
                     onFork={onFork}
                     canUndo={canUndo}
-                    forkMessageId={forkMap.get(child.message.info.id)}
-                    turnDuration={turnDurationMap.get(child.message.info.id)}
-                    isTurnLatestAssistant={turnLatestAssistantIds.has(child.message.info.id)}
+                    forkMessageId={forkMap.get(item.finalMessage.info.id)}
+                    turnDuration={turnDurationMap.get(item.finalMessage.info.id)}
+                    isTurnLatestAssistant
                     allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
-                    processContentScope={child.processContentScope}
+                    processContentScope="final"
                     onInterjectQueued={onInterjectQueued}
                     onEditQueued={onEditQueued}
                     onRemoveQueued={onRemoveQueued}
                   />
-                ))}
-              </ProcessCollapseBlock>
-              {/* shell 的 gap-2 只服务 process 壳 ↔ final 文本，子消息间距由 processBody 管 */}
-              {item.finalMessage && (
-                <MessageBody
-                  message={item.finalMessage}
-                  registerMessage={registerMessage}
-                  onUndo={onUndo}
-                  onFork={onFork}
-                  canUndo={canUndo}
-                  forkMessageId={forkMap.get(item.finalMessage.info.id)}
-                  turnDuration={turnDurationMap.get(item.finalMessage.info.id)}
-                  isTurnLatestAssistant
-                  allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
-                  processContentScope="final"
-                  onInterjectQueued={onInterjectQueued}
-                  onEditQueued={onEditQueued}
-                  onRemoveQueued={onRemoveQueued}
-                />
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
-  )
-}, (prev, next) =>
-  prev.virtualItem.index === next.virtualItem.index &&
-  prev.virtualItem.start === next.virtualItem.start &&
-  prev.virtualItem.size === next.virtualItem.size &&
-  prev.item === next.item &&
-  prev.maxWidthClass === next.maxWidthClass &&
-  prev.paddingClass === next.paddingClass &&
-  prev.rowYClass === next.rowYClass &&
-  prev.registerMessage === next.registerMessage &&
-  prev.onUndo === next.onUndo &&
-  prev.onFork === next.onFork &&
-  prev.canUndo === next.canUndo &&
-  prev.forkMap === next.forkMap &&
-  prev.turnDurationMap === next.turnDurationMap &&
-  prev.turnLatestAssistantIds === next.turnLatestAssistantIds &&
-  prev.allowStreamingLayoutAnimation === next.allowStreamingLayoutAnimation &&
-  prev.measureElement === next.measureElement &&
-  prev.onEntryGrowComplete === next.onEntryGrowComplete
+    )
+  },
+  (prev, next) =>
+    prev.virtualItem.index === next.virtualItem.index &&
+    prev.virtualItem.start === next.virtualItem.start &&
+    prev.virtualItem.size === next.virtualItem.size &&
+    prev.item === next.item &&
+    prev.maxWidthClass === next.maxWidthClass &&
+    prev.paddingClass === next.paddingClass &&
+    prev.rowYClass === next.rowYClass &&
+    prev.registerMessage === next.registerMessage &&
+    prev.onUndo === next.onUndo &&
+    prev.onFork === next.onFork &&
+    prev.canUndo === next.canUndo &&
+    prev.forkMap === next.forkMap &&
+    prev.turnDurationMap === next.turnDurationMap &&
+    prev.turnLatestAssistantIds === next.turnLatestAssistantIds &&
+    prev.allowStreamingLayoutAnimation === next.allowStreamingLayoutAnimation &&
+    prev.measureElement === next.measureElement &&
+    prev.onEntryGrowComplete === next.onEntryGrowComplete &&
+    prev.onInterjectQueued === next.onInterjectQueued &&
+    prev.onEditQueued === next.onEditQueued &&
+    prev.onRemoveQueued === next.onRemoveQueued,
 )
 
 // ─── 会话缓存（LRU 16） ───────────────────────────────────────
@@ -343,15 +352,32 @@ export const ChatArea = memo(
   forwardRef<ChatAreaHandle, ChatAreaProps>(
     (
       {
-        messages, visibleMessages: visibleMessagesProp,
-        forkTargetIdMap: forkTargetIdMapProp, turnDurationMap: turnDurationMapProp,
+        messages,
+        visibleMessages: visibleMessagesProp,
+        visibleMessageEntries: visibleMessageEntriesProp,
+        forkTargetIdMap: forkTargetIdMapProp,
+        turnDurationMap: turnDurationMapProp,
         turnLatestAssistantIds: turnLatestAssistantIdsProp,
-        sessionId, isStreaming = false, allowStreamingLayoutAnimation = false,
-        loadState = 'idle', loadError, connectionError, onOpenSettings,
-        hasMoreHistory = false, onLoadMore, onUndo, onFork, canUndo,
-        registerMessage, retryStatus = null, bottomPadding = 0,
-        onVisibleMessageIdsChange, onAtBottomChange,
-        onInterjectQueued, onEditQueued, onRemoveQueued,
+        sessionId,
+        isStreaming = false,
+        allowStreamingLayoutAnimation = false,
+        loadState = 'idle',
+        loadError,
+        connectionError,
+        onOpenSettings,
+        hasMoreHistory = false,
+        onLoadMore,
+        onUndo,
+        onFork,
+        canUndo,
+        registerMessage,
+        retryStatus = null,
+        bottomPadding = 0,
+        onVisibleMessageIdsChange,
+        onAtBottomChange,
+        onInterjectQueued,
+        onEditQueued,
+        onRemoveQueued,
       },
       ref,
     ) => {
@@ -363,7 +389,10 @@ export const ChatArea = memo(
       const maxWidthClass = isWideMode ? 'max-w-[95%] xl:max-w-6xl' : 'max-w-2xl'
 
       // ── 派生数据 ──
-      const entries = useMemo(() => buildVisibleMessageEntries(messages), [messages])
+      const entries = useMemo(
+        () => visibleMessageEntriesProp ?? buildVisibleMessageEntries(messages),
+        [messages, visibleMessageEntriesProp],
+      )
       const visibleMessages = useMemo(
         () => visibleMessagesProp ?? entries.map(e => e.message),
         [entries, visibleMessagesProp],
@@ -414,7 +443,14 @@ export const ChatArea = memo(
         return reused
         // emptyShellGate.version：额外延迟到期后强制重算，挂上 Working 壳
         // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, [processCollapseEnabled, visibleMessages, turnDurationMap, isStreaming, emptyShellGate.version, emptyShellGate.isReady])
+      }, [
+        processCollapseEnabled,
+        visibleMessages,
+        turnDurationMap,
+        isStreaming,
+        emptyShellGate.version,
+        emptyShellGate.isReady,
+      ])
 
       const messageIdToTimelineIndex = useMemo(() => {
         const map = new Map<string, number>()
@@ -433,13 +469,20 @@ export const ChatArea = memo(
       // ── Refs（避免闭包过期） ──
       const scrollRef = useRef<HTMLDivElement | null>(null)
       const contentRef = useRef<HTMLDivElement | null>(null)
-      const sessionIdRef = useRef(sessionId); sessionIdRef.current = sessionId
-      const onLoadMoreRef = useRef(onLoadMore); onLoadMoreRef.current = onLoadMore
-      const onVisibleIdsRef = useRef(onVisibleMessageIdsChange); onVisibleIdsRef.current = onVisibleMessageIdsChange
-      const onAtBottomRef = useRef(onAtBottomChange); onAtBottomRef.current = onAtBottomChange
-      const hasMoreRef = useRef(hasMoreHistory); hasMoreRef.current = hasMoreHistory
-      const loadStateRef = useRef(loadState); loadStateRef.current = loadState
-      const thresholdRef = useRef(atBottomThreshold); thresholdRef.current = atBottomThreshold
+      const sessionIdRef = useRef(sessionId)
+      sessionIdRef.current = sessionId
+      const onLoadMoreRef = useRef(onLoadMore)
+      onLoadMoreRef.current = onLoadMore
+      const onVisibleIdsRef = useRef(onVisibleMessageIdsChange)
+      onVisibleIdsRef.current = onVisibleMessageIdsChange
+      const onAtBottomRef = useRef(onAtBottomChange)
+      onAtBottomRef.current = onAtBottomChange
+      const hasMoreRef = useRef(hasMoreHistory)
+      hasMoreRef.current = hasMoreHistory
+      const loadStateRef = useRef(loadState)
+      loadStateRef.current = loadState
+      const thresholdRef = useRef(atBottomThreshold)
+      thresholdRef.current = atBottomThreshold
 
       const [isLoadingMore, setIsLoadingMore] = useState(false)
       const loadingMoreRef = useRef(false)
@@ -494,9 +537,7 @@ export const ChatArea = memo(
       const cacheKey = sessionId ? sessionCacheKey(sessionId, processCollapseEnabled) : null
       const initialCacheRef = useRef(cacheKey ? sessionCache.get(cacheKey)?.measurements : undefined)
       const coldBottomMount = !initialCacheRef.current?.length
-      const [renderOverscan, setRenderOverscan] = useState(
-        initialCacheRef.current?.length || coldBottomMount ? 6 : 15,
-      )
+      const [renderOverscan, setRenderOverscan] = useState(initialCacheRef.current?.length || coldBottomMount ? 6 : 15)
       const resizePinnedRef = useRef<number[]>([])
       const resizePinFrame = useRef<number | undefined>(undefined)
       const resizeAnchorScheduled = useRef(false)
@@ -523,8 +564,8 @@ export const ChatArea = memo(
         getScrollElement: () => scrollRef.current,
         initialOffset: estimatedBottomOffset,
         initialMeasurementsCache: initialCacheRef.current,
-        estimateSize: (index) => estimateTimelineItemSize(timeline[index]),
-        getItemKey: (i) => timeline[i]?.key ?? `removed:${i}`,
+        estimateSize: index => estimateTimelineItemSize(timeline[index]),
+        getItemKey: i => timeline[i]?.key ?? `removed:${i}`,
         // 输入框占位放在消息区外（retry/error 之后），避免重试提示被压到输入框下面
         paddingEnd: 0,
         scrollEndThreshold: 80,
@@ -539,7 +580,7 @@ export const ChatArea = memo(
         overscan: 50,
         directDomUpdates: true,
         directDomUpdatesMode: 'transform',
-        rangeExtractor: (range) => {
+        rangeExtractor: range => {
           const indexes = defaultRangeExtractor({ ...range, overscan: renderOverscan })
           return mergeVirtualRangeIndexes(indexes, resizePinnedRef.current, hotPinnedRef.current)
         },
@@ -585,12 +626,7 @@ export const ChatArea = memo(
           } else {
             origResize(index, size)
           }
-          if (
-            root
-            && shouldAnchorBottom()
-            && !resizeAnchorScheduled.current
-            && (virtualizer as any).isAtEnd?.(80)
-          ) {
+          if (root && shouldAnchorBottom() && !resizeAnchorScheduled.current && (virtualizer as any).isAtEnd?.(80)) {
             resizeAnchorScheduled.current = true
             queueMicrotask(() => {
               resizeAnchorScheduled.current = false
@@ -619,7 +655,10 @@ export const ChatArea = memo(
       const clearPrepend = useCallback(() => {
         prependLoading.current = false
         prependAnchor.current = undefined
-        if (prependFrame.current !== undefined) { cancelAnimationFrame(prependFrame.current); prependFrame.current = undefined }
+        if (prependFrame.current !== undefined) {
+          cancelAnimationFrame(prependFrame.current)
+          prependFrame.current = undefined
+        }
       }, [])
 
       const updatePrependAnchor = useCallback(() => {
@@ -639,16 +678,22 @@ export const ChatArea = memo(
         const root = scrollRef.current
         if (!root || !prependAnchor.current) return
         if (prependFrame.current !== undefined) cancelAnimationFrame(prependFrame.current)
-        let frames = 0, stable = 0
+        let frames = 0,
+          stable = 0
         const apply = () => {
           prependFrame.current = undefined
           const a = prependAnchor.current
           if (!a) return
           const el = root.querySelector<HTMLElement>(`[data-timeline-key="${CSS.escape(a.key)}"]`)
           const delta = el ? el.getBoundingClientRect().top - root.getBoundingClientRect().top - a.offset : undefined
-          if (delta !== undefined && Math.abs(delta) > 0.5) { root.scrollTop += delta; stable = 0 }
-          else stable++
-          if (++frames >= 180 || stable >= 30) { if (!prependLoading.current) prependAnchor.current = undefined; return }
+          if (delta !== undefined && Math.abs(delta) > 0.5) {
+            root.scrollTop += delta
+            stable = 0
+          } else stable++
+          if (++frames >= 180 || stable >= 30) {
+            if (!prependLoading.current) prependAnchor.current = undefined
+            return
+          }
           prependFrame.current = requestAnimationFrame(apply)
         }
         prependFrame.current = requestAnimationFrame(apply)
@@ -659,18 +704,23 @@ export const ChatArea = memo(
         updatePrependAnchor()
       }, [updatePrependAnchor])
 
-      const restorePrepend = useCallback((done: boolean) => {
-        if (done) prependLoading.current = false
-        applyPrependAnchor()
-      }, [applyPrependAnchor])
+      const restorePrepend = useCallback(
+        (done: boolean) => {
+          if (done) prependLoading.current = false
+          applyPrependAnchor()
+        },
+        [applyPrependAnchor],
+      )
 
       const loadMore = useCallback(() => {
         capturePrepend()
-        setIsLoadingMore(true); loadingMoreRef.current = true
+        setIsLoadingMore(true)
+        loadingMoreRef.current = true
         Promise.resolve(onLoadMoreRef.current?.())
           .catch(() => {})
           .finally(() => {
-            setIsLoadingMore(false); loadingMoreRef.current = false
+            setIsLoadingMore(false)
+            loadingMoreRef.current = false
             restorePrepend(true)
           })
       }, [capturePrepend, restorePrepend])
@@ -691,18 +741,27 @@ export const ChatArea = memo(
       }, [loadMore, userScrolledRef])
 
       // ── Ref 回调 ──
-      const setScrollRoot = useCallback((el: HTMLDivElement | null) => {
-        scrollRef.current = el
-        autoSetScrollRef(el)
-        if (el) { computeScrollState(); fill() }
-      }, [autoSetScrollRef, computeScrollState, fill])
+      const setScrollRoot = useCallback(
+        (el: HTMLDivElement | null) => {
+          scrollRef.current = el
+          autoSetScrollRef(el)
+          if (el) {
+            computeScrollState()
+            fill()
+          }
+        },
+        [autoSetScrollRef, computeScrollState, fill],
+      )
 
-      const setVirtualContent = useCallback((el: HTMLDivElement | null) => {
-        contentRef.current = el
-        autoSetContentRef(el)
-        virtualizer.containerRef(el)
-        if (el && scrollRef.current) computeScrollState()
-      }, [autoSetContentRef, virtualizer, computeScrollState])
+      const setVirtualContent = useCallback(
+        (el: HTMLDivElement | null) => {
+          contentRef.current = el
+          autoSetContentRef(el)
+          virtualizer.containerRef(el)
+          if (el && scrollRef.current) computeScrollState()
+        },
+        [autoSetContentRef, virtualizer, computeScrollState],
+      )
 
       const pinToBottom = useCallback(() => {
         // 必须滚到整页底（含 retry/error + 输入框 spacer），不能只 scrollToEnd 虚拟消息区
@@ -718,10 +777,10 @@ export const ChatArea = memo(
         if (prependLoading.current) updatePrependAnchor()
         computeScrollState()
         if (
-          userScrolledRef.current
-          && (scrollRef.current?.scrollTop ?? 0) < 200
-          && !loadingMoreRef.current
-          && hasMoreRef.current
+          userScrolledRef.current &&
+          (scrollRef.current?.scrollTop ?? 0) < 200 &&
+          !loadingMoreRef.current &&
+          hasMoreRef.current
         ) {
           void loadMore()
         }
@@ -729,10 +788,13 @@ export const ChatArea = memo(
         autoHandleScroll()
       }, [updatePrependAnchor, computeScrollState, autoHandleScroll, loadMore, userScrolledRef])
 
-      const onWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-        if (!prependLoading.current) clearPrepend()
-        autoHandleWheel(e.nativeEvent)
-      }, [autoHandleWheel, clearPrepend])
+      const onWheel = useCallback(
+        (e: React.WheelEvent<HTMLDivElement>) => {
+          if (!prependLoading.current) clearPrepend()
+          autoHandleWheel(e.nativeEvent)
+        },
+        [autoHandleWheel, clearPrepend],
+      )
 
       const onTouchStart = useCallback(() => {
         if (!prependLoading.current) clearPrepend()
@@ -824,7 +886,11 @@ export const ChatArea = memo(
       // ── 渲染数据 ──
       const items = virtualizer.getVirtualItems()
       const mountedMessageIdsKey = useMemo(
-        () => items.map(item => timeline[item.index]?.key).filter(Boolean).join(','),
+        () =>
+          items
+            .map(item => timeline[item.index]?.key)
+            .filter(Boolean)
+            .join(','),
         [items, timeline],
       )
 
@@ -858,45 +924,56 @@ export const ChatArea = memo(
       }, [mountedMessageIdsKey])
 
       // ── 命令式接口 ──
-      useImperativeHandle(ref, () => ({
-        scrollToBottom: () => {
-          autoForceScroll()
-          pinToBottom()
-        },
-        scrollToBottomIfAtBottom: () => {
-          // userScrolled 守卫：用户上滚后 userScrolled=true，此函数由 onScrollRequest
-          //（每个 SSE chunk）调用。autoForceScroll() 的 force=true 会清掉 userScrolled，
-          // 导致 resizeItem 的 anchorTo toggle 失效 → wasAtEnd 恢复拉回。
-          // 不在此处清 userScrolled——用户主动下滚回底时 handleWheel 会清。
-          // 正常贴底跟随（userScrolled=false 时）不受影响。
-          if (userScrolledRef.current) return
-          if (!prevState.current.bottom) return
-          autoForceScroll()
-          pinToBottom()
-        },
-        scrollToLastMessage: () => {
-          if (timeline.length === 0) return
-          autoMarkAuto(scrollRef.current)
-          virtualizer.scrollToIndex(timeline.length - 1, { align: 'end' })
-        },
-        scrollToMessageIndex: (index: number) => {
-          // index 仍按 visibleMessages 语义；过程折叠时映射到 timeline 行
-          if (index < 0 || index >= visibleMessages.length) return
-          const messageId = visibleMessages[index]?.info.id
-          const timelineIndex = messageId != null
-            ? (messageIdToTimelineIndex.get(messageId) ?? index)
-            : index
-          if (timelineIndex < 0 || timelineIndex >= timeline.length) return
-          autoPause()
-          virtualizer.scrollToIndex(timelineIndex, { align: 'center' })
-        },
-        scrollToMessageId: (messageId: string) => {
-          const timelineIndex = messageIdToTimelineIndex.get(messageId)
-          if (timelineIndex == null) return
-          autoPause()
-          virtualizer.scrollToIndex(timelineIndex, { align: 'center' })
-        },
-      }), [autoForceScroll, autoPause, autoMarkAuto, pinToBottom, virtualizer, timeline, visibleMessages, messageIdToTimelineIndex])
+      useImperativeHandle(
+        ref,
+        () => ({
+          scrollToBottom: () => {
+            autoForceScroll()
+            pinToBottom()
+          },
+          scrollToBottomIfAtBottom: () => {
+            // userScrolled 守卫：用户上滚后 userScrolled=true，此函数由 onScrollRequest
+            //（每个 SSE chunk）调用。autoForceScroll() 的 force=true 会清掉 userScrolled，
+            // 导致 resizeItem 的 anchorTo toggle 失效 → wasAtEnd 恢复拉回。
+            // 不在此处清 userScrolled——用户主动下滚回底时 handleWheel 会清。
+            // 正常贴底跟随（userScrolled=false 时）不受影响。
+            if (userScrolledRef.current) return
+            if (!prevState.current.bottom) return
+            autoForceScroll()
+            pinToBottom()
+          },
+          scrollToLastMessage: () => {
+            if (timeline.length === 0) return
+            autoMarkAuto(scrollRef.current)
+            virtualizer.scrollToIndex(timeline.length - 1, { align: 'end' })
+          },
+          scrollToMessageIndex: (index: number) => {
+            // index 仍按 visibleMessages 语义；过程折叠时映射到 timeline 行
+            if (index < 0 || index >= visibleMessages.length) return
+            const messageId = visibleMessages[index]?.info.id
+            const timelineIndex = messageId != null ? (messageIdToTimelineIndex.get(messageId) ?? index) : index
+            if (timelineIndex < 0 || timelineIndex >= timeline.length) return
+            autoPause()
+            virtualizer.scrollToIndex(timelineIndex, { align: 'center' })
+          },
+          scrollToMessageId: (messageId: string) => {
+            const timelineIndex = messageIdToTimelineIndex.get(messageId)
+            if (timelineIndex == null) return
+            autoPause()
+            virtualizer.scrollToIndex(timelineIndex, { align: 'center' })
+          },
+        }),
+        [
+          autoForceScroll,
+          autoPause,
+          autoMarkAuto,
+          pinToBottom,
+          virtualizer,
+          timeline,
+          visibleMessages,
+          messageIdToTimelineIndex,
+        ],
+      )
 
       return (
         <div className="h-full overflow-hidden contain-strict relative">
@@ -942,11 +1019,7 @@ export const ChatArea = memo(
                     item={timelineItem}
                     maxWidthClass={maxWidthClass}
                     paddingClass={paddingClass}
-                    rowYClass={getTimelineRowYClass(
-                      timelineItem,
-                      timeline[item.index - 1],
-                      timeline[item.index + 1],
-                    )}
+                    rowYClass={getTimelineRowYClass(timelineItem, timeline[item.index - 1], timeline[item.index + 1])}
                     registerMessage={registerMessage}
                     onUndo={onUndo}
                     onFork={onFork}

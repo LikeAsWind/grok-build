@@ -17,6 +17,7 @@ import {
 export interface ChatPageViewModel {
   visibleMessageEntries: VisibleMessageEntry[]
   visibleMessages: Message[]
+  /** Legacy page snapshots are lazy; ChatArea uses the timeline directly. */
   pageRecords: StableChatPage[]
   outlineSourceEntries: OutlineSourceEntry[]
   outlineOwnerByMessageId: Map<string, string>
@@ -232,14 +233,6 @@ export function buildChatPageViewModel(messages: Message[], previous?: ChatPageV
     buildVisibleMessageEntries(messages),
   )
   const visibleMessages = visibleMessagesFromEntries(previous?.visibleMessages, visibleMessageEntries)
-  const pageRecords = reusePageRecords(
-    previous?.pageRecords,
-    reconcileStableChatPages({
-      currentPages: previous?.pageRecords ?? [],
-      nextMessages: visibleMessages,
-      allocateKey: page => page.key,
-    }),
-  )
   const forkTargetIdMap = reuseMap(previous?.forkTargetIdMap, buildForkTargetIdMap(visibleMessageEntries))
   const outlineModel = getStableOutlineModel(visibleMessages)
   const turnDurationMap = reuseMap(previous?.turnDurationMap, buildTurnDurationMap(messages, visibleMessages))
@@ -248,10 +241,22 @@ export function buildChatPageViewModel(messages: Message[], previous?: ChatPageV
     buildTurnLatestAssistantIdSet(visibleMessages),
   )
 
+  let pageRecords: StableChatPage[] | undefined
   return {
     visibleMessageEntries,
     visibleMessages,
-    pageRecords,
+    get pageRecords() {
+      if (pageRecords) return pageRecords
+      pageRecords = reusePageRecords(
+        previous?.pageRecords,
+        reconcileStableChatPages({
+          currentPages: previous?.pageRecords ?? [],
+          nextMessages: visibleMessages,
+          allocateKey: page => page.key,
+        }),
+      )
+      return pageRecords
+    },
     outlineSourceEntries: outlineModel.entries,
     outlineOwnerByMessageId: outlineModel.ownerByMessageId,
     forkTargetIdMap,

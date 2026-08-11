@@ -193,6 +193,8 @@ export const StopIcon = ({ size = 16, ...props }: IconProps) => (
   <Square size={size} fill="currentColor" strokeWidth={0} aria-hidden="true" {...(props as LucideProps)} />
 )
 
+export const SquareIcon = wrap(Square)
+
 export const SpinnerIcon = wrap(LoaderCircle)
 export const QuestionIcon = wrap(CircleHelp)
 export const PathAutoIcon = wrap(Sun)

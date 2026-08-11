@@ -308,10 +308,12 @@ export const ChatPane = memo(function ChatPane({
     navigateHome,
   })
 
-  const messageView = useMemo(() => ({ sessionId: routeSessionId, messages }), [routeSessionId, messages])
-  const deferredMessageView = useDeferredValue(messageView)
   const shouldDeferMessages = displayMode === 'split' && !isStreaming && messages.length > 20
-  const renderedMessagesView = shouldDeferMessages ? deferredMessageView : messageView
+  const messageView = useMemo(() => ({ sessionId: routeSessionId, messages }), [routeSessionId, messages])
+  // Streaming never consumes the deferred value, so do not feed every token into a
+  // second low-priority render lane.
+  const deferredMessageView = useDeferredValue(shouldDeferMessages ? messageView : null)
+  const renderedMessagesView = shouldDeferMessages && deferredMessageView ? deferredMessageView : messageView
   const renderedMessages = renderedMessagesView.sessionId === routeSessionId ? renderedMessagesView.messages : []
   const isRenderingDeferredMessages = renderedMessages !== messages
   const renderedLoadState = loadState === 'loaded' && isRenderingDeferredMessages ? 'loading' : loadState
@@ -353,7 +355,10 @@ export const ChatPane = memo(function ChatPane({
         : '',
     ].filter(Boolean)
 
-    const responseBody = [lines.join('\n'), activeServerHealth.details ? `Raw diagnostics:\n${activeServerHealth.details}` : '']
+    const responseBody = [
+      lines.join('\n'),
+      activeServerHealth.details ? `Raw diagnostics:\n${activeServerHealth.details}` : '',
+    ]
       .filter(Boolean)
       .join('\n\n')
 
@@ -490,14 +495,22 @@ export const ChatPane = memo(function ChatPane({
   useEffect(() => {
     if (inputRestoreContent?.agent) {
       restoreAgentFromMessage(inputRestoreContent.agent)
-      return
     }
+  }, [inputRestoreContent, restoreAgentFromMessage])
+
+  const restoredAgentSessionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!routeSessionId || restoredAgentSessionRef.current === routeSessionId) return
     if (messages.length === 0) return
+
+    restoredAgentSessionRef.current = routeSessionId
     const lastUserMsg = [...messages].reverse().find(m => m.info.role === 'user')
     if (lastUserMsg && 'agent' in lastUserMsg.info) {
       restoreAgentFromMessage((lastUserMsg.info as { agent?: string }).agent)
     }
-  }, [inputRestoreContent, messages, restoreAgentFromMessage])
+    // Streaming only changes message content; agent restoration follows session/load boundaries.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeSessionId, messages.length, restoreAgentFromMessage])
 
   // ============================================
   // Focus handling
@@ -792,6 +805,21 @@ export const ChatPane = memo(function ChatPane({
         attachments: inputRestoreContent.attachments as Attachment[],
       }
     : undefined
+  const fileCapabilities = useMemo(
+    () =>
+      currentModel
+        ? {
+            image: currentModel.supportsImages,
+            pdf: currentModel.supportsPdf,
+            audio: currentModel.supportsAudio,
+            video: currentModel.supportsVideo,
+          }
+        : undefined,
+    [currentModel],
+  )
+  const handleScrollToBottom = useCallback(() => {
+    chatAreaRef.current?.scrollToBottom()
+  }, [])
 
   // ============================================
   // Render
@@ -831,7 +859,7 @@ export const ChatPane = memo(function ChatPane({
                 key={chatAreaMountKey}
                 ref={chatAreaRef}
                 messages={renderedMessages}
-                pageRecords={chatPageViewModel.pageRecords}
+                visibleMessageEntries={chatPageViewModel.visibleMessageEntries}
                 visibleMessages={chatPageViewModel.visibleMessages}
                 forkTargetIdMap={chatPageViewModel.forkTargetIdMap}
                 turnDurationMap={chatPageViewModel.turnDurationMap}
@@ -905,16 +933,7 @@ export const ChatPane = memo(function ChatPane({
           onVariantChange={handleVariantChange}
           mode={currentMode}
           onModeChange={handleModeChange}
-          fileCapabilities={
-            currentModel
-              ? {
-                  image: currentModel.supportsImages,
-                  pdf: currentModel.supportsPdf,
-                  audio: currentModel.supportsAudio,
-                  video: currentModel.supportsVideo,
-                }
-              : undefined
-          }
+          fileCapabilities={fileCapabilities}
           models={visibleModels}
           selectedModelKey={selectedModelKey}
           onModelChange={handleModelChange}
@@ -932,7 +951,7 @@ export const ChatPane = memo(function ChatPane({
           registerInputBox={registerInputBox}
           isAtBottom={isAtBottom}
           showScrollToBottom={!isAtBottom}
-          onScrollToBottom={() => chatAreaRef.current?.scrollToBottom()}
+          onScrollToBottom={handleScrollToBottom}
           collapsedPermission={
             !inlineToolRequests && pendingPermissionRequests.length > 0 && permissionCollapsed
               ? {
