@@ -515,6 +515,21 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
       time: { start: Date.now() },
     },
   }
+  // 历史回放会把一次调用合并成单条终态 tool_call（带 content/rawOutput，
+  // 之后不再有 tool_call_update）——输出提取和完成态收敛在这里也要做，
+  // 否则刷新页面后工具卡片丢输出。
+  const { output, metadata } = extractToolOutput(tc.content)
+  if (output !== undefined) rec.state.output = output
+  if (tc.rawOutput != null && rec.state.output === undefined) {
+    rec.state.output = typeof tc.rawOutput === 'string' ? tc.rawOutput : JSON.stringify(tc.rawOutput, null, 2)
+  }
+  if (metadata) rec.state.metadata = metadata
+  if (rec.state.status === 'completed' || rec.state.status === 'error') {
+    rec.state.time.end = Date.now()
+    rec.state.output ??= ''
+    rec.state.title ??= rec.tool
+    rec.state.metadata ??= {}
+  }
   turn.tools.set(callId, rec)
   emitToolPart(sessionId, messageId, rec)
 }

@@ -109,6 +109,40 @@ describe('Web 对话交互全量可用性', () => {
     expect(tool.state.output).toBe('hello')
   })
 
+  it('历史回放的单条终态 tool_call（无后续 update）保留输入和输出', () => {
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-replay',
+      status: 'completed',
+      title: 'Fetch: https://example.com',
+      rawInput: { url: 'https://example.com' },
+      content: [{ type: 'content', content: { type: 'text', text: '<html>ok</html>' } }],
+      _meta: { 'x.ai/tool': { name: 'web_fetch', kind: 'web_fetch', label: 'Web Fetch' } },
+    })
+
+    const tool = parts().find(p => p.type === 'tool') as ToolPart
+    expect(tool.state.status).toBe('completed')
+    expect(tool.state.input).toEqual({ url: 'https://example.com' })
+    expect(tool.state.output).toBe('<html>ok</html>')
+    expect(tool.state.title).toBe('Fetch: https://example.com')
+  })
+
+  it('历史回放 tool_call 只有 rawOutput（无 content）时也保留输出', () => {
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-replay-raw',
+      status: 'completed',
+      title: 'List `web/src`',
+      rawInput: { target_directory: 'web/src' },
+      rawOutput: 'api/\nstore/\n',
+      _meta: { 'x.ai/tool': { name: 'list_dir', kind: 'list_dir', label: 'List Files' } },
+    })
+
+    const tool = parts().find(p => p.type === 'tool') as ToolPart
+    expect(tool.state.status).toBe('completed')
+    expect(tool.state.output).toBe('api/\nstore/\n')
+  })
+
   // ── 2. plan → todo 卡片 ────────────────────────────────────
 
   it('plan 通知转译为 todo.updated 且有订阅者收到', () => {
