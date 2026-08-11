@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { Attachment } from '../features/attachment'
+import { QUEUED_MESSAGE_ID_PREFIX } from '../features/message/queuedMessage'
 
 export interface QueuedFollowupDraft {
   id: string
@@ -75,7 +76,7 @@ class FollowupQueueStore {
   ): QueuedFollowupDraft {
     const queued: QueuedFollowupDraft = {
       ...draft,
-      id: `queued_${crypto.randomUUID().replace(/-/g, '')}`,
+      id: `${QUEUED_MESSAGE_ID_PREFIX}${crypto.randomUUID().replace(/-/g, '')}`,
       createdAt: Date.now(),
       attachments: cloneAttachments(draft.attachments),
       model: { ...draft.model },

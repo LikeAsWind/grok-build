@@ -1402,6 +1402,7 @@ function InputBoxComponent({
                       onAbort={onAbort}
                       canSend={canSend || false}
                       onSend={handleSend}
+                      sessionId={sessionId}
                       models={models}
                       selectedModelKey={selectedModelKey}
                       onModelChange={onModelChange}

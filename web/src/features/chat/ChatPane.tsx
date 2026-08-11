@@ -284,6 +284,9 @@ export const ChatPane = memo(function ChatPane({
 
     handleSend,
     handleAbort,
+    interjectQueuedMessage,
+    editQueuedMessage,
+    removeQueuedMessage,
     handleCommand,
     handleUndoWithAnimation,
     handleRedoWithAnimation,
@@ -844,6 +847,9 @@ export const ChatPane = memo(function ChatPane({
                 onLoadMore={loadMoreHistory}
                 onUndo={handleUndoWithAnimation}
                 onFork={handleForkMessage}
+                onInterjectQueued={interjectQueuedMessage}
+                onEditQueued={editQueuedMessage}
+                onRemoveQueued={removeQueuedMessage}
                 canUndo={canUndo}
                 registerMessage={registerMessage}
                 retryStatus={retryStatus}

@@ -848,6 +848,105 @@ export function useChatSession({
     [sendMessageNow],
   )
 
+  /**
+   * Send a specific queued message now, cancelling the running turn first so it
+   * becomes the next turn rather than waiting for the current one to finish.
+   * Identical to `sendQueuedFollowup` minus the busy/queue head guards — the
+   * caller has already picked which item to interject.
+   */
+  const interjectQueuedMessage = useCallback(
+    async (messageId: string): Promise<boolean> => {
+      const sessionId = routeSessionId
+      if (!sessionId) return false
+      const draft = followupQueueStore.getItem(sessionId, messageId)
+      if (!draft) return false
+
+      // 守卫先行：先占住 sending 槽位再动任何状态，失败（drain 正在发送）时
+      // 队列和占位气泡原样保留，不丢消息。持有 sendingId 也让自动 drain 在
+      // 整个插队过程中被挡住，不会趁 abort 后的 idle 窗口抢发队头。
+      if (!followupQueueStore.startSending(sessionId, messageId)) return false
+
+      // 中断当前回合（如果正在跑）。cancel 是 notification，旧 prompt RPC 的
+      // 收尾由 acpPrompt 内部等待（pendingPrompts），这里只需先把取消发出去。
+      // abort 是 best-effort：若已 idle 也不报错。
+      await handleAbortRef.current?.()
+
+      // 发送前只移除本地占位消息，让 sendMessageNow 走和正常发送完全一样的
+      // 路径；队列项保留到发送结束（成功才 remove），失败时可标记并恢复。
+      messageStore.removeMessage(sessionId, messageId)
+
+      const ok = await sendMessageNow({
+        sessionId,
+        content: draft.text,
+        attachments: draft.attachments,
+        model: {
+          providerID: draft.model.providerID,
+          modelID: draft.model.modelID,
+        },
+        options: {
+          agent: draft.agent,
+          variant: draft.variant,
+        },
+        directory: draft.directory,
+      })
+
+      followupQueueStore.finishSending(sessionId, messageId)
+      if (ok) {
+        followupQueueStore.remove(sessionId, messageId)
+      } else {
+        followupQueueStore.markFailed(sessionId, messageId)
+        setRestoredContent({
+          sessionId,
+          content: {
+            messageId: draft.id,
+            text: draft.text,
+            attachments: draft.attachments,
+            model: draft.model,
+            variant: draft.variant ?? draft.model.variant,
+            agent: draft.agent,
+          },
+        })
+      }
+      return ok
+    },
+    [routeSessionId, sendMessageNow],
+  )
+
+  /** Restore a queued message back into the input box for editing. */
+  const editQueuedMessage = useCallback(
+    (messageId: string) => {
+      const sessionId = routeSessionId
+      if (!sessionId) return
+      const draft = followupQueueStore.getItem(sessionId, messageId)
+      if (!draft) return
+      followupQueueStore.remove(sessionId, messageId)
+      messageStore.removeMessage(sessionId, messageId)
+      setRestoredContent({
+        sessionId,
+        content: {
+          messageId: draft.id,
+          text: draft.text,
+          attachments: draft.attachments,
+          model: draft.model,
+          variant: draft.variant ?? draft.model.variant,
+          agent: draft.agent,
+        },
+      })
+    },
+    [routeSessionId],
+  )
+
+  /** Permanently delete a queued message (no restore). */
+  const removeQueuedMessage = useCallback(
+    (messageId: string) => {
+      const sessionId = routeSessionId
+      if (!sessionId) return
+      followupQueueStore.remove(sessionId, messageId)
+      messageStore.removeMessage(sessionId, messageId)
+    },
+    [routeSessionId],
+  )
+
   useEffect(() => {
     if (!routeSessionId) return
 
@@ -945,6 +1044,13 @@ export function useChatSession({
       handleError('abort session', error)
     }
   }, [routeSessionId, sessionDirectory, currentDirectory])
+
+  // Forward-ref so earlier-defined callbacks (queued message actions) can
+  // invoke abort without forward-reference pain.
+  const handleAbortRef = useRef(handleAbort)
+  useEffect(() => {
+    handleAbortRef.current = handleAbort
+  }, [handleAbort])
 
   // Command handler (slash commands)
   const handleCommand = useCallback(
@@ -1162,6 +1268,9 @@ export function useChatSession({
     pendingQuestionRequests,
     queuedFollowups,
     queuedFollowupSendingId,
+    interjectQueuedMessage,
+    editQueuedMessage,
+    removeQueuedMessage,
     handlePermissionReply,
     handleQuestionReply,
     handleQuestionReject,

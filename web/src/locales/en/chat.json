@@ -94,7 +94,9 @@
     "attachFile": "Attach file",
     "stopGeneration": "Stop generation",
     "sendingMessage": "Sending message",
-    "sendMessage": "Send message"
+    "sendMessage": "Send message",
+    "queuedBadge": "{{count}} queued",
+    "queuedBadgeTitle": "{{count}} message(s) waiting to be sent after the current turn"
   },
   "inputFooter": {
     "autoApproveOff": "Auto-approve: off",

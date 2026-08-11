@@ -94,7 +94,9 @@
     "attachFile": "附加文件",
     "stopGeneration": "停止生成",
     "sendingMessage": "发送消息中",
-    "sendMessage": "发送消息"
+    "sendMessage": "发送消息",
+    "queuedBadge": "{{count}} 条排队",
+    "queuedBadgeTitle": "本回合结束后还将发送 {{count}} 条消息"
   },
   "inputFooter": {
     "autoApproveOff": "自动放行：关闭",

@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDownIcon, SendIcon, StopIcon, PaperclipIcon, AgentIcon, ThinkingIcon, CpuIcon } from '../../../components/Icons'
+import { ChevronDownIcon, SendIcon, StopIcon, PaperclipIcon, AgentIcon, ThinkingIcon, CpuIcon, ClockIcon } from '../../../components/Icons'
 import { DropdownMenu, MenuItem, IconButton, AnimatedPresence } from '../../../components/ui'
 import { ModelSelector, type ModelSelectorHandle } from '../ModelSelector'
+import { useFollowupQueue } from '../../../store/followupQueueStore'
 import { useChatViewport } from '../chatViewport'
 import { isTauri, isTauriMobile, extToMime } from '../../../utils/tauri'
 import type { ApiAgent } from '../../../api/client'
@@ -27,6 +28,9 @@ interface InputToolbarProps {
   isStreaming?: boolean
   isSending?: boolean
   onAbort?: () => void
+
+  /** 当前 session id — 订阅 follow-up 队列显示徽章 */
+  sessionId?: string | null
 
   canSend: boolean
   onSend: () => void
@@ -63,10 +67,13 @@ export function InputToolbar({
   modelsLoading = false,
   inputContainerRef,
   modelSelectorRef,
+  sessionId = null,
 }: InputToolbarProps) {
   const { t } = useTranslation(['chat', 'common'])
   const { presentation } = useChatViewport()
   const isCompact = presentation.isCompact
+  const { items: queuedFollowups } = useFollowupQueue(sessionId)
+  const queuedCount = queuedFollowups.length
   const useBrowserFileInput = !isTauri() || isTauriMobile()
 
   // 根据模型能力计算支持的文件类型
@@ -541,6 +548,15 @@ export function InputToolbar({
             <IconButton aria-label={t('inputToolbar.attachFile')} disabled={controlsDisabled} onClick={handleFileClick}>
               <PaperclipIcon />
             </IconButton>
+            {queuedCount > 0 && (
+              <span
+                className="flex items-center gap-1 text-[length:var(--fs-xs)] text-text-500 px-1.5 py-1 rounded-md bg-bg-200/40"
+                title={t('inputToolbar.queuedBadgeTitle', { count: queuedCount })}
+              >
+                <ClockIcon size={11} />
+                {t('inputToolbar.queuedBadge', { count: queuedCount })}
+              </span>
+            )}
           </>
         </AnimatedPresence>
         {!canSend && isStreaming && !isSending ? (

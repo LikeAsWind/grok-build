@@ -92,6 +92,12 @@ interface ChatAreaProps {
   onUndo?: (userMessageId: string) => void
   onFork?: (message: Message, forkMessageId?: string) => void | Promise<void>
   canUndo?: boolean
+  /** Send a queued message now, cancelling the running turn. */
+  onInterjectQueued?: (userMessageId: string) => void
+  /** Restore a queued message into the input box for editing. */
+  onEditQueued?: (userMessageId: string) => void
+  /** Delete a queued message without restoring it. */
+  onRemoveQueued?: (userMessageId: string) => void
   registerMessage?: (id: string, element: HTMLElement | null) => void
   retryStatus?: RetryStatusInlineData | null
   bottomPadding?: number
@@ -121,6 +127,9 @@ interface MessageBodyProps {
   allowStreamingLayoutAnimation: boolean
   processContentScope?: 'all' | 'process' | 'final' | 'inline'
   onEntryGrowComplete?: (messageId: string) => void
+  onInterjectQueued?: (userMessageId: string) => void
+  onEditQueued?: (userMessageId: string) => void
+  onRemoveQueued?: (userMessageId: string) => void
 }
 
 const MessageBody = memo(function MessageBody({
@@ -135,6 +144,9 @@ const MessageBody = memo(function MessageBody({
   allowStreamingLayoutAnimation,
   processContentScope = 'all',
   onEntryGrowComplete,
+  onInterjectQueued,
+  onEditQueued,
+  onRemoveQueued,
 }: MessageBodyProps) {
   const messageId = message.info.id
   const isUser = message.info.role === 'user'
@@ -158,6 +170,9 @@ const MessageBody = memo(function MessageBody({
             canUndo={isUser ? canUndo : undefined}
             onEnsureParts={NOOP}
             onEntryGrowComplete={isUser ? onEntryGrowComplete : undefined}
+            onInterjectQueued={isUser ? onInterjectQueued : undefined}
+            onEditQueued={isUser ? onEditQueued : undefined}
+            onRemoveQueued={isUser ? onRemoveQueued : undefined}
           />
         </div>
       </div>
@@ -181,6 +196,9 @@ interface RowProps {
   allowStreamingLayoutAnimation: boolean
   measureElement: (el: HTMLElement | null) => void
   onEntryGrowComplete?: (messageId: string) => void
+  onInterjectQueued?: (userMessageId: string) => void
+  onEditQueued?: (userMessageId: string) => void
+  onRemoveQueued?: (userMessageId: string) => void
 }
 
 const VirtualRow = memo(function VirtualRow({
@@ -199,6 +217,9 @@ const VirtualRow = memo(function VirtualRow({
   allowStreamingLayoutAnimation,
   measureElement,
   onEntryGrowComplete,
+  onInterjectQueued,
+  onEditQueued,
+  onRemoveQueued,
 }: RowProps) {
   const rowRef = useRef<HTMLDivElement | null>(null)
 
@@ -236,6 +257,9 @@ const VirtualRow = memo(function VirtualRow({
             allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
             processContentScope={item.processContentScope ?? 'all'}
             onEntryGrowComplete={onEntryGrowComplete}
+            onInterjectQueued={onInterjectQueued}
+            onEditQueued={onEditQueued}
+            onRemoveQueued={onRemoveQueued}
           />
         ) : (
           <div className="flex justify-start">
@@ -259,6 +283,9 @@ const VirtualRow = memo(function VirtualRow({
                     isTurnLatestAssistant={turnLatestAssistantIds.has(child.message.info.id)}
                     allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
                     processContentScope={child.processContentScope}
+                    onInterjectQueued={onInterjectQueued}
+                    onEditQueued={onEditQueued}
+                    onRemoveQueued={onRemoveQueued}
                   />
                 ))}
               </ProcessCollapseBlock>
@@ -275,6 +302,9 @@ const VirtualRow = memo(function VirtualRow({
                   isTurnLatestAssistant
                   allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
                   processContentScope="final"
+                  onInterjectQueued={onInterjectQueued}
+                  onEditQueued={onEditQueued}
+                  onRemoveQueued={onRemoveQueued}
                 />
               )}
             </div>
@@ -321,6 +351,7 @@ export const ChatArea = memo(
         hasMoreHistory = false, onLoadMore, onUndo, onFork, canUndo,
         registerMessage, retryStatus = null, bottomPadding = 0,
         onVisibleMessageIdsChange, onAtBottomChange,
+        onInterjectQueued, onEditQueued, onRemoveQueued,
       },
       ref,
     ) => {
@@ -926,6 +957,9 @@ export const ChatArea = memo(
                     allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
                     measureElement={virtualizer.measureElement as (el: HTMLElement | null) => void}
                     onEntryGrowComplete={emptyShellGate.onEntryGrowComplete}
+                    onInterjectQueued={onInterjectQueued}
+                    onEditQueued={onEditQueued}
+                    onRemoveQueued={onRemoveQueued}
                   />
                 )
               })}

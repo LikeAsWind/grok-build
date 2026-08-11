@@ -2,7 +2,7 @@ import { memo, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallbac
 import { useTranslation } from 'react-i18next'
 import { diffLines } from 'diff'
 import { animate } from 'motion/mini'
-import { ChevronDownIcon, ChevronRightIcon, SplitIcon, SpinnerIcon, UndoIcon } from '../../components/Icons'
+import { ChevronDownIcon, ChevronRightIcon, ClockIcon, CloseIcon, PencilIcon, PlayIcon, SplitIcon, SpinnerIcon, UndoIcon } from '../../components/Icons'
 import { CopyButton, SmoothHeight } from '../../components/ui'
 import { MarkdownRenderer } from '../../components/MarkdownRenderer'
 import { useCompositorExpand, useDisclosureScrollLock } from '../../hooks'
@@ -28,6 +28,7 @@ import {
   MessageErrorView,
 } from './parts'
 import { extractToolData } from './tools'
+import { isQueuedMessage } from './queuedMessage'
 import { MSG_SPACING } from './messageSpacing'
 import { MessageExpandPanel, useMessageExpandRender } from './messageExpand'
 import type {
@@ -296,6 +297,12 @@ interface MessageRendererProps {
   onEnsureParts?: (messageId: string) => void
   /** 用户消息入场生长完成（供过程壳等待挂载） */
   onEntryGrowComplete?: (messageId: string) => void
+  /** Send a queued message now, cancelling the running turn. */
+  onInterjectQueued?: (userMessageId: string) => void
+  /** Restore a queued message into the input box for editing. */
+  onEditQueued?: (userMessageId: string) => void
+  /** Delete a queued message without restoring it. */
+  onRemoveQueued?: (userMessageId: string) => void
 }
 
 export const MessageRenderer = memo(function MessageRenderer({
@@ -310,6 +317,9 @@ export const MessageRenderer = memo(function MessageRenderer({
   canUndo,
   onEnsureParts,
   onEntryGrowComplete,
+  onInterjectQueued,
+  onEditQueued,
+  onRemoveQueued,
 }: MessageRendererProps) {
   const { info } = message
   const isUser = info.role === 'user'
@@ -323,6 +333,9 @@ export const MessageRenderer = memo(function MessageRenderer({
         forkMessageId={forkMessageId}
         canUndo={canUndo}
         onEntryGrowComplete={onEntryGrowComplete}
+        onInterjectQueued={onInterjectQueued}
+        onEditQueued={onEditQueued}
+        onRemoveQueued={onRemoveQueued}
       />
     )
   }
@@ -554,6 +567,9 @@ interface UserMessageViewProps {
   forkMessageId?: string
   canUndo?: boolean
   onEntryGrowComplete?: (messageId: string) => void
+  onInterjectQueued?: (userMessageId: string) => void
+  onEditQueued?: (userMessageId: string) => void
+  onRemoveQueued?: (userMessageId: string) => void
 }
 
 /** PC 精细指针：默认隐藏，悬浮消息/聚焦时显示；触控优先设备始终显示 */
@@ -571,6 +587,9 @@ const UserMessageView = memo(function UserMessageView({
   forkMessageId,
   canUndo,
   onEntryGrowComplete,
+  onInterjectQueued,
+  onEditQueued,
+  onRemoveQueued,
 }: UserMessageViewProps) {
   const { t } = useTranslation('message')
   const { parts, info } = message
@@ -673,6 +692,48 @@ const UserMessageView = memo(function UserMessageView({
 
         {/* Action buttons — PC 悬浮消息显示；触控设备始终显示 */}
         <div className={actionBarClass}>
+          {/* Queued badge + follow-up affordances */}
+          {isQueuedMessage(message) && (
+            <>
+              <span
+                className="flex items-center gap-1 text-[length:var(--fs-xs)] text-text-500 px-1.5"
+                title={t('queued')}
+              >
+                <ClockIcon size={11} />
+                {t('queued')}
+              </span>
+              {onEditQueued && (
+                <button
+                  onClick={() => onEditQueued(info.id)}
+                  className="p-1.5 rounded-md transition-colors duration-150 text-text-400 hover:text-text-200"
+                  title={t('editQueued')}
+                  aria-label={t('editQueued')}
+                >
+                  <PencilIcon size={14} />
+                </button>
+              )}
+              {onInterjectQueued && (
+                <button
+                  onClick={() => onInterjectQueued(info.id)}
+                  className="p-1.5 rounded-md transition-colors duration-150 text-text-400 hover:text-text-200"
+                  title={t('sendNow')}
+                  aria-label={t('sendNow')}
+                >
+                  <PlayIcon size={14} />
+                </button>
+              )}
+              {onRemoveQueued && (
+                <button
+                  onClick={() => onRemoveQueued(info.id)}
+                  className="p-1.5 rounded-md transition-colors duration-150 text-text-400 hover:text-text-200"
+                  title={t('removeQueued')}
+                  aria-label={t('removeQueued')}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              )}
+            </>
+          )}
           {/* Undo button */}
           {canUndo && onUndo && (
             <button
