@@ -143,6 +143,27 @@ describe('Web 对话交互全量可用性', () => {
     expect(tool.state.output).toBe('api/\nstore/\n')
   })
 
+  it('turn 结束（取消/打断）时仍在运行的工具卡片收敛为取消态', () => {
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-dangling',
+      status: 'in_progress',
+      title: 'Fetch: https://slow.example.com',
+      rawInput: { url: 'https://slow.example.com' },
+      _meta: { 'x.ai/tool': { name: 'web_fetch', kind: 'web_fetch', label: 'Web Fetch' } },
+    })
+    let tool = parts().find(p => p.type === 'tool') as ToolPart
+    expect(tool.state.status).toBe('running')
+
+    update({ sessionUpdate: 'turn_completed' })
+
+    tool = parts().find(p => p.type === 'tool') as ToolPart
+    expect(tool.state.status).toBe('error')
+    expect(tool.state.output).toBe('Cancelled')
+    // 已终态的工具不受扫尾影响
+    expect(tool.state.input).toEqual({ url: 'https://slow.example.com' })
+  })
+
   // ── 2. plan → todo 卡片 ────────────────────────────────────
 
   it('plan 通知转译为 todo.updated 且有订阅者收到', () => {

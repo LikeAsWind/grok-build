@@ -295,6 +295,8 @@ interface ToolRec {
   partId: string
   callID: string
   tool: string
+  /** 所属 assistant 消息 id——turn 收尾扫尾时补发终态 part 需要 */
+  messageId: string
   state: {
     status: ToolStatus
     input: Record<string, unknown>
@@ -407,6 +409,23 @@ function finalizeTurn(turn: TurnState) {
   turn.tools.clear()
 }
 
+/**
+ * turn 收尾时把仍未终态的工具卡片标记为取消（error + "Cancelled"）。
+ * 后端 cancel 不会为在途工具补发终态 update——不扫的话卡片会永远转圈；
+ * 而历史回放会把无终态的调用整个丢掉，这里让 live 视图先收敛到确定状态。
+ */
+function cancelDanglingTools(sessionId: string, turn: TurnState) {
+  for (const rec of turn.tools.values()) {
+    if (rec.state.status !== 'pending' && rec.state.status !== 'running') continue
+    rec.state.status = 'error'
+    rec.state.time.end = Date.now()
+    rec.state.output ??= 'Cancelled'
+    rec.state.title ??= rec.tool
+    rec.state.metadata ??= {}
+    emitToolPart(sessionId, rec.messageId, rec)
+  }
+}
+
 function emitPartUpdated(sessionId: string, messageId: string, part: Record<string, unknown>) {
   emit('message.part.updated', { sessionID: sessionId, part: { ...part, sessionID: sessionId, messageID: messageId } }, sessionId)
 }
@@ -508,6 +527,7 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
     partId: `${messageId}:tool:${callId}`,
     callID: callId,
     tool: toolName,
+    messageId,
     state: {
       status: mapToolStatus(tc.status),
       input: isRecord(tc.rawInput) ? tc.rawInput : {},
@@ -545,6 +565,7 @@ function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<str
       partId: `${messageId}:tool:${callId}`,
       callID: callId,
       tool: 'tool',
+      messageId,
       state: { status: 'running', input: {}, time: { start: Date.now() } },
     }
     turn.tools.set(callId, rec)
@@ -679,6 +700,11 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       if (typeof update.currentModeId === 'string') {
         currentModes.set(sessionId, update.currentModeId)
       }
+      break
+    }
+    case 'turn_completed': {
+      // turn 结束（含被取消的 turn）——把仍在转圈的工具卡片收敛到取消态
+      cancelDanglingTools(sessionId, turn)
       break
     }
     case 'model_changed': {
@@ -940,6 +966,7 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
     .request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] })
     .then(() => {
       turn.promptInFlight = false
+      cancelDanglingTools(sessionId, turn)
       finalizeTurn(turn)
       emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
       emit('session.idle', { sessionID: sessionId }, sessionId)
@@ -947,6 +974,7 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       turn.promptInFlight = false
+      cancelDanglingTools(sessionId, turn)
       finalizeTurn(turn)
       // 在 UI 中显示错误消息
       import('../store/messageStore').then(({ messageStore }) => {
