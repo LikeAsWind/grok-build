@@ -318,9 +318,16 @@ interface TurnState {
 
 const turns = new Map<string, TurnState>()
 
+// 在途 prompt 的 RPC promise（按 session）。插队发送会在旧 turn 尚未收尾时调
+// acpPrompt——必须等旧 prompt settle 后再搭建新回合状态，否则旧回调会清掉新
+// 回合的 promptInFlight（用户消息回显去重失效 → 双气泡），并用旧 idle 覆盖新
+// 回合的 streaming 状态（自动 drain 被提前放行）。
+const pendingPrompts = new Map<string, Promise<void>>()
+
 /** 切换/回放会话前重置该会话的流转状态 */
 export function resetAcpTurnState(sessionId: string) {
   turns.delete(sessionId)
+  pendingPrompts.delete(sessionId)
 }
 
 function getTurn(sessionId: string): TurnState {
@@ -854,6 +861,13 @@ export interface AcpPromptParams {
 export async function acpPrompt(params: AcpPromptParams): Promise<void> {
   const client = await ensureAcp()
   const { sessionId, text } = params
+
+  // 等上一个在途 prompt 收尾（插队场景：cancel 已发出，旧 RPC 会带着
+  // cancelled stopReason 很快返回）。收尾包括 promptInFlight 复位和 idle
+  // 事件广播——必须发生在新回合状态搭建之前。
+  const prior = pendingPrompts.get(sessionId)
+  if (prior) await prior
+
   const turn = getTurn(sessionId)
   const now = Date.now()
 
@@ -901,7 +915,7 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
   )
   emitPartUpdated(sessionId, userMessageId, { id: `${userMessageId}:text`, type: 'text', text })
 
-  client.rpc
+  const settled = client.rpc
     .request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] })
     .then(() => {
       turn.promptInFlight = false
@@ -924,6 +938,10 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
         sessionId,
       )
     })
+  pendingPrompts.set(sessionId, settled)
+  void settled.finally(() => {
+    if (pendingPrompts.get(sessionId) === settled) pendingPrompts.delete(sessionId)
+  })
 }
 
 export async function acpCancel(sessionId: string): Promise<void> {
