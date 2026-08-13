@@ -125,6 +125,43 @@ describe('acpBridge 转译层', () => {
     expect(tool.state.output).toBe('command failed')
   })
 
+  it('迟到的 in_progress 更新不会复活已完成的工具调用（跨 turn 竞态）', () => {
+    // 复现后台任务竞态：卡片先 completed，turn_completed 收尾清空 turn.tools，
+    // 之后最终输出块迟到（in_progress）——修复前 fallback 会新建一张 running
+    // 卡片且永远没有后续终态更新，卡片永远转圈。
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call_bg',
+      title: 'bash',
+      status: 'in_progress',
+      rawInput: { command: 'sleep 10; echo background-task-done' },
+    })
+    update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call_bg',
+      status: 'completed',
+      rawOutput: 'background-task-done',
+    })
+    // task_completed 自动唤醒注入新 turn 的 user prompt——
+    // 开新回合会 finalizeTurn 清空旧 turn 的工具记录
+    textChunk('后台任务已完成，继续', 'user_message_chunk')
+    // 新 turn 开始后，旧调用的最终输出块迟到
+    textChunk('后台任务完成了')
+    update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call_bg',
+      status: 'in_progress',
+      content: [{ type: 'content', content: { type: 'text', text: 'background-task-done' } }],
+    })
+
+    const messages = messageStore.getVisibleMessages(SID)
+    const tools = messages.flatMap(m => m.parts.filter((p: Part) => p.type === 'tool')) as ToolPart[]
+    // 只有一张卡片，且保持 completed——不被迟到更新复活
+    expect(tools).toHaveLength(1)
+    expect(tools[0].callID).toBe('call_bg')
+    expect(tools[0].state.status).toBe('completed')
+  })
+
   it('user_message_chunk 回放构建 user 消息，与 assistant 回合交替', () => {
     textChunk('历史问题', 'user_message_chunk')
     textChunk('历史回答')

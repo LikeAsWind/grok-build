@@ -321,6 +321,26 @@ interface TurnState {
 
 const turns = new Map<string, TurnState>()
 
+// 跨 turn 的工具调用终态注册表。finalizeTurn 会清空 turn.tools，此后迟到的
+// tool_call_update（如后台任务在 task_completed 唤醒新 turn 之后才送达的最终
+// 输出块）会走 handleToolCallUpdate 的 fallback 新建一张 running 卡片，把已
+// 完成的调用"复活"成永远转圈。这里按 session 记录已进入终态的 toolCallId，
+// 让迟到的非终态更新直接被忽略。
+const terminalToolCalls = new Map<string, Set<string>>()
+
+function markToolCallTerminal(sessionId: string, callId: string) {
+  let set = terminalToolCalls.get(sessionId)
+  if (!set) {
+    set = new Set()
+    terminalToolCalls.set(sessionId, set)
+  }
+  set.add(callId)
+}
+
+function isToolCallTerminal(sessionId: string, callId: string): boolean {
+  return terminalToolCalls.get(sessionId)?.has(callId) ?? false
+}
+
 // 在途 prompt 的 RPC promise（按 session）。插队发送会在旧 turn 尚未收尾时调
 // acpPrompt——必须等旧 prompt settle 后再搭建新回合状态，否则旧回调会清掉新
 // 回合的 promptInFlight（用户消息回显去重失效 → 双气泡），并用旧 idle 覆盖新
@@ -331,6 +351,7 @@ const pendingPrompts = new Map<string, Promise<void>>()
 export function resetAcpTurnState(sessionId: string) {
   turns.delete(sessionId)
   pendingPrompts.delete(sessionId)
+  terminalToolCalls.delete(sessionId)
 }
 
 function getTurn(sessionId: string): TurnState {
@@ -423,6 +444,7 @@ function cancelDanglingTools(sessionId: string, turn: TurnState) {
     rec.state.output ??= 'Cancelled'
     rec.state.title ??= rec.tool
     rec.state.metadata ??= {}
+    markToolCallTerminal(sessionId, rec.callID)
     emitToolPart(sessionId, rec.messageId, rec)
   }
 }
@@ -550,6 +572,7 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
     rec.state.output ??= ''
     rec.state.title ??= rec.tool
     rec.state.metadata ??= {}
+    markToolCallTerminal(sessionId, callId)
   }
   turn.tools.set(callId, rec)
   emitToolPart(sessionId, messageId, rec)
@@ -558,6 +581,12 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
 function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<string, unknown>) {
   const callId = String(tc.toolCallId ?? '')
   if (!callId) return
+  // 已终态的调用再收到非终态更新（如后台任务跨 turn 迟到的 in_progress 输出块）
+  // → 忽略，避免 fallback 新建 running 卡片把已完成的调用"复活"成永远转圈。
+  const incomingStatus = tc.status != null ? mapToolStatus(tc.status) : null
+  if (isToolCallTerminal(sessionId, callId) && incomingStatus !== 'completed' && incomingStatus !== 'error') {
+    return
+  }
   const messageId = ensureAssistant(sessionId, turn)
   let rec = turn.tools.get(callId)
   if (!rec) {
@@ -595,6 +624,7 @@ function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<str
     rec.state.output ??= ''
     rec.state.title ??= rec.tool
     rec.state.metadata ??= {}
+    markToolCallTerminal(sessionId, callId)
   }
 
   emitToolPart(sessionId, messageId, rec)
