@@ -1,4 +1,5 @@
 import type { Message } from '../../types/message'
+import { isTaskNotificationMessage } from '../message/taskNotification'
 
 export const PAGE_MESSAGE_COUNT = 20
 export const PAGE_EXTREME_RENDER_WEIGHT = 700
@@ -687,6 +688,8 @@ export function buildTurnDurationMap(messages: Message[], visibleMessages: Messa
     }
 
     if (currentUserCreated == null || message.info.role !== 'assistant') continue
+    // 任务完成通知是合成消息，不参与 turn 耗时归属
+    if (isTaskNotificationMessage(message)) continue
 
     if (visibleAssistantIds.has(message.info.id)) {
       currentVisibleAssistantId = message.info.id
@@ -719,7 +722,7 @@ export function buildTurnLatestAssistantIdSet(visibleMessages: Message[]): Set<s
       currentLatestAssistantId = null
       continue
     }
-    if (message.info.role === 'assistant') {
+    if (message.info.role === 'assistant' && !isTaskNotificationMessage(message)) {
       currentLatestAssistantId = message.info.id
     }
   }
@@ -895,10 +898,19 @@ export function buildProcessTimeline(
       continue
     }
     if (message.info.role !== 'assistant') continue
-    if (!current) {
-      // 历史续段 / 页首无 user：直接平铺，不挂壳
-      items.push({ kind: 'message', key: message.info.id, message })
+    if (isTaskNotificationMessage(message)) {
+      // 后台任务完成通知：独立平铺项——关闭当前 turn 壳自成一段；
+      // 其后的 wake 回复进入 user-less 续段平铺渲染（对该结果的反应）
+      if (current) {
+        turns.push(current)
+        current = null
+      }
+      turns.push({ user: null, assistants: [message] })
       continue
+    }
+    if (!current) {
+      // 历史续段 / 页首无 user：进 user-less bag，由第二循环按序平铺
+      current = { user: null, assistants: [] }
     }
     current.assistants.push(message)
   }

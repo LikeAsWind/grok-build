@@ -284,6 +284,29 @@ export interface CompactionPart extends PartBase {
   auto?: boolean
 }
 
+/** 后台任务完成通知（grok 扩展：task_completed 独立系统消息的唯一 part） */
+export interface TaskCompletionPart extends PartBase {
+  type: 'task-completion'
+  taskId: string
+  command: string
+  displayCommand?: string
+  cwd?: string
+  exitCode?: number
+  signal?: string
+  /** signal 为空 且 exitCode ∈ {undefined, 0} */
+  ok: boolean
+  output?: string
+  outputFile?: string
+  truncated?: boolean
+  outputTotalBytes?: number
+  /** epoch ms */
+  startTime?: number
+  /** 任务实际完成时间（epoch ms）；后端 end_time 缺失时回退收帧时间 */
+  endTime: number
+  /** 前端收到通知帧的时间（epoch ms） */
+  receivedAt: number
+}
+
 export type Part =
   | TextPart
   | ReasoningPart
@@ -297,6 +320,7 @@ export type Part =
   | PatchPart
   | RetryPart
   | CompactionPart
+  | TaskCompletionPart
 
 // ============================================
 // Message (完整消息)
@@ -352,6 +376,7 @@ export function isRenderablePart(part: Part): boolean {
     case 'subtask':
     case 'retry':
     case 'compaction':
+    case 'task-completion':
       return true
     default:
       return false

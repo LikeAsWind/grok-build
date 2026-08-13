@@ -12,6 +12,8 @@ import {
   handleAcpSessionUpdate,
   getAvailableCommands,
   getCurrentMode,
+  beginAcpReplay,
+  finishAcpReplay,
 } from './acpBridge'
 import { subscribeToEvents } from './events'
 import { messageStore } from '../store/messageStore'
@@ -249,43 +251,109 @@ describe('Web 对话交互全量可用性', () => {
     unsub()
   })
 
-  // ── 6. 后台任务 / subagent / compaction 内联卡片 ────────────
+  // ── 6. 后台任务（独立系统消息）/ subagent / compaction ────────
 
-  it('task_completed 内联为系统消息', () => {
-    update({ sessionUpdate: 'task_completed', taskId: 't-1', message: 'Task t-1 done' })
-    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
-    expect(texts.some(p => p.text.includes('Task t-1 done'))).toBe(true)
-  })
+  const taskMsgs = () =>
+    messageStore.getVisibleMessages(SID).filter(m => m.info.id.startsWith('msg_tasknotif_'))
 
-  it('task_completed wire 帧（task_snapshot）渲染命令与退出状态', () => {
+  it('空闲态 task_completed 渲染为独立系统消息（不蹭 assistant 消息）', () => {
     update({
       sessionUpdate: 'task_completed',
       task_snapshot: {
         task_id: '019fef62-7d06',
         command: 'bash -c "sleep 10 && echo background-task-done"',
         exit_code: 0,
+        output: 'background-task-done',
         completed: true,
       },
       will_wake: false,
     })
-    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
-    const card = texts.find(p => p.text.includes('019fef62-7d06'))
-    expect(card).toBeDefined()
-    expect(card!.text).toContain('✅')
-    expect(card!.text).toContain('exit 0')
-    expect(card!.text).toContain('sleep 10')
+    const msgs = taskMsgs()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].info.id).toBe('msg_tasknotif_019fef62-7d06')
+    const part = msgs[0].parts[0] as Part & {
+      taskId: string; command: string; ok: boolean; exitCode: number; output: string; endTime: number
+    }
+    expect(part.type).toBe('task-completion')
+    expect(part.ok).toBe(true)
+    expect(part.exitCode).toBe(0)
+    expect(part.command).toContain('sleep 10')
+    expect(part.output).toBe('background-task-done')
+    expect(part.endTime).toBeGreaterThan(0)
+    // 通知已定稿：不把空闲 session 翻成 busy
+    expect(msgs[0].info.time.completed).not.toBeNull()
+    expect(messageStore.getIsStreaming(SID)).toBe(false)
+    // 没有蹭出来的普通 assistant 消息
+    expect(messageStore.getVisibleMessages(SID)).toHaveLength(1)
   })
 
-  it('task_completed 失败任务（非零退出码）渲染失败态', () => {
+  it('task_completed 失败任务（非零退出码）ok=false', () => {
     update({
       sessionUpdate: 'task_completed',
       task_snapshot: { task_id: 't-fail', command: 'false', exit_code: 1, completed: true },
     })
-    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
-    const card = texts.find(p => p.text.includes('t-fail'))
-    expect(card).toBeDefined()
-    expect(card!.text).toContain('❌')
-    expect(card!.text).toContain('exit 1')
+    const part = taskMsgs()[0].parts[0] as Part & { ok: boolean; exitCode: number }
+    expect(part.ok).toBe(false)
+    expect(part.exitCode).toBe(1)
+  })
+
+  it('流式期间 task_completed 缓冲，turn_completed 后 flush 到消息流末尾', () => {
+    textChunk('正在处理另一个问题')
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-buf', command: 'sleep 5', exit_code: 0, completed: true },
+    })
+    // streaming 中：不插入
+    expect(taskMsgs()).toHaveLength(0)
+    textChunk('回答继续')
+    update({ sessionUpdate: 'turn_completed' })
+    // idle 后 flush，且位于消息流末尾
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(taskMsgs()).toHaveLength(1)
+    expect(msgs[msgs.length - 1].info.id).toBe('msg_tasknotif_t-buf')
+    // 通知内容没有混进 assistant 消息
+    const assistantParts = msgs[0].parts.filter(p => p.type === 'task-completion')
+    expect(assistantParts).toHaveLength(0)
+  })
+
+  it('同 taskId 重复帧 upsert 幂等（双路帧 / 回放重放）', () => {
+    const frame = {
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-dup', command: 'echo hi', exit_code: 0, completed: true },
+    }
+    update(frame)
+    update(frame)
+    expect(taskMsgs()).toHaveLength(1)
+    expect(taskMsgs()[0].parts).toHaveLength(1)
+  })
+
+  it('回放窗口内 task_completed 立即渲染，保持历史位置', () => {
+    beginAcpReplay(SID)
+    textChunk('历史问题', 'user_message_chunk')
+    textChunk('历史回答一')
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-replay', command: 'echo old', exit_code: 0, completed: true },
+    })
+    textChunk('唤醒后的回复', 'user_message_chunk')
+    textChunk('基于任务结果的回答')
+    finishAcpReplay(SID)
+
+    const msgs = messageStore.getVisibleMessages(SID)
+    const notifIdx = msgs.findIndex(m => m.info.id === 'msg_tasknotif_t-replay')
+    expect(notifIdx).toBeGreaterThan(0)
+    // 位于历史中段（后面还有消息），而非堆到末尾
+    expect(notifIdx).toBeLessThan(msgs.length - 1)
+  })
+
+  it('turn_completed 收尾后新 chunk 开新 assistant 消息', () => {
+    textChunk('第一轮回答')
+    update({ sessionUpdate: 'turn_completed' })
+    textChunk('第二轮回答')
+    const assistants = messageStore
+      .getVisibleMessages(SID)
+      .filter(m => m.info.role === 'assistant')
+    expect(assistants).toHaveLength(2)
   })
 
   it('system-reminder 回显不进入聊天流，cron prompt 剥框架后保留', () => {

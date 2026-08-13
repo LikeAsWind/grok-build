@@ -130,6 +130,14 @@
     "filesChanged": "{{count}} file changed",
     "filesChanged_other": "{{count}} files changed"
   },
+  "taskNotification": {
+    "completedTitle": "Background task completed",
+    "failedTitle": "Background task failed",
+    "exit": "exit {{code}}",
+    "signal": "signal {{signal}}",
+    "noOutput": "No output",
+    "truncated": "Output truncated — full output at {{file}}"
+  },
   "subtask": {
     "running": "Running",
     "done": "Done",

@@ -12,6 +12,7 @@ import { AcpClient } from './acp'
 import { injectGlobalEvent, setAcpConnectionState } from './events'
 import { sessionCwdForWire } from './sessionCwd'
 import { serverStore } from '../store/serverStore'
+import { TASK_NOTIFICATION_MESSAGE_ID_PREFIX } from '../features/message/taskNotification'
 import type { GlobalEvent } from '../types/api/event'
 import type { ModelInfo } from './types'
 
@@ -341,6 +342,51 @@ function isToolCallTerminal(sessionId: string, callId: string): boolean {
   return terminalToolCalls.get(sessionId)?.has(callId) ?? false
 }
 
+// ── 后台任务完成通知（独立系统消息）──────────────────────────────
+// task_completed 不再内联到当前 assistant 消息：streaming 期间缓冲，
+// idle 时机 flush 成一条独立的合成消息（msg_tasknotif_<taskId>），
+// 避免通知插进正在进行的对话输出或被顶上去找不到。
+interface PendingTaskNotification {
+  taskId: string
+  command: string
+  displayCommand?: string
+  cwd?: string
+  exitCode?: number
+  signal?: string
+  ok: boolean
+  output?: string
+  outputFile?: string
+  truncated?: boolean
+  outputTotalBytes?: number
+  startTime?: number
+  endTime: number
+  receivedAt: number
+}
+
+const pendingTaskNotifications = new Map<string, PendingTaskNotification[]>()
+
+// 回放窗口标记：session/load 期间的事件流与 live turn 无法从流内容区分。
+// 回放中必须立即按事件流顺序渲染通知（保历史位置），而非缓冲堆到末尾——
+// 回放内容会置位 turn.assistantId，不打标会把全部历史通知误判为 busy。
+const replayingSessions = new Set<string>()
+
+export function beginAcpReplay(sessionId: string) {
+  replayingSessions.add(sessionId)
+}
+
+export function finishAcpReplay(sessionId: string) {
+  replayingSessions.delete(sessionId)
+  // 兜底：回放窗口内不该产生缓冲，但保险起见 flush 一次
+  flushPendingTaskNotifications(sessionId)
+}
+
+function flushPendingTaskNotifications(sessionId: string) {
+  const list = pendingTaskNotifications.get(sessionId)
+  if (!list?.length) return
+  pendingTaskNotifications.delete(sessionId)
+  for (const n of list) emitTaskNotification(sessionId, n)
+}
+
 // 在途 prompt 的 RPC promise（按 session）。插队发送会在旧 turn 尚未收尾时调
 // acpPrompt——必须等旧 prompt settle 后再搭建新回合状态，否则旧回调会清掉新
 // 回合的 promptInFlight（用户消息回显去重失效 → 双气泡），并用旧 idle 覆盖新
@@ -530,6 +576,76 @@ function emitToolPart(sessionId: string, messageId: string, rec: ToolRec) {
     tool: rec.tool,
     state: { ...rec.state, input: { ...rec.state.input }, metadata: rec.state.metadata ? { ...rec.state.metadata } : undefined },
   })
+}
+
+/** 防御性时间解析：epoch 秒/毫秒数字或可 Date.parse 的字符串 → epoch ms */
+function toEpochMs(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return v > 1e12 ? v : v * 1000
+  }
+  if (typeof v === 'string') {
+    const parsed = Date.parse(v)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return undefined
+}
+
+/** task_completed 帧 → PendingTaskNotification（snake_case 全字段 + 旧 camelCase 兜底） */
+function parseTaskNotification(t: Record<string, unknown>, snap: Record<string, unknown> | undefined): PendingTaskNotification {
+  const taskId = typeof t.taskId === 'string' ? t.taskId
+    : typeof snap?.task_id === 'string' ? snap.task_id : 'unknown'
+  const command = typeof snap?.command === 'string' ? snap.command
+    : typeof t.message === 'string' ? t.message : ''
+  const exitCode = typeof snap?.exit_code === 'number' ? snap.exit_code : undefined
+  const signal = typeof snap?.signal === 'string' ? snap.signal : undefined
+  const receivedAt = Date.now()
+  return {
+    taskId,
+    command,
+    displayCommand: typeof snap?.display_command === 'string' ? snap.display_command : undefined,
+    cwd: typeof snap?.cwd === 'string' ? snap.cwd : undefined,
+    exitCode,
+    signal,
+    ok: signal === undefined && (exitCode === undefined || exitCode === 0),
+    output: typeof snap?.output === 'string' ? snap.output : undefined,
+    outputFile: typeof snap?.output_file === 'string' ? snap.output_file : undefined,
+    truncated: typeof snap?.truncated === 'boolean' ? snap.truncated : undefined,
+    outputTotalBytes: typeof snap?.output_total_bytes === 'number' ? snap.output_total_bytes : undefined,
+    startTime: toEpochMs(snap?.start_time),
+    endTime: toEpochMs(snap?.end_time) ?? receivedAt,
+    receivedAt,
+  }
+}
+
+/**
+ * 把完成通知作为独立的合成 assistant 消息注入消息流。
+ * 消息 ID 确定性（msg_tasknotif_<taskId>）→ 回放/双路帧 upsert 幂等；
+ * time.completed 即时定稿 → 不进 streaming 态；完全不触碰 TurnState。
+ */
+function emitTaskNotification(sessionId: string, n: PendingTaskNotification) {
+  const msgId = `${TASK_NOTIFICATION_MESSAGE_ID_PREFIX}${n.taskId}`
+  const now = Date.now()
+  emit(
+    'message.updated',
+    {
+      info: {
+        id: msgId,
+        sessionID: sessionId,
+        role: 'assistant',
+        time: { created: now, completed: now },
+        parentID: '',
+        modelID: getCurrentAcpModelId(),
+        providerID: 'xai',
+        mode: '',
+        agent: '',
+        path: { cwd: _serverCwd, root: _serverCwd },
+        cost: 0,
+        tokens: emptyTokens(),
+      },
+    },
+    sessionId,
+  )
+  emitPartUpdated(sessionId, msgId, { id: `${msgId}:task`, type: 'task-completion', ...n })
 }
 
 function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, unknown>) {
@@ -764,8 +880,13 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       break
     }
     case 'turn_completed': {
-      // turn 结束（含被取消的 turn）——把仍在转圈的工具卡片收敛到取消态
+      // turn 结束（含被取消的 turn）——把仍在转圈的工具卡片收敛到取消态。
+      // finalizeTurn 复位 assistantId：后端 wake turn（前端无 promptInFlight，
+      // 不会走 acpPrompt 收尾）结束后不复位的话，后续空闲期的 task_completed
+      // 会被误判 busy 而滞留缓冲。随后 flush 缓冲的完成通知到消息流末尾。
       cancelDanglingTools(sessionId, turn)
+      finalizeTurn(turn)
+      flushPendingTaskNotifications(sessionId)
       break
     }
     case 'model_changed': {
@@ -821,6 +942,7 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
           time: { created: Date.now() },
         })
         finalizeTurn(turn)
+        flushPendingTaskNotifications(sessionId)
         // 保留 loadError 供无消息时的 fallback 显示（ChatArea 的 MessageErrorView）
         import('../store/messageStore').then(({ messageStore }) => {
           messageStore.setLoadError(sessionId, {
@@ -843,28 +965,23 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       break
     }
     case 'task_completed': {
-      // 后台任务完成 → 作为系统消息内联到会话
+      // 后台任务完成 → 独立系统消息（不内联进当前 assistant 消息）。
       // wire 形态（x.ai/task_completed 帧）：update.task_snapshot 为 TaskSnapshot
-      // （snake_case：task_id / command / exit_code / signal…）
+      // （snake_case：task_id / command / exit_code / signal…）。
+      // streaming 期间缓冲（前端发起的 turn：promptInFlight；后端 wake turn：
+      // assistantId 置位），idle 时机 flush 到消息流末尾；回放窗口内一律
+      // 立即渲染以保持历史位置。
       const t = update as Record<string, unknown>
       const snap = isRecord(t.task_snapshot) ? t.task_snapshot : undefined
-      const taskId = typeof t.taskId === 'string' ? t.taskId
-        : typeof snap?.task_id === 'string' ? snap.task_id : 'unknown'
-      const command = typeof snap?.command === 'string' ? snap.command : ''
-      const exitCode = typeof snap?.exit_code === 'number' ? snap.exit_code : undefined
-      const signal = typeof snap?.signal === 'string' ? snap.signal : undefined
-      const ok = signal === undefined && (exitCode === undefined || exitCode === 0)
-      const status = signal ? `signal ${signal}` : exitCode !== undefined ? `exit ${exitCode}` : 'done'
-      const message = typeof t.message === 'string' ? t.message
-        : `Background task \`${taskId}\` ${ok ? 'completed' : 'failed'} (${status})${command ? `: \`${command.split('\n')[0].slice(0, 120)}\`` : ''}`
-      const assistantId = ensureAssistant(sessionId, turn)
-      breakActiveParts(turn)
-      const taskPartId = `${assistantId}:task:${taskId}:${Date.now()}`
-      emitPartUpdated(sessionId, assistantId, {
-        id: taskPartId,
-        type: 'text',
-        text: `${ok ? '✅' : '❌'} ${message}`,
-      })
+      const n = parseTaskNotification(t, snap)
+      const busy = turn.promptInFlight || turn.assistantId != null
+      if (busy && !replayingSessions.has(sessionId)) {
+        let list = pendingTaskNotifications.get(sessionId)
+        if (!list) pendingTaskNotifications.set(sessionId, (list = []))
+        list.push(n)
+      } else {
+        emitTaskNotification(sessionId, n)
+      }
       break
     }
     // ── Subagent 生命周期 ──────────────────────────────────────────
@@ -1042,6 +1159,7 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
       turn.promptInFlight = false
       cancelDanglingTools(sessionId, turn)
       finalizeTurn(turn)
+      flushPendingTaskNotifications(sessionId)
       emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
       emit('session.idle', { sessionID: sessionId }, sessionId)
     })
@@ -1050,6 +1168,7 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
       turn.promptInFlight = false
       cancelDanglingTools(sessionId, turn)
       finalizeTurn(turn)
+      flushPendingTaskNotifications(sessionId)
       // 在 UI 中显示错误消息
       import('../store/messageStore').then(({ messageStore }) => {
         messageStore.setLoadError(sessionId, { name: 'APIError', data: { message: msg, isRetryable: true, metadata: { errorType: 'prompt_failure' } } })
@@ -1074,6 +1193,9 @@ export async function acpCancel(sessionId: string): Promise<void> {
 
 export async function acpLoadSession(sessionId: string): Promise<void> {
   const client = await ensureAcp()
+  // 回放窗口：load 期间的 task_completed 立即按事件流顺序渲染（保历史位置），
+  // 调用方（useSessionManager.loadSession）在回放 settle 后 finishAcpReplay。
+  beginAcpReplay(sessionId)
   // cwd 必须保持后端原生斜杠方向（Windows 反斜杠），不得强转——
   // 否则 session/load 会因目录编码不匹配而找不到会话（Path not found）。
   // 见 sessionCwd.ts 的根因注释。

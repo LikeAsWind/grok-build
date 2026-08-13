@@ -25,10 +25,13 @@ import {
   SubtaskPartView,
   RetryPartView,
   CompactionPartView,
+  TaskCompletionPartView,
   MessageErrorView,
 } from './parts'
 import { extractToolData } from './tools'
 import { isQueuedMessage } from './queuedMessage'
+import { isTaskNotificationMessage } from './taskNotification'
+import { TaskNotificationMessageView } from './TaskNotificationMessageView'
 import { MSG_SPACING } from './messageSpacing'
 import { MessageExpandPanel, useMessageExpandRender } from './messageExpand'
 import type {
@@ -324,6 +327,11 @@ export const MessageRenderer = memo(function MessageRenderer({
   const { info } = message
   const isUser = info.role === 'user'
 
+  if (!isUser && isTaskNotificationMessage(message)) {
+    // 后台任务完成通知：独立系统卡片，不走 AssistantMessageView
+    return <TaskNotificationMessageView message={message} onFork={onFork} />
+  }
+
   if (isUser) {
     return (
       <UserMessageView
@@ -523,7 +531,7 @@ interface ForkActionButtonProps {
   forkMessageId?: string
 }
 
-const ForkActionButton = memo(function ForkActionButton({ message, onFork, forkMessageId }: ForkActionButtonProps) {
+export const ForkActionButton = memo(function ForkActionButton({ message, onFork, forkMessageId }: ForkActionButtonProps) {
   const { t } = useTranslation('message')
   const [isForking, setIsForking] = useState(false)
 
@@ -573,7 +581,7 @@ interface UserMessageViewProps {
 }
 
 /** PC 精细指针：默认隐藏，悬浮消息/聚焦时显示；触控优先设备始终显示 */
-function useMessageActionBarClass() {
+export function useMessageActionBarClass() {
   const { preferTouchUi } = useInputCapabilities()
   return preferTouchUi
     ? 'flex items-center gap-1 transition-opacity'
@@ -960,6 +968,9 @@ const AssistantMessageView = memo(function AssistantMessageView({
                 return <RetryPartView key={part.id} part={part} />
               case 'compaction':
                 return <CompactionPartView key={part.id} part={part} />
+              case 'task-completion':
+                // 正常路径走 TaskNotificationMessageView 整条特判；此处防御性兜底
+                return <TaskCompletionPartView key={part.id} part={part} />
               default:
                 return null
             }

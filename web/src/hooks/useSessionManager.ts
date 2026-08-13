@@ -18,7 +18,7 @@ import {
   unrevertSession,
   type ApiMessageWithParts,
 } from '../api'
-import { acpLoadSession } from '../api/acpBridge'
+import { acpLoadSession, finishAcpReplay } from '../api/acpBridge'
 import { sessionErrorHandler } from '../utils'
 import { isSessionNotFoundError } from '../utils/sessionErrors'
 import { INITIAL_MESSAGE_LIMIT, HISTORY_LOAD_BATCH_SIZE } from '../constants'
@@ -205,6 +205,8 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
         }
         // 给足够时间让 history 事件通过 session/update 流入 messageStore
         await new Promise(resolve => setTimeout(resolve, 500))
+        // 回放事件已 settle，关闭回放窗口（此后 task_completed 恢复 idle-gated 缓冲）
+        finishAcpReplay(sid)
         const msgs = messageStore.getSessionState(sid)?.messages.length ?? 0
         console.log('[LOAD] after load, msgs in store:', msgs)
         if (msgs > 0) {

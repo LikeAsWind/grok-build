@@ -558,13 +558,15 @@ class MessageStore {
         ...state.messages.slice(existingIndex + 1),
       ]
     } else {
+      // time.completed 已定稿的 assistant 消息（如后台任务完成通知）不进 streaming 态
+      const assistantIncomplete = apiMsg.role === 'assistant' && apiMsg.time?.completed == null
       const newMsg: Message = {
         info: toUIMessageInfo(apiMsg),
         parts: [],
-        isStreaming: apiMsg.role === 'assistant',
+        isStreaming: assistantIncomplete,
       }
       state.messages = [...state.messages, newMsg]
-      if (apiMsg.role === 'assistant') {
+      if (assistantIncomplete) {
         state.isStreaming = true
       }
     }
