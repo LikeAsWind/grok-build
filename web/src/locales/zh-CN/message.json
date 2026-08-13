@@ -110,7 +110,10 @@
     "exit": "exit {{code}}",
     "signal": "signal {{signal}}",
     "noOutput": "无输出",
-    "truncated": "输出已截断——完整输出见 {{file}}"
+    "truncated": "输出已截断——完整输出见 {{file}}",
+    "wakeTitle": "Agent 反应",
+    "wakeStreaming": "Agent 正在响应…",
+    "wakeCancelled": "已中断"
   },
   "subtask": {
     "running": "运行中",

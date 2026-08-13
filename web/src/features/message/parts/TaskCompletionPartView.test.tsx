@@ -75,6 +75,49 @@ describe('TaskCompletionPartView', () => {
     })
     expect(screen.getByText(/\/tmp\/t2\.log/)).toBeInTheDocument()
   })
+
+  it('renders wake segments with streaming indicator and description headline', () => {
+    const withWake: TaskCompletionPart = {
+      ...part,
+      id: 'msg_tasknotif_t3:task',
+      messageID: 'msg_tasknotif_t3',
+      taskId: 't3',
+      description: 'Build the backend',
+      wake: {
+        status: 'streaming',
+        segments: [
+          { kind: 'text', text: 'Task finished, verifying result.' },
+          { kind: 'reasoning', text: 'thinking about it' },
+        ],
+      },
+    }
+    render(<TaskCompletionPartView part={withWake} />)
+
+    const toggle = screen.getByRole('button', { name: /Background task completed/i })
+    // description 主显 + streaming 指示
+    expect(toggle.textContent).toContain('Build the backend')
+    expect(toggle.textContent).toContain('Agent responding')
+
+    fireEvent.click(toggle)
+    act(() => {
+      vi.advanceTimersByTime(16)
+    })
+    expect(screen.getByText('Agent response')).toBeInTheDocument()
+    expect(screen.getByText(/Task finished, verifying result/)).toBeInTheDocument()
+    expect(screen.getByText('thinking about it')).toBeInTheDocument()
+  })
+
+  it('renders cancelled wake chip', () => {
+    const cancelled: TaskCompletionPart = {
+      ...part,
+      id: 'msg_tasknotif_t4:task',
+      messageID: 'msg_tasknotif_t4',
+      taskId: 't4',
+      wake: { status: 'cancelled', segments: [{ kind: 'text', text: 'partial' }], stopReason: 'cancelled' },
+    }
+    render(<TaskCompletionPartView part={cancelled} />)
+    expect(screen.getByRole('button', { name: /Background task completed/i }).textContent).toContain('Interrupted')
+  })
 })
 
 describe('TaskNotificationMessageView', () => {

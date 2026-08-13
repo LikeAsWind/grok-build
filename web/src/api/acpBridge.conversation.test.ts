@@ -356,6 +356,235 @@ describe('Web 对话交互全量可用性', () => {
     expect(assistants).toHaveLength(2)
   })
 
+  // ── 6b. auto-wake 唤醒轮折叠进通知卡片 ──────────────────────
+
+  /** 发一条 task-completed 唤醒轮的隐藏 user chunk */
+  function wakeChunk(taskId: string, extra = '') {
+    update({
+      sessionUpdate: 'user_message_chunk',
+      content: {
+        type: 'text',
+        text: `<system-reminder>\nBackground task "${taskId}" completed (exit code: 0).\nCommand: sleep 5 | Duration: 5s${extra}\n</system-reminder>`,
+        _meta: { hideFromScrollback: true },
+      },
+    })
+  }
+
+  type WakePart = Part & {
+    taskId: string
+    wake?: { status: string; segments: Array<{ kind: string; text?: string; callID?: string; state?: { status: string; output?: string } }> }
+  }
+  const wakeOf = (i = 0) => (taskMsgs()[i].parts[0] as WakePart).wake
+
+  it('唤醒轮输出折进通知卡片，不产生平铺 assistant 消息', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-wake', command: 'sleep 5', exit_code: 0, completed: true },
+      will_wake: true,
+    })
+    expect(taskMsgs()).toHaveLength(1)
+    wakeChunk('t-wake')
+    textChunk('任务完成了，输出符合预期。')
+    textChunk('继续思考', 'agent_thought_chunk')
+    textChunk('结论：一切正常。')
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-t-wake', stop_reason: 'end_turn' })
+
+    // 对话流只有通知卡一条消息
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(msgs).toHaveLength(1)
+    const wake = wakeOf()
+    expect(wake).toBeDefined()
+    expect(wake!.status).toBe('done')
+    // text → reasoning → text 三个 segment 保序
+    expect(wake!.segments.map(s => s.kind)).toEqual(['text', 'reasoning', 'text'])
+    expect(wake!.segments[0].text).toBe('任务完成了，输出符合预期。')
+  })
+
+  it('唤醒轮内 tool call 折进 wake segments', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-wt', command: 'sleep 1', exit_code: 0, completed: true },
+    })
+    wakeChunk('t-wt')
+    textChunk('再验证一下')
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'wc-1',
+      title: 'bash',
+      status: 'in_progress',
+      rawInput: { command: 'echo verify' },
+    })
+    update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'wc-1',
+      status: 'completed',
+      rawOutput: 'verify',
+    })
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-t-wt', stop_reason: 'end_turn' })
+
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(msgs).toHaveLength(1)
+    const wake = wakeOf()
+    const toolSeg = wake!.segments.find(s => s.kind === 'tool')
+    expect(toolSeg).toBeDefined()
+    expect(toolSeg!.callID).toBe('wc-1')
+    expect(toolSeg!.state!.status).toBe('completed')
+    expect(toolSeg!.state!.output).toBe('verify')
+    // 无平铺 tool part
+    expect(msgs.flatMap(m => m.parts).filter(p => p.type === 'tool')).toHaveLength(0)
+  })
+
+  it('缓冲期间收到 wake 内容，flush 出卡后 segments 完整', () => {
+    // 用户 turn streaming 中任务完成 → 缓冲
+    textChunk('用户问题的回答')
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-bufwake', command: 'sleep 2', exit_code: 0, completed: true },
+      will_wake: true,
+    })
+    expect(taskMsgs()).toHaveLength(0)
+    // 用户 turn 结束 → flush 出卡
+    update({ sessionUpdate: 'turn_completed' })
+    expect(taskMsgs()).toHaveLength(1)
+    // wake 轮开始并折入
+    wakeChunk('t-bufwake')
+    textChunk('后台任务好了')
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-t-bufwake', stop_reason: 'end_turn' })
+
+    expect(taskMsgs()).toHaveLength(1)
+    const wake = wakeOf()
+    expect(wake!.status).toBe('done')
+    expect(wake!.segments[0].text).toBe('后台任务好了')
+    // wake 回复没有平铺成第二条 assistant 消息
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(msgs.filter(m => !m.info.id.startsWith('msg_tasknotif_')).map(m => m.info.role)).toEqual(['assistant'])
+  })
+
+  it('wake 轮中用户插队打断：stop_reason=cancelled，运行中 wake tool 收敛', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-int', command: 'sleep 3', exit_code: 0, completed: true },
+    })
+    wakeChunk('t-int')
+    textChunk('让我检查')
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'wc-int',
+      title: 'bash',
+      status: 'in_progress',
+      rawInput: { command: 'sleep 100' },
+    })
+    // send_now 打断 → 被打断轮发 cancelled turn_completed
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-t-int', stop_reason: 'cancelled' })
+
+    const wake = wakeOf()
+    expect(wake!.status).toBe('cancelled')
+    const toolSeg = wake!.segments.find(s => s.kind === 'tool')
+    expect(toolSeg!.state!.status).toBe('error')
+    expect(toolSeg!.state!.output).toBe('Cancelled')
+  })
+
+  it('wake 轮进行中另一任务完成 → 缓冲到 wake 收尾后 flush', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-a', command: 'sleep 1', exit_code: 0, completed: true },
+    })
+    wakeChunk('t-a')
+    textChunk('处理任务 A 的结果')
+    // wake 轮进行中任务 B 完成
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-b', command: 'sleep 9', exit_code: 0, completed: true },
+    })
+    expect(taskMsgs()).toHaveLength(1) // 只有 A 的卡
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-t-a', stop_reason: 'end_turn' })
+    // wake 收尾后 B flush 到末尾
+    expect(taskMsgs()).toHaveLength(2)
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(msgs[msgs.length - 1].info.id).toBe('msg_tasknotif_t-b')
+  })
+
+  it('回放中唤醒轮同样折入且卡片保历史位置', () => {
+    beginAcpReplay(SID)
+    textChunk('历史问题', 'user_message_chunk')
+    textChunk('历史回答')
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-rw', command: 'echo old', exit_code: 0, completed: true },
+    })
+    wakeChunk('t-rw')
+    textChunk('历史唤醒回复')
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-t-rw', stop_reason: 'end_turn' })
+    textChunk('后来的问题', 'user_message_chunk')
+    textChunk('后来的回答')
+    finishAcpReplay(SID)
+
+    const msgs = messageStore.getVisibleMessages(SID)
+    const notifIdx = msgs.findIndex(m => m.info.id === 'msg_tasknotif_t-rw')
+    expect(notifIdx).toBeGreaterThan(0)
+    expect(notifIdx).toBeLessThan(msgs.length - 1)
+    const wake = (msgs[notifIdx].parts[0] as WakePart).wake
+    expect(wake!.status).toBe('done')
+    expect(wake!.segments[0].text).toBe('历史唤醒回复')
+    // 唤醒回复没有平铺
+    expect(msgs.filter(m => m.info.role === 'assistant')).toHaveLength(3) // 历史回答 + 通知卡 + 后来的回答
+  })
+
+  it('monitor 唤醒文案同样被识别', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 'mon-1', command: 'npm run dev', exit_code: 0, completed: true },
+    })
+    update({
+      sessionUpdate: 'user_message_chunk',
+      content: {
+        type: 'text',
+        text: 'Monitor "mon-1" ended: [monitor ended: process exited].\nCommand: npm run dev',
+        _meta: { hideFromScrollback: true },
+      },
+    })
+    textChunk('dev server 退出了')
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'task-completed-mon-1', stop_reason: 'end_turn' })
+
+    expect(messageStore.getVisibleMessages(SID)).toHaveLength(1)
+    expect(wakeOf()!.segments[0].text).toBe('dev server 退出了')
+  })
+
+  it('ownerSessionId / description 从 snapshot 透传到 part', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: {
+        task_id: 't-meta',
+        command: 'cargo build',
+        exit_code: 0,
+        completed: true,
+        owner_session_id: 'owner-123',
+        description: '编译后端',
+      },
+    })
+    const part = taskMsgs()[0].parts[0] as Part & { ownerSessionId?: string; description?: string }
+    expect(part.ownerSessionId).toBe('owner-123')
+    expect(part.description).toBe('编译后端')
+  })
+
+  it('非 wake 的隐藏 reminder 不置 wake 状态（识别范围控制）', () => {
+    // 普通隐藏 reminder（无 Background task/Monitor 文案）
+    update({
+      sessionUpdate: 'user_message_chunk',
+      content: {
+        type: 'text',
+        text: '<system-reminder>\nSome other reminder content\n</system-reminder>',
+        _meta: { hideFromScrollback: true },
+      },
+    })
+    // 之后的输出照常建 assistant 消息（现状行为）
+    textChunk('正常回答')
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].info.role).toBe('assistant')
+    expect(msgs[0].parts[0].type).toBe('text')
+  })
+
   it('system-reminder 回显不进入聊天流，cron prompt 剥框架后保留', () => {
     // 模型侧注入的 reminder 整块隐藏
     textChunk('<system-reminder>\nBackground task done. Use get_output(...)\n</system-reminder>', 'user_message_chunk')

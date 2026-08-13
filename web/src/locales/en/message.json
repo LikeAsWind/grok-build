@@ -136,7 +136,10 @@
     "exit": "exit {{code}}",
     "signal": "signal {{signal}}",
     "noOutput": "No output",
-    "truncated": "Output truncated — full output at {{file}}"
+    "truncated": "Output truncated — full output at {{file}}",
+    "wakeTitle": "Agent response",
+    "wakeStreaming": "Agent responding…",
+    "wakeCancelled": "Interrupted"
   },
   "subtask": {
     "running": "Running",
