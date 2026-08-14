@@ -47,14 +47,19 @@ async function afterSaveReload(reload: ReloadKind | undefined) {
 }
 
 /**
- * 权限模式运行时通知：写盘只影响新会话（default_yolo_mode 在会话启动时解析），
- * 存活会话经 x.ai/yolo_mode_changed 立即切换（后端遍历 resident sessions
- * 发 SetYoloMode/SetAutoMode）。yolo 语义：true = 全部自动批准。
- * 仅在 yolo 实际变化时发（避免只改同区其他字段时误清 auto mode）。
+ * 权限模式运行时通知 + permission_mode 键同步。
+ * [ui] 的解析优先级 permission_mode > approval_mode > yolo——只写 yolo
+ * 会被残留的 permission_mode（如 TUI 写入的 "always-approve"）压制，
+ * 因此 yolo 变化时同步写 permission_mode 为对应值。
+ * 写盘只影响新会话（default_yolo_mode 会话启动时解析）；存活会话经
+ * x.ai/yolo_mode_changed 立即切换（后端遍历 resident sessions 发 SetYoloMode）。
  */
-async function notifyPermissionMode(original: SectionDraft, draft: SectionDraft) {
+async function syncPermissionMode(original: SectionDraft, draft: SectionDraft) {
   if ((original['yolo'] ?? '') === (draft['yolo'] ?? '')) return
   const yolo = draft['yolo'] === 'true'
+  await patchGrokConfig({
+    set: [{ path: ['ui', 'permission_mode'], value: yolo ? 'always-approve' : 'ask' }],
+  })
   const { acpExtNotify } = await import('../../../api/acpBridge')
   await acpExtNotify('x.ai/yolo_mode_changed', {
     yolo_mode: yolo,
@@ -142,7 +147,7 @@ function SectionCard({
       if ((ops.set?.length ?? 0) + (ops.delete?.length ?? 0) > 0) {
         await patchGrokConfig(ops)
         await afterSaveReload(section.reload)
-        if (section.notify === 'permission_mode') await notifyPermissionMode(original, draft)
+        if (section.notify === 'permission_mode') await syncPermissionMode(original, draft)
       }
       onSaved()
     } catch (err) {
