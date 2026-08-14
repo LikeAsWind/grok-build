@@ -6,7 +6,7 @@ import { ContentBlock } from '../../components'
 import { childSessionStore, autoApproveStore } from '../../store'
 import { usePresence } from '../../hooks'
 import { useChatViewport } from './chatViewport'
-import { sortPermissionOptions, permissionOptionTone, type PermissionOptionTone } from './permissionOptions'
+import { sortPermissionOptions, permissionOptionTone, localizePermissionOptionName, type PermissionOptionTone } from './permissionOptions'
 
 interface PermissionDialogProps {
   request: ApiPermissionRequest
@@ -181,7 +181,7 @@ export function PermissionDialog({
                         disabled={isReplying}
                         className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed ${DIALOG_TONE_CLASS[tone]}`}
                       >
-                        <span>{isReplying && tone === 'primary' ? t('common:sending') : (opt.name || opt.id)}</span>
+                        <span>{isReplying && tone === 'primary' ? t('common:sending') : localizePermissionOptionName(opt, t)}</span>
                         {tone === 'primary' && !isReplying && <ReturnIcon />}
                         {tone === 'muted' && <span className="text-[length:var(--fs-sm)] text-text-500">Esc</span>}
                       </button>

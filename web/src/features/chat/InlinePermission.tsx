@@ -12,7 +12,7 @@ import type { ApiPermissionRequest, PermissionReply } from '../../api'
 import { ContentBlock } from '../../components'
 import { autoApproveStore } from '../../store'
 import { themeStore } from '../../store/themeStore'
-import { sortPermissionOptions, permissionOptionTone } from './permissionOptions'
+import { sortPermissionOptions, permissionOptionTone, localizePermissionOptionName } from './permissionOptions'
 
 interface InlinePermissionProps {
   request: ApiPermissionRequest
@@ -113,7 +113,7 @@ export const InlinePermission = memo(function InlinePermission({
               disabled={isReplying}
               className={`px-2.5 py-0.5 rounded text-[length:var(--fs-sm)] transition-colors disabled:opacity-50 ${OPTION_TONE_CLASS[permissionOptionTone(opt.kind)]}`}
             >
-              {opt.name || opt.id}
+              {localizePermissionOptionName(opt, t)}
             </button>
           ))}
         </div>

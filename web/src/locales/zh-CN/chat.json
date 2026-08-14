@@ -77,6 +77,13 @@
     "rule": "规则",
     "allowOnce": "允许一次",
     "alwaysAllow": "始终允许",
+    "options": {
+      "allowOnce": "允许",
+      "alwaysAllow": "始终允许，不再询问",
+      "alwaysAllowCommand": "始终允许：{{command}}",
+      "rejectOnce": "拒绝，并告诉 Grok 怎么做",
+      "rejectAlways": "拒绝，之后也不再执行"
+    },
     "subtaskFallback": "Subtask",
     "browserSession": "前端临时",
     "thisSession": "后端始终",

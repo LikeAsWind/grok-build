@@ -35,3 +35,28 @@ export function permissionOptionTone(kind: string): PermissionOptionTone {
       return 'muted'
   }
 }
+
+/**
+ * 选项文案本地化：后端下发的 name 是英文（"Yes, proceed" 等），
+ * 按已知 kind 映射到 i18n 词条；动态命令选项（"Always allow: git push"）
+ * 翻译前缀保留命令；未知 kind 回退后端原文。
+ */
+export function localizePermissionOptionName(
+  opt: PermissionOptionInfo,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const dynamicCommand = /^Always allow:\s*(.+)$/i.exec(opt.name)
+  if (dynamicCommand) return t('permissionDialog.options.alwaysAllowCommand', { command: dynamicCommand[1] })
+  switch (opt.kind) {
+    case 'allow_once':
+      return t('permissionDialog.options.allowOnce')
+    case 'allow_always':
+      return t('permissionDialog.options.alwaysAllow')
+    case 'reject_once':
+      return t('permissionDialog.options.rejectOnce')
+    case 'reject_always':
+      return t('permissionDialog.options.rejectAlways')
+    default:
+      return opt.name || opt.id
+  }
+}

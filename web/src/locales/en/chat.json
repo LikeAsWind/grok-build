@@ -77,6 +77,13 @@
     "rule": "Rule",
     "allowOnce": "Allow once",
     "alwaysAllow": "Always allow",
+    "options": {
+      "allowOnce": "Allow",
+      "alwaysAllow": "Always allow, don't ask again",
+      "alwaysAllowCommand": "Always allow: {{command}}",
+      "rejectOnce": "Reject, and tell Grok what to do",
+      "rejectAlways": "Reject, and don't run again"
+    },
     "subtaskFallback": "Subtask",
     "browserSession": "Frontend temporary",
     "thisSession": "Backend always",
