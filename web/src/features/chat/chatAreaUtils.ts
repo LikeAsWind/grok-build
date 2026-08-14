@@ -1,4 +1,5 @@
 import type { ProcessTimelineItem } from './chatPageModel'
+import { isTaskNotificationMessage } from '../message/taskNotification'
 
 /** 回合边界 / 用户消息：上下各 12px */
 const ROW_Y_TURN = 'py-3'
@@ -11,9 +12,15 @@ function isAssistantMessageItem(item: ProcessTimelineItem | undefined): boolean 
   return item?.kind === 'message' && item.message.info.role === 'assistant'
 }
 
+function isTaskNotificationItem(item: ProcessTimelineItem): boolean {
+  return item.kind === 'message' && isTaskNotificationMessage(item.message)
+}
+
 /**
  * 用户和过程壳保留回合边界；连续助手按消息内 stack 节奏收紧。
  * 连续助手 py-1+py-1=8px，与 MSG_SPACING.stack / processBody 的 gap-2 同距。
+ * 后台任务通知卡开启新一段：上缘回合边界（不与上一轮助手回答贴合），
+ * 下缘贴紧唤醒回复（通知 + 自动回复是一组）。
  */
 export function getTimelineRowYClass(
   item: ProcessTimelineItem,
@@ -24,6 +31,9 @@ export function getTimelineRowYClass(
 
   const prevAssistant = isAssistantMessageItem(prev)
   const nextAssistant = isAssistantMessageItem(next)
+  if (isTaskNotificationItem(item)) {
+    return nextAssistant ? ROW_Y_ASSISTANT_AFTER_USER : ROW_Y_TURN
+  }
   if (prevAssistant && nextAssistant) return ROW_Y_ASSISTANT_STACK
   if (prevAssistant) return ROW_Y_ASSISTANT_BEFORE_USER
   if (nextAssistant) return ROW_Y_ASSISTANT_AFTER_USER

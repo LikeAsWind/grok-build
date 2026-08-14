@@ -452,6 +452,19 @@ describe('buildTurnLatestAssistantIdSet', () => {
     expect(latest.has('assistant-2')).toBe(true)
     expect(latest.has('assistant-3')).toBe(true)
   })
+
+  it('wake reply is its own latest without stealing the user turn latest', () => {
+    const messages = [
+      createUserMessage('user-1', 1000),
+      createAssistantMessage('assistant-1', [], 1001, 1500),
+      createAssistantMessage('msg_wake_t1', [], 2000, 2500),
+    ]
+    const latest = buildTurnLatestAssistantIdSet(messages)
+
+    // 上一条回答保住操作条/完成时间；唤醒回复也有自己的
+    expect(latest.has('assistant-1')).toBe(true)
+    expect(latest.has('msg_wake_t1')).toBe(true)
+  })
 })
 
 describe('streaming virtual range helpers', () => {
@@ -505,6 +518,28 @@ describe('getTimelineRowYClass', () => {
     expect(getTimelineRowYClass(current, user, next)).toBe('pt-3 pb-1')
     expect(getTimelineRowYClass(current, prev, user)).toBe('pt-1 pb-3')
     expect(getTimelineRowYClass(current, user, user)).toBe('py-3')
+  })
+
+  it('task notification card breaks from previous assistant, hugs following wake reply', () => {
+    const prevAssistant = {
+      kind: 'message' as const,
+      key: 'assistant-1',
+      message: createAssistantMessage('assistant-1', [], 1, 2),
+    }
+    const notif = {
+      kind: 'message' as const,
+      key: 'msg_tasknotif_t1',
+      message: createAssistantMessage('msg_tasknotif_t1', [], 3, 4),
+    }
+    const wakeReply = {
+      kind: 'message' as const,
+      key: 'msg_wake_t1',
+      message: createAssistantMessage('msg_wake_t1', [], 5, 6),
+    }
+    // 上缘回合边界（不与上一轮回答贴合），下缘贴紧唤醒回复
+    expect(getTimelineRowYClass(notif, prevAssistant, wakeReply)).toBe('pt-3 pb-1')
+    // 无唤醒回复：独立成段
+    expect(getTimelineRowYClass(notif, prevAssistant, undefined)).toBe('py-3')
   })
 })
 
@@ -602,6 +637,39 @@ describe('buildProcessTimeline', () => {
     message.parts.some(p => p.type === 'tool' || p.type === 'reasoning')
   const hasFinal = (message: Message) =>
     message.parts.some(p => p.type === 'text')
+
+  it('streaming wake reply stays out of the previous settled user turn', () => {
+    // 上一回合已结算（user + 完成的 assistant），live 唤醒轮 streaming 中
+    const settled = createAssistantMessage(
+      'assistant-1',
+      [createTextPart('text-1', 'assistant-1', 'done answer')],
+      1001,
+      1500,
+    )
+    const wake = createAssistantMessage(
+      'msg_wake_t1',
+      [createTextPart('wake-text', 'msg_wake_t1', 'reacting to task')],
+      2000,
+    )
+    wake.isStreaming = true
+    const messages = [createUserMessage('user-1', 1000), settled, wake]
+    const timeline = buildProcessTimeline(messages, {
+      turnDurationMap: new Map(),
+      sessionIsStreaming: true,
+      messageHasProcess: hasProcess,
+      messageHasFinal: hasFinal,
+    })
+
+    // 唤醒回复独立平铺，不进上一回合的袋子
+    const wakeItem = timeline.find(item => item.kind === 'message' && item.message.info.id === 'msg_wake_t1')
+    expect(wakeItem).toBeTruthy()
+    // 上一回合不因唤醒轮 streaming 而重新激活（Worked 不闪回 Working）
+    const shell = timeline.find(item => item.kind === 'process-shell')
+    if (shell?.kind === 'process-shell') {
+      expect(shell.isActive).toBe(false)
+      expect(shell.children.every(c => c.message.info.id !== 'msg_wake_t1')).toBe(true)
+    }
+  })
 
   it('delays empty Working shell until entry-ready gate opens', () => {
     const messages = [createUserMessage('user-1', 1000)]

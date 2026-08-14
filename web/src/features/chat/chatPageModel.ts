@@ -1,5 +1,5 @@
 import type { Message } from '../../types/message'
-import { isTaskNotificationMessage } from '../message/taskNotification'
+import { isTaskNotificationMessage, isWakeReplyMessage } from '../message/taskNotification'
 
 export const PAGE_MESSAGE_COUNT = 20
 export const PAGE_EXTREME_RENDER_WEIGHT = 700
@@ -688,8 +688,8 @@ export function buildTurnDurationMap(messages: Message[], visibleMessages: Messa
     }
 
     if (currentUserCreated == null || message.info.role !== 'assistant') continue
-    // 任务完成通知是合成消息，不参与 turn 耗时归属
-    if (isTaskNotificationMessage(message)) continue
+    // 任务完成通知/唤醒回复是后台任务驱动的合成消息，不参与 turn 耗时归属
+    if (isTaskNotificationMessage(message) || isWakeReplyMessage(message)) continue
 
     if (visibleAssistantIds.has(message.info.id)) {
       currentVisibleAssistantId = message.info.id
@@ -722,8 +722,16 @@ export function buildTurnLatestAssistantIdSet(visibleMessages: Message[]): Set<s
       currentLatestAssistantId = null
       continue
     }
-    if (message.info.role === 'assistant' && !isTaskNotificationMessage(message)) {
-      currentLatestAssistantId = message.info.id
+    if (message.info.role === 'assistant') {
+      if (isWakeReplyMessage(message)) {
+        // 唤醒回复自成回合：自带 latest（显示操作条/完成时间），
+        // 不抢用户回合的 latest 归属
+        latestIds.add(message.info.id)
+        continue
+      }
+      if (!isTaskNotificationMessage(message)) {
+        currentLatestAssistantId = message.info.id
+      }
     }
   }
 
@@ -898,9 +906,11 @@ export function buildProcessTimeline(
       continue
     }
     if (message.info.role !== 'assistant') continue
-    if (isTaskNotificationMessage(message)) {
-      // 后台任务完成通知：独立平铺项——关闭当前 turn 壳自成一段；
-      // 其后的 wake 回复进入 user-less 续段平铺渲染（对该结果的反应）
+    if (isTaskNotificationMessage(message) || isWakeReplyMessage(message)) {
+      // 后台任务通知/唤醒回复：独立平铺项——关闭当前 turn 壳自成一段。
+      // 不隔离的话，live 唤醒轮会被吸进上一个用户回合的 assistants 袋：
+      // streaming 中把已结算的壳重新激活（Worked 闪回 Working），
+      // 上一条回答的操作条/完成时间被冲掉，直到刷新才恢复。
       if (current) {
         turns.push(current)
         current = null
