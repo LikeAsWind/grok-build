@@ -1,55 +1,22 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TerminalIcon, ChevronDownIcon } from '../../../components/Icons'
-import { MarkdownRenderer } from '../../../components/MarkdownRenderer'
 import { useDisclosureScrollLock } from '../../../hooks'
-import type { TaskCompletionPart, TaskWakeSegment, ToolPart } from '../../../types/message'
+import type { TaskCompletionPart } from '../../../types/message'
 import { useUiDisclosureState } from '../../../utils/uiDisclosureState'
 import { formatTime, formatDetailedDateTime } from '../../../utils/formatUtils'
 import { chevronClass, MessageExpandPanel, useMessageExpandRender } from '../messageExpand'
-import { ToolPartView } from './ToolPartView'
 
 // ============================================
 // Task Completion Part View - 后台任务完成通知（独立系统消息卡片）
-// 含 auto-wake 唤醒轮折叠区（模型对任务结果的反应）
+// 唤醒回复（模型对任务结果的反应）是紧随其后的独立 assistant 消息（msg_wake_*）
 // ============================================
 
-/** 展开体 output / wake 文本渲染上限，防巨输出卡顿 */
+/** 展开体 output 渲染上限，防巨输出卡顿 */
 const OUTPUT_RENDER_LIMIT = 32 * 1024
-const WAKE_TEXT_RENDER_LIMIT = 64 * 1024
 
 interface TaskCompletionPartViewProps {
   part: TaskCompletionPart
-}
-
-/** wake segment 渲染：text → markdown；reasoning → 弱化小字；tool → compact 工具卡 */
-function WakeSegmentView({ part, seg, index, streaming }: {
-  part: TaskCompletionPart
-  seg: TaskWakeSegment
-  index: number
-  streaming: boolean
-}) {
-  if (seg.kind === 'tool') {
-    const toolPart: ToolPart = {
-      id: `${part.id}:wake:${seg.callID}`,
-      sessionID: part.sessionID,
-      messageID: part.messageID,
-      type: 'tool',
-      callID: seg.callID,
-      tool: seg.tool,
-      state: seg.state,
-    }
-    return <ToolPartView part={toolPart} compact isStreaming={streaming} />
-  }
-  const text = seg.text.length > WAKE_TEXT_RENDER_LIMIT ? seg.text.slice(0, WAKE_TEXT_RENDER_LIMIT) : seg.text
-  if (seg.kind === 'reasoning') {
-    return (
-      <p className="text-[length:var(--fs-sm)] text-text-500 italic whitespace-pre-wrap break-words">
-        {text}
-      </p>
-    )
-  }
-  return <MarkdownRenderer key={index} content={text} />
 }
 
 export const TaskCompletionPartView = memo(function TaskCompletionPartView({ part }: TaskCompletionPartViewProps) {
@@ -57,7 +24,7 @@ export const TaskCompletionPartView = memo(function TaskCompletionPartView({ par
   const [expanded, setExpanded] = useUiDisclosureState(`message:${part.messageID}:taskdone:${part.id}`, false)
   const shouldRenderBody = useMessageExpandRender(expanded)
   const { rootRef, headerRef, withScrollLock } = useDisclosureScrollLock()
-  const { ok, command, displayCommand, description, cwd, exitCode, signal, output, outputFile, truncated, endTime, wake } = part
+  const { ok, command, displayCommand, description, cwd, exitCode, signal, output, outputFile, truncated, endTime } = part
 
   const commandLine = (displayCommand || command).split('\n')[0]
   // description 有则主显，command 退次
@@ -69,7 +36,6 @@ export const TaskCompletionPartView = memo(function TaskCompletionPartView({ par
       : undefined
   const accent = ok ? 'text-success-100' : 'text-danger-100'
   const renderedOutput = output && output.length > OUTPUT_RENDER_LIMIT ? output.slice(0, OUTPUT_RENDER_LIMIT) : output
-  const wakeStreaming = wake?.status === 'streaming'
 
   return (
     <div ref={rootRef} className={`rounded-md border overflow-hidden ${ok ? 'border-border-200/60 bg-bg-100/50' : 'border-danger-100/30 bg-danger-100/5'}`}>
@@ -89,17 +55,6 @@ export const TaskCompletionPartView = memo(function TaskCompletionPartView({ par
             <span className={`text-[length:var(--fs-sm)] text-text-300 truncate ${description ? '' : 'font-mono'}`}>{headline}</span>
           )}
         </div>
-        {wakeStreaming && (
-          <span className="flex items-center gap-1.5 flex-shrink-0 text-[length:var(--fs-xxs)] text-text-500">
-            <span className="w-1.5 h-1.5 bg-accent-main-100 rounded-full animate-pulse" />
-            {t('taskNotification.wakeStreaming')}
-          </span>
-        )}
-        {wake?.status === 'cancelled' && (
-          <span className="text-[length:var(--fs-xxs)] flex-shrink-0 px-1.5 py-0.5 rounded text-text-500 bg-bg-200/60">
-            {t('taskNotification.wakeCancelled')}
-          </span>
-        )}
         {statusBadge && (
           <span className={`text-[length:var(--fs-xxs)] flex-shrink-0 px-1.5 py-0.5 rounded ${ok ? 'text-text-500 bg-bg-200/60' : 'text-danger-100/80 bg-danger-100/10'}`}>
             {statusBadge}
@@ -134,20 +89,6 @@ export const TaskCompletionPartView = memo(function TaskCompletionPartView({ par
               <p className="text-[length:var(--fs-xxs)] text-text-500">
                 {t('taskNotification.truncated', { file: outputFile })}
               </p>
-            )}
-            {wake && wake.segments.length > 0 && (
-              <div className="pt-2 border-t border-border-200/40 space-y-2">
-                <p className="text-[length:var(--fs-xs)] text-text-400">{t('taskNotification.wakeTitle')}</p>
-                {wake.segments.map((seg, i) => (
-                  <WakeSegmentView
-                    key={seg.kind === 'tool' ? `tool:${seg.callID}` : i}
-                    part={part}
-                    seg={seg}
-                    index={i}
-                    streaming={wakeStreaming && i === wake.segments.length - 1}
-                  />
-                ))}
-              </div>
             )}
           </div>
         )}

@@ -30,12 +30,7 @@ export const TaskNotificationMessageView = memo(function TaskNotificationMessage
     : part.exitCode !== undefined
       ? t('taskNotification.exit', { code: part.exitCode })
       : t('taskNotification.completedTitle')
-  const wakeText = part.wake?.segments
-    .filter((s): s is Extract<typeof s, { kind: 'text' }> => s.kind === 'text')
-    .map(s => s.text)
-    .join('\n') ?? ''
-  const baseText = part.output?.trim() ? part.output : `${part.command}\n(${statusLine})`
-  const copyText = wakeText ? `${baseText}\n\n${wakeText}` : baseText
+  const copyText = part.output?.trim() ? part.output : `${part.command}\n(${statusLine})`
 
   return (
     <div className="flex flex-col gap-1 w-full group">

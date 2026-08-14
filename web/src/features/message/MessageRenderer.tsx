@@ -30,7 +30,7 @@ import {
 } from './parts'
 import { extractToolData } from './tools'
 import { isQueuedMessage } from './queuedMessage'
-import { isTaskNotificationMessage } from './taskNotification'
+import { isTaskNotificationMessage, isWakeReplyMessage } from './taskNotification'
 import { TaskNotificationMessageView } from './TaskNotificationMessageView'
 import { MSG_SPACING } from './messageSpacing'
 import { MessageExpandPanel, useMessageExpandRender } from './messageExpand'
@@ -332,6 +332,26 @@ export const MessageRenderer = memo(function MessageRenderer({
     return <TaskNotificationMessageView message={message} onFork={onFork} />
   }
 
+  if (!isUser && isWakeReplyMessage(message)) {
+    // auto-wake 唤醒回复：正常 assistant 消息 + 顶部弱化标识
+    // （后台任务触发的自动回复，非回答用户的话）
+    return (
+      <div className="flex flex-col gap-1">
+        <WakeReplyLabel />
+        <AssistantMessageView
+          message={message}
+          allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
+          turnDuration={turnDuration}
+          isTurnLatestAssistant={isTurnLatestAssistant}
+          processContentScope={processContentScope}
+          onFork={onFork}
+          forkMessageId={forkMessageId}
+          onEnsureParts={onEnsureParts}
+        />
+      </div>
+    )
+  }
+
   if (isUser) {
     return (
       <UserMessageView
@@ -359,6 +379,17 @@ export const MessageRenderer = memo(function MessageRenderer({
       forkMessageId={forkMessageId}
       onEnsureParts={onEnsureParts}
     />
+  )
+})
+
+/** 唤醒回复顶部弱化标识："↳ 后台任务自动回复" */
+const WakeReplyLabel = memo(function WakeReplyLabel() {
+  const { t } = useTranslation('message')
+  return (
+    <p className="text-[length:var(--fs-xs)] text-text-500 select-none">
+      {'↳ '}
+      {t('taskNotification.wakeReplyLabel')}
+    </p>
   )
 })
 
@@ -969,7 +1000,8 @@ const AssistantMessageView = memo(function AssistantMessageView({
               case 'compaction':
                 return <CompactionPartView key={part.id} part={part} />
               case 'task-completion':
-                // 正常路径走 TaskNotificationMessageView 整条特判；此处防御性兜底
+                // wake 消息（msg_wake_*）内的通知卡：唤醒回复第一个 part；
+                // 独立通知消息走 TaskNotificationMessageView 整条特判
                 return <TaskCompletionPartView key={part.id} part={part} />
               default:
                 return null

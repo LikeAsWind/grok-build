@@ -286,19 +286,6 @@ export interface CompactionPart extends PartBase {
 
 /** 后台任务完成通知（grok 扩展：task_completed 独立系统消息的唯一 part） */
 
-/** 唤醒轮内容 segment（保 text / reasoning / tool 交错顺序） */
-export type TaskWakeSegment =
-  | { kind: 'text'; text: string }
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'tool'; callID: string; tool: string; state: ToolState }
-
-/** auto-wake 唤醒轮折叠内容（模型对任务结果的反应） */
-export interface TaskWakeState {
-  status: 'streaming' | 'done' | 'cancelled'
-  segments: TaskWakeSegment[]
-  stopReason?: string
-}
-
 export interface TaskCompletionPart extends PartBase {
   type: 'task-completion'
   taskId: string
@@ -323,8 +310,6 @@ export interface TaskCompletionPart extends PartBase {
   ownerSessionId?: string
   /** 模型给任务起的标签 */
   description?: string
-  /** 唤醒轮折叠内容；无唤醒轮时缺省 */
-  wake?: TaskWakeState
 }
 
 export type Part =

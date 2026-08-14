@@ -12,7 +12,7 @@ import { AcpClient } from './acp'
 import { injectGlobalEvent, setAcpConnectionState } from './events'
 import { sessionCwdForWire } from './sessionCwd'
 import { serverStore } from '../store/serverStore'
-import { TASK_NOTIFICATION_MESSAGE_ID_PREFIX } from '../features/message/taskNotification'
+import { TASK_NOTIFICATION_MESSAGE_ID_PREFIX, WAKE_REPLY_MESSAGE_ID_PREFIX } from '../features/message/taskNotification'
 import type { GlobalEvent } from '../types/api/event'
 import type { ModelInfo } from './types'
 
@@ -318,10 +318,8 @@ interface TurnState {
   tools: Map<string, ToolRec>
   promptInFlight: boolean
   replayUser: { messageId: string; partId: string } | null
-  /** 非空 = 当前 turn 是 task-completed 唤醒轮（内容折进通知卡片，不建 assistant 消息） */
+  /** 非空 = 当前 turn 是 task-completed 唤醒轮（回复消息用确定性 id，收尾补 idle） */
   wakeTaskId: string | null
-  /** 唤醒轮内 tool callId → wake segment 下标，供 tool_call_update 寻址 */
-  wakeTools: Map<string, number>
 }
 
 const turns = new Map<string, TurnState>()
@@ -350,8 +348,9 @@ function isToolCallTerminal(sessionId: string, callId: string): boolean {
 // task_completed 不再内联到当前 assistant 消息：streaming 期间缓冲，
 // idle 时机 flush 成一条独立的合成消息（msg_tasknotif_<taskId>），
 // 避免通知插进正在进行的对话输出或被顶上去找不到。
-// auto-wake 唤醒轮（模型对任务结果的反应）折叠进同一张卡片：
-// TurnState.wakeTaskId 状态机归组，内容存 taskNotifRegistry 的 wake segments。
+// auto-wake 唤醒轮（模型对任务结果的反应）渲染为一条正常的独立
+// assistant 消息（msg_wake_<taskId>，与普通对话回合同构），紧跟通知
+// 卡片之后；TurnState.wakeTaskId 标记当前 turn 是唤醒轮。
 interface PendingTaskNotification {
   taskId: string
   command: string
@@ -369,24 +368,21 @@ interface PendingTaskNotification {
   receivedAt: number
   ownerSessionId?: string
   description?: string
+  /** wire 帧顶层 will_wake：true = 该任务会触发唤醒轮（卡片并入 wake 消息） */
+  willWake?: boolean
 }
 
-interface TaskWakeStateData {
-  status: 'streaming' | 'done' | 'cancelled'
-  segments: Array<
-    | { kind: 'text'; text: string }
-    | { kind: 'reasoning'; text: string }
-    | { kind: 'tool'; callID: string; tool: string; state: Record<string, unknown> }
-  >
-  stopReason?: string
-}
-
-/** 通知的权威数据源：task_completed 帧建记录，wake 轮内容累积其上 */
+/** 通知的权威数据源：task_completed 帧建记录（upsert 幂等 + 丢帧兜底合成） */
 interface TaskNotifRecord {
   data: PendingTaskNotification
-  wake: TaskWakeStateData | null
-  /** 卡片是否已注入消息流（缓冲中 = false） */
-  emitted: boolean
+  /**
+   * 卡片渲染位置：null = 未渲染（缓冲/hold 中）；
+   * 'standalone' = 独立系统消息（msg_tasknotif_）；
+   * 'wake' = 作为 wake 消息（msg_wake_）的第一个 part
+   */
+  placement: 'standalone' | 'wake' | null
+  /** placement === 'wake' 时的宿主消息 id，供重复帧重发定位 */
+  wakeMessageId?: string
 }
 
 const taskNotifRegistry = new Map<string, Map<string, TaskNotifRecord>>()
@@ -418,7 +414,9 @@ export function beginAcpReplay(sessionId: string) {
 
 export function finishAcpReplay(sessionId: string) {
   replayingSessions.delete(sessionId)
-  // 兜底：回放窗口内不该产生缓冲，但保险起见 flush 一次
+  // 兜底：回放结束后不该再有未渲染的通知——hold 中的（wake chunk 没等到，
+  // 如唤醒被打断后刷新）降级为独立卡，连同缓冲一起 flush
+  demoteHeldTaskNotifications(sessionId)
   flushPendingTaskNotifications(sessionId)
 }
 
@@ -464,7 +462,6 @@ function getTurn(sessionId: string): TurnState {
       promptInFlight: false,
       replayUser: null,
       wakeTaskId: null,
-      wakeTools: new Map(),
     }
     turns.set(sessionId, t)
   }
@@ -489,7 +486,11 @@ function emptyTokens() {
 /** 确保当前回合有一个 assistant 消息，返回其 id */
 function ensureAssistant(sessionId: string, turn: TurnState): string {
   if (turn.assistantId) return turn.assistantId
-  const id = newId('msg_a')
+  // 唤醒轮：确定性 id（msg_wake_<taskId>）→ 回放/双路帧 upsert 幂等，
+  // UI 侧据前缀渲染"后台任务自动回复"标识
+  const id = turn.wakeTaskId
+    ? `${WAKE_REPLY_MESSAGE_ID_PREFIX}${turn.wakeTaskId}`
+    : newId('msg_a')
   turn.assistantId = id
   turn.textPartId = null
   turn.reasoningPartId = null
@@ -529,7 +530,50 @@ function finalizeTurn(turn: TurnState) {
   turn.replayUser = null
   turn.tools.clear()
   turn.wakeTaskId = null
-  turn.wakeTools.clear()
+}
+
+/**
+ * 新 prompt 发出前搭建回合状态（acpPrompt 调用；导出供测试）。
+ * 后端驱动的 turn（唤醒轮）没有 pendingPrompts 记录，acpPrompt 等不到它——
+ * 若其状态未收尾（turn_completed 尚未到达），必须先清干净：不清 wakeTaskId
+ * 的话，新回合的回答会经 ensureAssistant 的确定性 id upsert 进旧的
+ * msg_wake_ 消息（新回答接在唤醒回复末尾）。
+ */
+export function prepareTurnForPrompt(sessionId: string, userMessageId: string) {
+  const turn = getTurn(sessionId)
+  if (turn.assistantId || turn.wakeTaskId) {
+    cancelDanglingTools(sessionId, turn)
+    finalizeTurn(turn)
+  }
+  turn.lastUserMessageId = userMessageId
+  turn.promptInFlight = true
+}
+
+/**
+ * session/prompt RPC 返回时的收尾（acpPrompt 调用；导出供测试）。
+ *
+ * 后端驱动的唤醒轮可能在上一回合 RPC settle 之前就开始了——隐藏 wake chunk
+ * 先到、beginWakeTurn 已置位 wakeTaskId。此时若无条件 finalizeTurn 会清掉
+ * wakeTaskId，把唤醒回复劈成两段（后半落到新 msg_a），且其 turn_completed 的
+ * wasWake=false 漏发 idle → 消息永远 isStreaming、发送按钮卡「停止」、新消息排队。
+ *
+ * 因此：回合已被唤醒轮接管（wakeTaskId 已置位）时，只复位 promptInFlight——
+ * 定稿交给唤醒轮自己的 turn_completed 补发 idle，不抢跑。
+ */
+export function settlePromptTurn(sessionId: string) {
+  const turn = getTurn(sessionId)
+  turn.promptInFlight = false
+  if (turn.wakeTaskId != null) {
+    // 回合已被唤醒轮接管：不 finalize（会清 wakeTaskId 把唤醒回复劈成两段）、
+    // 不发 idle（wake 轮仍在跑，session 尚未真正空闲）——定稿交给唤醒轮自己的
+    // turn_completed（wasWake 分支补发 idle）。
+    return
+  }
+  cancelDanglingTools(sessionId, turn)
+  finalizeTurn(turn)
+  flushPendingTaskNotifications(sessionId)
+  emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
+  emit('session.idle', { sessionID: sessionId }, sessionId)
 }
 
 /**
@@ -671,6 +715,7 @@ function parseTaskNotification(t: Record<string, unknown>, snap: Record<string, 
     receivedAt,
     ownerSessionId: typeof snap?.owner_session_id === 'string' ? snap.owner_session_id : undefined,
     description: typeof snap?.description === 'string' ? snap.description : undefined,
+    willWake: t.will_wake === true,
   }
 }
 
@@ -678,7 +723,6 @@ function parseTaskNotification(t: Record<string, unknown>, snap: Record<string, 
  * 把完成通知作为独立的合成 assistant 消息注入消息流。
  * 消息 ID 确定性（msg_tasknotif_<taskId>）→ 回放/双路帧 upsert 幂等；
  * time.completed 即时定稿 → 不进 streaming 态；完全不触碰 TurnState。
- * 可重入：wake segment 每次累积后重发完整 part（messageStore 全量替换 upsert）。
  */
 function emitTaskNotification(sessionId: string, record: TaskNotifRecord) {
   const n = record.data
@@ -704,26 +748,49 @@ function emitTaskNotification(sessionId: string, record: TaskNotifRecord) {
     },
     sessionId,
   )
-  const part: Record<string, unknown> = { id: `${msgId}:task`, type: 'task-completion', ...n }
-  if (record.wake) {
-    part.wake = {
-      status: record.wake.status,
-      stopReason: record.wake.stopReason,
-      segments: record.wake.segments.map(s =>
-        s.kind === 'tool' ? { ...s, state: { ...s.state } } : { ...s },
-      ),
-    }
+  emitPartUpdated(sessionId, msgId, { id: `${msgId}:task`, type: 'task-completion', ...n })
+  record.placement = 'standalone'
+}
+
+/** 通知卡作为 wake 消息的 part 注入（并入唤醒回复，placement = 'wake'） */
+function emitWakeNotificationPart(sessionId: string, messageId: string, record: TaskNotifRecord) {
+  emitPartUpdated(sessionId, messageId, {
+    id: `${messageId}:task`,
+    type: 'task-completion',
+    ...record.data,
+  })
+  record.placement = 'wake'
+  record.wakeMessageId = messageId
+}
+
+/** 从 pending 缓冲列表摘除一个 taskId（已被别的路径渲染时防重复 flush） */
+function removeFromPendingList(sessionId: string, taskId: string) {
+  const list = pendingTaskNotifications.get(sessionId)
+  if (!list) return
+  const idx = list.indexOf(taskId)
+  if (idx >= 0) list.splice(idx, 1)
+  if (list.length === 0) pendingTaskNotifications.delete(sessionId)
+}
+
+/**
+ * 把 hold 中（willWake 且未渲染）的通知降级进 pending 缓冲。
+ * 用户抢先发 genuine prompt 时后端会消费掉 deferred completion、唤醒轮不再
+ * 发生——hold 的卡片若不降级会永久丢失；降级后按普通通知在 idle 时机 flush
+ * 为独立卡。
+ */
+export function demoteHeldTaskNotifications(sessionId: string) {
+  const map = taskNotifRegistry.get(sessionId)
+  if (!map) return
+  for (const [taskId, record] of map) {
+    if (record.placement !== null || record.data.willWake !== true) continue
+    record.data.willWake = false
+    let list = pendingTaskNotifications.get(sessionId)
+    if (!list) pendingTaskNotifications.set(sessionId, (list = []))
+    if (!list.includes(taskId)) list.push(taskId)
   }
-  emitPartUpdated(sessionId, msgId, part)
-  record.emitted = true
 }
 
-/** wake 卡片重发（仅已渲染时；缓冲中的记录等 flush 一起带出） */
-function reemitIfVisible(sessionId: string, record: TaskNotifRecord) {
-  if (record.emitted) emitTaskNotification(sessionId, record)
-}
-
-// ── auto-wake 唤醒轮识别与内容折叠 ──────────────────────────────
+// ── auto-wake 唤醒轮识别 ────────────────────────────────────────
 
 // 唤醒 prompt 首行：Background task "{id}" completed... / Monitor "{id}" ended...
 // （bash / monitor 两种；subagent-completed- 等其他 synthetic 轮暂不识别）
@@ -731,23 +798,35 @@ const WAKE_REMINDER_RE = /^(?:Background task|Monitor)\s+"([^"]+)"/
 
 /**
  * 识别 task-completed 唤醒轮的隐藏 user chunk，返回 taskId。
- * 识别失败返回 null（退化为现状：唤醒回复平铺渲染）。
+ * 真实 wire 上 hideFromScrollback 在 update 级 _meta（updateMeta）；
+ * content 级 _meta 为兼容保留。无 meta 时退回纯文本判定
+ * （<system-reminder> 开头 + Background task/Monitor 文案）。
+ * 识别失败返回 null（退化为现状：唤醒回复按普通消息渲染，只是缺标识）。
  */
-function detectWakeTaskId(content: unknown, text: string): string | null {
-  const hidden = isRecord(content) && isRecord(content._meta) && content._meta.hideFromScrollback === true
-  if (!hidden) return null
+function detectWakeTaskId(content: unknown, updateMeta: unknown, text: string): string | null {
+  const hidden =
+    (isRecord(updateMeta) && updateMeta.hideFromScrollback === true) ||
+    (isRecord(content) && isRecord(content._meta) && content._meta.hideFromScrollback === true)
   let t = text.trimStart()
-  if (t.startsWith('<system-reminder>')) t = t.slice('<system-reminder>'.length).trimStart()
+  const isReminder = t.startsWith('<system-reminder>')
+  if (!hidden && !isReminder) return null
+  if (isReminder) t = t.slice('<system-reminder>'.length).trimStart()
   const m = WAKE_REMINDER_RE.exec(t)
   return m ? m[1] : null
 }
 
-/** 唤醒轮开始：置位 turn 状态 + 注册表 wake 初始化（丢帧时合成最小记录兜底） */
+/**
+ * 唤醒轮开始：置位 turn 状态（丢帧时合成最小记录兜底）。
+ * 通知卡片作为 wake 消息（msg_wake_<taskId>）的第一个 part 注入——
+ * 唤醒回复消息内部：标识 → 通知卡 → 模型汇报。
+ * 唤醒轮后续内容（文本/思考/工具）走普通 handler，落在同一条消息上
+ * （ensureAssistant 特判确定性 id）。
+ * 例外：卡片已作为独立消息渲染过（早期 flush / will_wake 误报）→ 保持独立卡。
+ */
 function beginWakeTurn(sessionId: string, turn: TurnState, taskId: string, reminderText: string) {
   // 旧 turn 未收尾的防御（正常 turn_completed 已 finalize）
   if (turn.assistantId) finalizeTurn(turn)
   turn.wakeTaskId = taskId
-  turn.wakeTools.clear()
   let record = getTaskNotifRecord(sessionId, taskId)
   if (!record) {
     // task_completed 帧丢失（重连等）：从 reminder 文本合成最小记录
@@ -764,125 +843,17 @@ function beginWakeTurn(sessionId: string, turn: TurnState, taskId: string, remin
         endTime: now,
         receivedAt: now,
       },
-      wake: null,
-      emitted: false,
+      placement: null,
     }
     setTaskNotifRecord(sessionId, taskId, record)
   }
-  record.wake = { status: 'streaming', segments: [] }
-  reemitIfVisible(sessionId, record)
-}
-
-/** 唤醒轮文本/思考折入 wake segments */
-function appendWakeText(sessionId: string, turn: TurnState, text: string, kind: 'text' | 'reasoning') {
-  if (!text || !turn.wakeTaskId) return
-  const record = getTaskNotifRecord(sessionId, turn.wakeTaskId)
-  if (!record?.wake) return
-  const segs = record.wake.segments
-  const last = segs[segs.length - 1]
-  if (last && last.kind === kind) {
-    last.text += text
-  } else {
-    segs.push({ kind, text })
+  if (record.placement === null) {
+    // hold / 缓冲中：从缓冲列表摘除，作为 wake 消息第一个 part 注入
+    removeFromPendingList(sessionId, taskId)
+    const messageId = ensureAssistant(sessionId, turn)
+    breakActiveParts(turn)
+    emitWakeNotificationPart(sessionId, messageId, record)
   }
-  reemitIfVisible(sessionId, record)
-}
-
-/** 唤醒轮收尾：未终态 wake tool 收敛 Cancelled，状态定稿 */
-function closeWake(sessionId: string, turn: TurnState, stopReason: string) {
-  if (!turn.wakeTaskId) return
-  const record = getTaskNotifRecord(sessionId, turn.wakeTaskId)
-  if (record?.wake) {
-    for (const seg of record.wake.segments) {
-      if (seg.kind !== 'tool') continue
-      const status = seg.state.status
-      if (status !== 'pending' && status !== 'running') continue
-      seg.state.status = 'error'
-      seg.state.output ??= 'Cancelled'
-      markToolCallTerminal(sessionId, seg.callID)
-    }
-    record.wake.status = stopReason === 'cancelled' ? 'cancelled' : 'done'
-    record.wake.stopReason = stopReason || undefined
-    reemitIfVisible(sessionId, record)
-  }
-}
-
-/** 唤醒轮内 tool_call → 折入 wake segments（不建平铺 tool part） */
-function handleWakeToolCall(sessionId: string, turn: TurnState, tc: Record<string, unknown>) {
-  if (!turn.wakeTaskId) return
-  const record = getTaskNotifRecord(sessionId, turn.wakeTaskId)
-  if (!record?.wake) return
-  const callId = String(tc.toolCallId ?? '')
-  if (!callId) return
-  const meta = extractToolMeta(tc._meta)
-  const wireTitle = typeof tc.title === 'string' ? tc.title : ''
-  const toolName = meta.name || wireTitle || 'tool'
-  const title = (wireTitle && wireTitle !== toolName) ? wireTitle
-    : (meta.label && meta.label !== toolName) ? meta.label : undefined
-  const state: Record<string, unknown> = {
-    status: mapToolStatus(tc.status),
-    input: isRecord(tc.rawInput) ? tc.rawInput : {},
-    title,
-    time: { start: Date.now() },
-  }
-  applyWakeToolOutput(state, tc)
-  if (state.status === 'completed' || state.status === 'error') {
-    finalizeWakeToolState(state, toolName)
-    markToolCallTerminal(sessionId, callId)
-  }
-  turn.wakeTools.set(callId, record.wake.segments.length)
-  record.wake.segments.push({ kind: 'tool', callID: callId, tool: toolName, state })
-  reemitIfVisible(sessionId, record)
-}
-
-/** 唤醒轮内 tool_call_update → 更新对应 wake segment。返回 false 表示未命中（走普通路径） */
-function handleWakeToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<string, unknown>): boolean {
-  if (!turn.wakeTaskId) return false
-  const callId = String(tc.toolCallId ?? '')
-  if (!callId) return false
-  const segIndex = turn.wakeTools.get(callId)
-  if (segIndex === undefined) return false
-  const record = getTaskNotifRecord(sessionId, turn.wakeTaskId)
-  const seg = record?.wake?.segments[segIndex]
-  if (!record || !seg || seg.kind !== 'tool') return false
-
-  const incomingStatus = tc.status != null ? mapToolStatus(tc.status) : null
-  if (isToolCallTerminal(sessionId, callId) && incomingStatus !== 'completed' && incomingStatus !== 'error') {
-    return true // 迟到的非终态帧：吞掉，不复活
-  }
-  const meta = extractToolMeta(tc._meta)
-  if (meta.name) seg.tool = meta.name
-  if (incomingStatus != null) seg.state.status = incomingStatus
-  const wireUpdateTitle = typeof tc.title === 'string' ? tc.title : undefined
-  const updateTitle = (wireUpdateTitle && wireUpdateTitle !== seg.tool ? wireUpdateTitle : undefined)
-    ?? (meta.label && meta.label !== seg.tool ? meta.label : undefined)
-  if (updateTitle) seg.state.title = updateTitle
-  if (isRecord(tc.rawInput)) seg.state.input = tc.rawInput
-  applyWakeToolOutput(seg.state, tc)
-  if (seg.state.status === 'completed' || seg.state.status === 'error') {
-    finalizeWakeToolState(seg.state, seg.tool)
-    markToolCallTerminal(sessionId, callId)
-  }
-  reemitIfVisible(sessionId, record)
-  return true
-}
-
-function applyWakeToolOutput(state: Record<string, unknown>, tc: Record<string, unknown>) {
-  const { output, metadata } = extractToolOutput(tc.content)
-  if (output !== undefined) state.output = output
-  if (tc.rawOutput != null && state.output === undefined) {
-    state.output = typeof tc.rawOutput === 'string' ? tc.rawOutput : JSON.stringify(tc.rawOutput, null, 2)
-  }
-  if (metadata) state.metadata = { ...(state.metadata as Record<string, unknown> | undefined), ...metadata }
-}
-
-function finalizeWakeToolState(state: Record<string, unknown>, toolName: string) {
-  const time = (state.time ?? {}) as Record<string, unknown>
-  time.end = Date.now()
-  state.time = time
-  state.output ??= ''
-  state.title ??= toolName
-  state.metadata ??= {}
 }
 
 function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, unknown>) {
@@ -934,11 +905,16 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
 function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<string, unknown>) {
   const callId = String(tc.toolCallId ?? '')
   if (!callId) return
-  // 已终态的调用再收到非终态更新（如后台任务跨 turn 迟到的 in_progress 输出块）
-  // → 忽略，避免 fallback 新建 running 卡片把已完成的调用"复活"成永远转圈。
   const incomingStatus = tc.status != null ? mapToolStatus(tc.status) : null
-  if (isToolCallTerminal(sessionId, callId) && incomingStatus !== 'completed' && incomingStatus !== 'error') {
-    return
+  if (isToolCallTerminal(sessionId, callId)) {
+    // 已终态且不在当前 turn（turn 已 finalize，tools 已清空）：任何迟到帧一律吞掉。
+    // 后台任务真正退出时后端会对原始 callId 补发 completed + 全量输出
+    // （wait_background_completion），不拦会走 fallback 新建卡片把任务输出
+    // 挂进无关的 assistant 消息；输出由 task_completed 通知卡片承载
+    // （对齐 TUI 的 bg_tool_call_to_task 引流）。
+    if (!turn.tools.has(callId)) return
+    // 仍在当前 turn：只放行终态补全（如 completed 后补 content），拦非终态复活
+    if (incomingStatus !== 'completed' && incomingStatus !== 'error') return
   }
   const messageId = ensureAssistant(sessionId, turn)
   let rec = turn.tools.get(callId)
@@ -990,7 +966,10 @@ function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<str
  * cron 定时任务的 prompt 例外——剥掉 reminder 框架后返回真正的用户 prompt。
  * 返回 null 表示整块隐藏。
  */
-function visibleUserChunkText(content: unknown, text: string): string | null {
+function visibleUserChunkText(content: unknown, text: string, updateMeta?: unknown): string | null {
+  if (isRecord(updateMeta) && updateMeta.hideFromScrollback === true) {
+    return null
+  }
   if (isRecord(content) && isRecord(content._meta) && content._meta.hideFromScrollback === true) {
     return null
   }
@@ -1012,11 +991,11 @@ function visibleUserChunkText(content: unknown, text: string): string | null {
   return text
 }
 
-function handleUserMessageChunk(sessionId: string, turn: TurnState, content: unknown) {
+function handleUserMessageChunk(sessionId: string, turn: TurnState, content: unknown, updateMeta?: unknown) {
   const rawText = contentBlockText(content)
   // 唤醒轮识别须在 promptInFlight 早退之前：wake chunk 不是本地 prompt 回显，
   // 且 RPC settle 与通知帧存在边缘竞态，提前检测更稳。
-  const wakeTaskId = detectWakeTaskId(content, rawText)
+  const wakeTaskId = detectWakeTaskId(content, updateMeta, rawText)
   if (wakeTaskId) {
     beginWakeTurn(sessionId, turn, wakeTaskId, rawText)
     return
@@ -1025,7 +1004,7 @@ function handleUserMessageChunk(sessionId: string, turn: TurnState, content: unk
   // 本地发出的 prompt 已经合成过 user 消息，忽略回显
   if (turn.promptInFlight) return
 
-  const text = visibleUserChunkText(content, rawText)
+  const text = visibleUserChunkText(content, rawText, updateMeta)
   if (text === null) return
   // 历史回放：user chunk 开启新回合
   if (turn.assistantId) {
@@ -1088,38 +1067,25 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
   switch (update.sessionUpdate) {
     case 'agent_message_chunk': {
       turn.replayUser = null
-      if (turn.wakeTaskId) {
-        // 唤醒轮输出折进通知卡片，不建 assistant 消息
-        appendWakeText(sessionId, turn, contentBlockText(update.content), 'text')
-        break
-      }
       handleAgentText(sessionId, turn, contentBlockText(update.content), 'text')
       break
     }
     case 'user_message_chunk': {
-      handleUserMessageChunk(sessionId, turn, update.content)
+      // update 级 _meta 携带 hideFromScrollback（真实 wire 位置）
+      handleUserMessageChunk(sessionId, turn, update.content, update._meta)
       break
     }
     case 'agent_thought_chunk': {
       turn.replayUser = null
-      if (turn.wakeTaskId) {
-        appendWakeText(sessionId, turn, contentBlockText(update.content), 'reasoning')
-        break
-      }
       handleAgentText(sessionId, turn, contentBlockText(update.content), 'reasoning')
       break
     }
     case 'tool_call': {
       turn.replayUser = null
-      if (turn.wakeTaskId) {
-        handleWakeToolCall(sessionId, turn, update)
-        break
-      }
       handleToolCall(sessionId, turn, update)
       break
     }
     case 'tool_call_update': {
-      if (handleWakeToolCallUpdate(sessionId, turn, update)) break
       handleToolCallUpdate(sessionId, turn, update)
       break
     }
@@ -1140,24 +1106,33 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       break
     }
     case 'turn_completed': {
-      // turn 结束（含被取消的 turn）。
-      // 唤醒轮：closeWake 收敛 wake tools + 定稿状态（cancelled = 被插队打断）。
-      // 普通轮：把仍在转圈的工具卡片收敛到取消态。
+      // turn 结束（含被取消的 turn）：把仍在转圈的工具卡片收敛到取消态。
       // finalizeTurn 复位 assistantId/wakeTaskId：后端驱动的 turn（前端无
       // promptInFlight，不走 acpPrompt 收尾）结束后不复位的话，后续空闲期的
       // task_completed 会被误判 busy 而滞留缓冲。随后 flush 缓冲的完成通知。
       const promptId = typeof update.prompt_id === 'string' ? update.prompt_id : ''
-      const stopReason = typeof update.stop_reason === 'string' ? update.stop_reason : ''
-      if (turn.wakeTaskId) {
-        closeWake(sessionId, turn, stopReason)
-      } else if (promptId.startsWith('task-completed-')) {
-        // 唤醒轮识别失败（reminder 文案漂移？）——内容已按普通消息平铺渲染，
-        // 不做事后搬移，仅诊断
+      if (!turn.wakeTaskId && promptId.startsWith('task-completed-')) {
+        // 唤醒轮识别失败（reminder 文案漂移？）——内容已按普通消息渲染，
+        // 只是缺"后台任务自动回复"标识。hold 中的通知卡永远等不到注入，
+        // flush 为独立卡（内容不丢），并留诊断
         console.warn('[ACP] wake turn 未被识别，已按普通消息渲染:', promptId)
+        const taskId = promptId.slice('task-completed-'.length)
+        const record = getTaskNotifRecord(sessionId, taskId)
+        if (record && record.placement === null) {
+          record.data.willWake = false
+          emitTaskNotification(sessionId, record)
+        }
       }
+      const wasWake = turn.wakeTaskId != null
       cancelDanglingTools(sessionId, turn)
       finalizeTurn(turn)
       flushPendingTaskNotifications(sessionId)
+      if (wasWake && !turn.promptInFlight) {
+        // 后端驱动的唤醒轮没有 acpPrompt settle 路径——这里补发 idle，
+        // 让 messageStore 给 msg_wake_ 消息定稿（补 time.completed、退 streaming）
+        emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
+        emit('session.idle', { sessionID: sessionId }, sessionId)
+      }
       break
     }
     case 'model_changed': {
@@ -1236,28 +1211,37 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       break
     }
     case 'task_completed': {
-      // 后台任务完成 → 独立系统消息（不内联进当前 assistant 消息）。
-      // wire 形态（x.ai/task_completed 帧）：update.task_snapshot 为 TaskSnapshot
-      // （snake_case：task_id / command / exit_code / signal…）。
-      // streaming 期间缓冲（前端发起的 turn：promptInFlight；后端 wake turn：
-      // assistantId 或 wakeTaskId 置位），idle 时机 flush 到消息流末尾；
-      // 回放窗口内一律立即渲染以保持历史位置。
+      // 后台任务完成（x.ai/task_completed 帧，update.task_snapshot 为 snake_case
+      // TaskSnapshot）。分流：
+      // - will_wake=true → hold：只存 registry，等唤醒轮把卡片作为 wake 消息的
+      //   第一个 part 注入（beginWakeTurn）。唤醒被取消的兜底见
+      //   demoteHeldTaskNotifications / turn_completed 识别失败分支。
+      // - will_wake=false → 独立系统消息：streaming 期间缓冲，idle 时机 flush
+      //   到消息流末尾；回放窗口内一律立即渲染以保持历史位置。
       const t = update as Record<string, unknown>
       const snap = isRecord(t.task_snapshot) ? t.task_snapshot : undefined
       const n = parseTaskNotification(t, snap)
       const existing = getTaskNotifRecord(sessionId, n.taskId)
       const record: TaskNotifRecord = existing
         ? { ...existing, data: n }
-        : { data: n, wake: null, emitted: false }
+        : { data: n, placement: null }
       setTaskNotifRecord(sessionId, n.taskId, record)
+      if (record.placement === 'wake' && record.wakeMessageId) {
+        // 已并入 wake 消息（双路帧重复投递）：重发 part 刷新数据
+        emitWakeNotificationPart(sessionId, record.wakeMessageId, record)
+        break
+      }
+      if (n.willWake && record.placement === null) {
+        break // hold：等唤醒轮注入（回放流里 wake chunk 紧随其后，同样 hold）
+      }
       const busy = turn.promptInFlight || turn.assistantId != null || turn.wakeTaskId != null
       if (busy && !replayingSessions.has(sessionId)) {
-        if (!record.emitted) {
+        if (record.placement === null) {
           let list = pendingTaskNotifications.get(sessionId)
           if (!list) pendingTaskNotifications.set(sessionId, (list = []))
           if (!list.includes(n.taskId)) list.push(n.taskId)
         } else {
-          // 已渲染（双路帧重复投递）：直接重发刷新数据
+          // 已渲染独立卡（双路帧重复投递）：直接重发刷新数据
           emitTaskNotification(sessionId, record)
         }
       } else {
@@ -1387,7 +1371,6 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
   const prior = pendingPrompts.get(sessionId)
   if (prior) await prior
 
-  const turn = getTurn(sessionId)
   const now = Date.now()
 
   // ACP 的模型是会话级状态：所选模型与会话当前模型不一致时先切换
@@ -1407,11 +1390,11 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
 
   // 合成 user 消息（ACP 不回显在途 prompt）
   const userMessageId = newId('msg_u')
-  turn.lastUserMessageId = userMessageId
-  turn.assistantId = null
-  turn.textPartId = null
-  turn.reasoningPartId = null
-  turn.promptInFlight = true
+  prepareTurnForPrompt(sessionId, userMessageId)
+
+  // genuine user prompt 会让后端消费掉 deferred completion、唤醒轮不再发生——
+  // hold 中的通知（等唤醒轮注入的）降级进缓冲，本回合结束后 flush 为独立卡
+  demoteHeldTaskNotifications(sessionId)
 
   // 先设 streaming（在发 prompt 之前），避免 prompt 响应先到时 idle 被后到的 setStreaming 覆盖
   const { messageStore } = await import('../store/messageStore')
@@ -1437,24 +1420,16 @@ export async function acpPrompt(params: AcpPromptParams): Promise<void> {
   const settled = client.rpc
     .request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] })
     .then(() => {
-      turn.promptInFlight = false
-      cancelDanglingTools(sessionId, turn)
-      finalizeTurn(turn)
-      flushPendingTaskNotifications(sessionId)
-      emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
-      emit('session.idle', { sessionID: sessionId }, sessionId)
+      settlePromptTurn(sessionId)
     })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
-      turn.promptInFlight = false
-      cancelDanglingTools(sessionId, turn)
-      finalizeTurn(turn)
-      flushPendingTaskNotifications(sessionId)
+      // 错误路径同样复用 settle（含 wake 竞态守卫）；仅额外广播错误提示。
+      settlePromptTurn(sessionId)
       // 在 UI 中显示错误消息
       import('../store/messageStore').then(({ messageStore }) => {
         messageStore.setLoadError(sessionId, { name: 'APIError', data: { message: msg, isRetryable: true, metadata: { errorType: 'prompt_failure' } } })
       })
-      emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
       emit(
         'session.error',
         { sessionID: sessionId, name: 'UnknownError', data: { message: msg } },

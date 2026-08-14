@@ -137,9 +137,7 @@
     "signal": "signal {{signal}}",
     "noOutput": "No output",
     "truncated": "Output truncated — full output at {{file}}",
-    "wakeTitle": "Agent response",
-    "wakeStreaming": "Agent responding…",
-    "wakeCancelled": "Interrupted"
+    "wakeReplyLabel": "Auto reply to background task"
   },
   "subtask": {
     "running": "Running",
