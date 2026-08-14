@@ -312,6 +312,9 @@ export function useGlobalEvents(directories?: string[]) {
       }) as EventListener)
 
       // 3. exit_plan_mode — 检查 [ui] yolo 配置，yolo=true 则自动批准
+      // wire 协议（exit_plan_mode/types.rs）：请求 { sessionId, toolCallId, planContent }，
+      // 响应 { outcome: "approved"|"cancelled"|"abandoned", feedback? }。
+      // 未知 outcome 后端按 Cancelled 失败关闭处理，必须回真实 outcome。
       window.addEventListener('acp:exitPlanMode', ((e: CustomEvent) => {
         const { params, respond } = e.detail as { params: Record<string, unknown>; respond: (r: Record<string, unknown>) => void }
         // 读取 yolo 配置（缓存友好，第一次 fetch 后续用缓存）
@@ -323,21 +326,17 @@ export function useGlobalEvents(directories?: string[]) {
             : false
           if (yolo) {
             // YOLO 模式：自动批准，不弹窗
-            respond({ approved: true })
+            respond({ outcome: 'approved' })
             return
           }
-          // 非 YOLO：弹审批窗口
-          const entries = (Array.isArray(params?.entries) ? params.entries : []) as Record<string, unknown>[]
+          // 非 YOLO：弹审批窗口（展示 plan.md 全文）
+          const planContent = typeof params?.planContent === 'string' ? params.planContent : null
           import('../store/planApprovalStore').then(({ setPlanApprovalRequest }) => {
             setPlanApprovalRequest({
-              entries: entries.map(e => ({
-                content: typeof e.content === 'string' ? e.content : '',
-                status: typeof e.status === 'string' ? e.status : 'pending',
-                priority: typeof e.priority === 'string' ? e.priority : undefined,
-              })),
+              planContent,
               respond: result => {
                 setPlanApprovalRequest(null)
-                respond(result as Record<string, unknown>)
+                respond(result as unknown as Record<string, unknown>)
               },
             })
           })

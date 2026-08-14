@@ -67,6 +67,16 @@
     "minimize": "Minimize",
     "typeYourAnswer": "Type your own answer..."
   },
+  "planApproval": {
+    "title": "Plan Approval",
+    "subtitle": "Review the plan before implementation",
+    "emptyPlan": "The model wrote no plan content and is asking to exit plan mode and start implementing.",
+    "approve": "Approve & implement",
+    "requestChanges": "Request changes",
+    "sendFeedback": "Send feedback",
+    "feedbackPlaceholder": "Tell the model how to revise the plan… (leave empty to let it ask)",
+    "abandon": "Abandon plan"
+  },
   "permissionDialog": {
     "permission": "Permission: {{permission}}",
     "moreCount": "+{{count}} more",

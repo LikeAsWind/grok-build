@@ -1,95 +1,153 @@
 // ============================================
 // PlanApprovalModal — Plan 审批弹窗
 //
-// 模型进入 plan 模式后请求退出执行时展示。
+// 模型进入 plan 模式后请求退出执行时展示 plan.md 全文供审阅。
 // 如果 [ui] yolo = true，useGlobalEvents 会自动批准，不弹此窗。
+// 响应协议（exit_plan_mode/types.rs）：
+//   approved  — 批准，开始实现
+//   cancelled — 要求修改（可带 feedback），回到计划模式
+//   abandoned — 放弃计划，退出计划模式
 // ============================================
 
-import { memo, useState, useSyncExternalStore } from 'react'
-import { getPlanApprovalRequest, subscribePlanApproval, type PlanEntry } from '../../store/planApprovalStore'
-
-const STATUS_LABEL: Record<string, string> = {
-  completed: '已完成',
-  in_progress: '进行中',
-  pending: '待处理',
-}
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
+import { getPlanApprovalRequest, subscribePlanApproval } from '../../store/planApprovalStore'
+import { MarkdownRenderer } from '../../components'
 
 const PlanApprovalModal = memo(function PlanApprovalModal() {
+  const { t } = useTranslation('chat')
   const request = useSyncExternalStore(subscribePlanApproval, getPlanApprovalRequest)
   const [responding, setResponding] = useState(false)
+  const [feedbackMode, setFeedbackMode] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const feedbackRef = useRef<HTMLTextAreaElement>(null)
+
+  // 新请求到达时复位内部状态
+  const requestRef = useRef(request)
+  useEffect(() => {
+    if (request !== requestRef.current) {
+      requestRef.current = request
+      setResponding(false)
+      setFeedbackMode(false)
+      setFeedback('')
+    }
+  }, [request])
+
+  useEffect(() => {
+    if (feedbackMode) feedbackRef.current?.focus()
+  }, [feedbackMode])
+
+  // 键盘：Enter 批准 / Esc 收起反馈框（反馈框内不劫持 Enter）
+  useEffect(() => {
+    if (!request) return
+    const onKey = (e: KeyboardEvent) => {
+      if (responding) return
+      if (e.key === 'Enter' && !feedbackMode && !e.shiftKey && !e.isComposing) {
+        e.preventDefault()
+        setResponding(true)
+        request.respond({ outcome: 'approved' })
+      } else if (e.key === 'Escape' && feedbackMode) {
+        e.preventDefault()
+        setFeedbackMode(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [request, responding, feedbackMode])
 
   if (!request) return null
 
   const handleApprove = () => {
     setResponding(true)
-    request.respond({ approved: true })
+    request.respond({ outcome: 'approved' })
   }
 
-  const handleReject = () => {
+  const handleRequestChanges = () => {
     setResponding(true)
-    request.respond({ approved: false })
+    request.respond({ outcome: 'cancelled', feedback: feedback.trim() || undefined })
+  }
+
+  const handleAbandon = () => {
+    setResponding(true)
+    request.respond({ outcome: 'abandoned' })
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-border-200 bg-bg-100 shadow-2xl">
+      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border-200 bg-bg-100 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border-100 px-5 py-4">
           <h2 className="text-[length:var(--fs-lg)] font-semibold text-text-100">
-            计划审批
+            {t('planApproval.title')}
           </h2>
+          <span className="text-[length:var(--fs-sm)] text-text-400">{t('planApproval.subtitle')}</span>
         </div>
 
-        {/* Plan steps */}
-        <div className="max-h-64 overflow-y-auto px-5 py-4">
-          {request.entries.length === 0 ? (
-            <p className="text-[length:var(--fs-sm)] text-text-200">
-              模型请求退出计划模式并开始执行。
-            </p>
+        {/* Plan content — plan.md 全文 */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {request.planContent ? (
+            <MarkdownRenderer content={request.planContent} />
           ) : (
-            <ul className="space-y-2">
-              {request.entries.map((e: PlanEntry, i: number) => (
-                <li key={i} className="flex items-start gap-2 text-[length:var(--fs-sm)]">
-                  <span className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                    e.status === 'completed' ? 'bg-green-500'
-                      : e.status === 'in_progress' ? 'bg-blue-500'
-                      : 'bg-text-300'
-                  }`} />
-                  <span className="text-text-100">{e.content}</span>
-                  {e.status && STATUS_LABEL[e.status] && (
-                    <span className="shrink-0 rounded bg-bg-200 px-1.5 py-0.5 text-[length:var(--fs-xs)] text-text-400">
-                      {STATUS_LABEL[e.status]}
-                    </span>
-                  )}
-                  {e.priority && (
-                    <span className="shrink-0 rounded bg-bg-200 px-1.5 py-0.5 text-[length:var(--fs-xs)] text-text-300">
-                      {e.priority}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <p className="text-[length:var(--fs-sm)] text-text-200">
+              {t('planApproval.emptyPlan')}
+            </p>
           )}
         </div>
 
+        {/* Feedback input（要求修改时展开） */}
+        {feedbackMode && (
+          <div className="border-t border-border-100 px-5 py-3">
+            <textarea
+              ref={feedbackRef}
+              value={feedback}
+              onChange={e => setFeedback(e.target.value)}
+              placeholder={t('planApproval.feedbackPlaceholder')}
+              rows={3}
+              className="w-full resize-none rounded-md border border-border-200 bg-bg-000 px-3 py-2 text-[length:var(--fs-sm)] text-text-100 placeholder:text-text-500 focus:border-accent-main-100 focus:outline-none"
+            />
+          </div>
+        )}
+
         {/* Actions */}
-        <div className="flex justify-end gap-3 border-t border-border-100 px-5 py-4">
+        <div className="flex items-center justify-between gap-3 border-t border-border-100 px-5 py-4">
           <button
             type="button"
             disabled={responding}
-            onClick={handleReject}
-            className="rounded-md border border-border-200 px-4 py-2 text-[length:var(--fs-sm)] text-text-200 transition-colors hover:bg-bg-200 disabled:opacity-50"
+            onClick={handleAbandon}
+            className="rounded-md px-3 py-2 text-[length:var(--fs-sm)] text-text-400 transition-colors hover:text-danger-100 disabled:opacity-50"
           >
-            拒绝
+            {t('planApproval.abandon')}
           </button>
-          <button
-            type="button"
-            disabled={responding}
-            onClick={handleApprove}
-            className="rounded-md bg-primary-600 px-4 py-2 text-[length:var(--fs-sm)] text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
-            同意并执行
-          </button>
+          <div className="flex gap-3">
+            {feedbackMode ? (
+              <button
+                type="button"
+                disabled={responding}
+                onClick={handleRequestChanges}
+                className="rounded-md border border-border-200 px-4 py-2 text-[length:var(--fs-sm)] text-text-200 transition-colors hover:bg-bg-200 disabled:opacity-50"
+              >
+                {t('planApproval.sendFeedback')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={responding}
+                onClick={() => setFeedbackMode(true)}
+                className="rounded-md border border-border-200 px-4 py-2 text-[length:var(--fs-sm)] text-text-200 transition-colors hover:bg-bg-200 disabled:opacity-50"
+              >
+                {t('planApproval.requestChanges')}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={responding}
+              onClick={handleApprove}
+              className="rounded-md bg-text-100 px-4 py-2 text-[length:var(--fs-sm)] font-medium text-bg-000 transition-colors hover:bg-text-200 disabled:opacity-50"
+            >
+              {t('planApproval.approve')}
+              <span className="ml-2 text-[length:var(--fs-xs)] opacity-70">⏎</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

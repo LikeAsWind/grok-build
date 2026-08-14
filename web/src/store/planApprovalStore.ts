@@ -3,19 +3,16 @@
 //
 // 后端 x.ai/exit_plan_mode 到达时存入 pending 请求，
 // PlanApprovalModal 消费并调用 respond 回传。
+// wire 协议见 exit_plan_mode/types.rs：
+// 请求 { sessionId, toolCallId, planContent }，
+// 响应 { outcome: "approved"|"cancelled"|"abandoned", feedback? }。
 // ============================================
 
 export interface PlanApprovalRequest {
-  /** Plan 步骤列表 */
-  entries: PlanEntry[]
+  /** 计划全文（markdown，来自 plan.md）；后端可能为空 */
+  planContent: string | null
   /** 回传审批结果的回调 */
-  respond: (result: { approved: boolean }) => void
-}
-
-export interface PlanEntry {
-  content: string
-  status: string
-  priority?: string
+  respond: (result: { outcome: 'approved' | 'cancelled' | 'abandoned'; feedback?: string }) => void
 }
 
 type Listener = () => void

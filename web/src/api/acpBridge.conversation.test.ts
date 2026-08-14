@@ -280,7 +280,7 @@ describe('Web 对话交互全量可用性', () => {
 
     let approvalResult: unknown = null
     setPlanApprovalRequest({
-      entries: [{ content: '改三个文件', status: 'pending' }],
+      planContent: '# 计划\n\n改三个文件',
       respond: r => {
         approvalResult = r
         setPlanApprovalRequest(null)
@@ -289,10 +289,10 @@ describe('Web 对话交互全量可用性', () => {
 
     const req = getPlanApprovalRequest()
     expect(req).not.toBeNull()
-    expect(req!.entries[0].content).toBe('改三个文件')
+    expect(req!.planContent).toContain('改三个文件')
 
-    req!.respond({ approved: true })
-    expect(approvalResult).toEqual({ approved: true })
+    req!.respond({ outcome: 'approved' })
+    expect(approvalResult).toEqual({ outcome: 'approved' })
     expect(getPlanApprovalRequest()).toBeNull()
     expect(notified).toBeGreaterThanOrEqual(2)
     unsub()
