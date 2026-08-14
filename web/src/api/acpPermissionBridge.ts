@@ -52,7 +52,8 @@ export function mapAcpPermissionToApi(params: Record<string, unknown>): ApiPermi
   const tool = typeof tc.title === 'string' ? tc.title : 'unknown'
   const args = isRecord(tc.rawInput) ? tc.rawInput : (isRecord(tc.raw_input) ? tc.raw_input : {})
   const options = Array.isArray(params.options) ? params.options : []
-  const id = String(params.permissionId ?? params.permission_id ?? tc.toolCallId ?? tc.tool_call_id ?? `perm-${sessionId}-${Date.now()}`)
+  const toolCallId = String(tc.toolCallId ?? tc.tool_call_id ?? '')
+  const id = String(params.permissionId ?? params.permission_id ?? (toolCallId || `perm-${sessionId}-${Date.now()}`))
   return {
     id,
     sessionID: sessionId,
@@ -60,6 +61,8 @@ export function mapAcpPermissionToApi(params: Record<string, unknown>): ApiPermi
     permission: tool,
     patterns: [title],
     args,
+    // 内嵌权限 UI 按 tool.callID 关联工具卡片（findPermissionRequestForTool）
+    ...(toolCallId ? { tool: { callID: toolCallId, messageID: '' } } : {}),
     options: options
       .map((o: unknown) => ({
         id: isRecord(o) ? String(o.optionId ?? o.option_id ?? '') : '',

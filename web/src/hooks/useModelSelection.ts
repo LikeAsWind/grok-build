@@ -14,6 +14,7 @@ import {
 } from '../utils/modelUtils'
 import { serverStorage } from '../utils/perServerStorage'
 import { STORAGE_KEY_SELECTED_MODEL } from '../constants'
+import { getCurrentAcpModelId } from '../api/acpBridge'
 
 interface UseModelSelectionOptions {
   models: ModelInfo[]
@@ -59,7 +60,13 @@ export function useModelSelection({ models, sessionId = null }: UseModelSelectio
   const skipPersistenceRef = useRef<string | null>(null)
 
   const persistedModel = selectedModelKey ? findModelByKey(models, selectedModelKey) : undefined
-  const currentModel = useMemo(() => persistedModel ?? models[0], [models, persistedModel])
+  // 无持久化选择时回退到后端解析的默认模型（config.toml [models] default），
+  // 而不是 models[0]——列表顺序与配置默认值无关
+  const currentModel = useMemo(() => {
+    if (persistedModel) return persistedModel
+    const backendCurrent = getCurrentAcpModelId()
+    return models.find(m => m.id === backendCurrent) ?? models[0]
+  }, [models, persistedModel])
   const resolvedModelKey = currentModel ? getModelKey(currentModel) : null
   const resolvedSelectedVariant = useMemo(() => {
     if (!resolvedModelKey) return undefined
