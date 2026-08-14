@@ -38,6 +38,8 @@ export interface ConfigFieldDef {
   mono?: boolean
   /** 自由输入的补全建议（datalist） */
   suggestions?: string[]
+  /** bool 取反显示（如 [ui] yolo 反向呈现为"询问权限"）；default 按显示语义填写 */
+  invert?: boolean
 }
 
 export type ReloadKind = 'models' | 'mcp' | 'skills'
@@ -51,6 +53,8 @@ export interface ConfigSectionDef {
   hot?: boolean
   /** 保存后需要触发的后端重载方法 */
   reload?: ReloadKind
+  /** 保存后额外发的运行时通知（permission_mode = x.ai/yolo_mode_changed，存活会话立即生效） */
+  notify?: 'permission_mode'
   fields: ConfigFieldDef[]
   /** 折叠的高级/低频字段 */
   advanced?: ConfigFieldDef[]
@@ -136,7 +140,6 @@ export const CONFIG_GROUPS: ConfigGroupDef[] = [
         title: '功能开关',
         desc: '各项功能的总开关（🔥 保存即生效，新会话可见）',
         fields: [
-          b('support_permission', '工具执行前询问权限', 'false'),
           b('codebase_indexing', '代码库索引 (CodeGraph)', 'true'),
           b('web_fetch', '网页抓取工具', 'true'),
           b('web_search', '网络搜索工具 (Responses API)', 'true'),
@@ -237,6 +240,30 @@ export const CONFIG_GROUPS: ConfigGroupDef[] = [
     id: 'permission',
     title: '权限',
     sections: [
+      {
+        id: 'ui',
+        title: '权限模式',
+        desc: '工具执行的确认策略（🔥 保存立即生效，含当前会话）',
+        hot: true,
+        notify: 'permission_mode',
+        fields: [
+          {
+            key: 'yolo',
+            label: '工具执行前询问权限',
+            type: 'bool',
+            invert: true,
+            default: 'true',
+            desc: '关闭 = 全部自动批准（YOLO）。开启时安全命令（ls/cat 等）仍自动放行，危险/未知命令弹窗确认',
+          },
+          {
+            key: 'remember_tool_approvals',
+            label: '记住工具批准',
+            type: 'bool',
+            default: 'false',
+            desc: '弹窗显示"总是允许 xxx"细粒度选项，批准后同命令不再询问（按工作目录记忆，新会话生效）',
+          },
+        ],
+      },
       {
         id: 'permission',
         title: '权限规则',
@@ -540,7 +567,7 @@ export const OPAQUE_SECTIONS = new Set([
   'marketplace', 'desktop', 'dashboard', 'tips', 'announcements', 'campaigns',
   'slash_command_tags', 'version_overrides', 'hints', 'privacy', 'feedback',
   'harness', 'paths', 'repo_changes_dedup', 'worktree_pool', 'auto_mode',
-  'ui', 'agent', 'disabled_mcp_servers', 'disabled_mcp_tools',
+  'agent', 'disabled_mcp_servers', 'disabled_mcp_tools',
 ])
 
 /** 已被 schema 覆盖的顶层 section 名（其余视为未知/只读） */

@@ -1469,3 +1469,9 @@ export async function acpExtRequest(method: string, params?: unknown): Promise<u
   if (isRecord(raw) && 'result' in raw) return raw.result
   return raw
 }
+
+/** ACP 扩展通知（fire-and-forget，如 x.ai/yolo_mode_changed 运行时权限模式切换） */
+export async function acpExtNotify(method: string, params?: unknown): Promise<void> {
+  const client = await ensureAcp()
+  client.extNotify(method, params ?? {})
+}

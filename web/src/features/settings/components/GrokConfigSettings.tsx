@@ -46,6 +46,22 @@ async function afterSaveReload(reload: ReloadKind | undefined) {
   }
 }
 
+/**
+ * 权限模式运行时通知：写盘只影响新会话（default_yolo_mode 在会话启动时解析），
+ * 存活会话经 x.ai/yolo_mode_changed 立即切换（后端遍历 resident sessions
+ * 发 SetYoloMode/SetAutoMode）。yolo 语义：true = 全部自动批准。
+ * 仅在 yolo 实际变化时发（避免只改同区其他字段时误清 auto mode）。
+ */
+async function notifyPermissionMode(original: SectionDraft, draft: SectionDraft) {
+  if ((original['yolo'] ?? '') === (draft['yolo'] ?? '')) return
+  const yolo = draft['yolo'] === 'true'
+  const { acpExtNotify } = await import('../../../api/acpBridge')
+  await acpExtNotify('x.ai/yolo_mode_changed', {
+    yolo_mode: yolo,
+    permission_mode: yolo ? 'always-approve' : 'ask',
+  }).catch(() => {}) // 通知失败不阻塞保存（新会话仍按写盘配置生效）
+}
+
 /** 从 parsed 构建 section 草稿；复杂值（形状不符）记入 complexKeys */
 function buildSectionDraft(
   parsed: Record<string, unknown> | undefined,
@@ -126,6 +142,7 @@ function SectionCard({
       if ((ops.set?.length ?? 0) + (ops.delete?.length ?? 0) > 0) {
         await patchGrokConfig(ops)
         await afterSaveReload(section.reload)
+        if (section.notify === 'permission_mode') await notifyPermissionMode(original, draft)
       }
       onSaved()
     } catch (err) {

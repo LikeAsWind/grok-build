@@ -288,8 +288,13 @@ export function ConfigFieldControl({
   }
 
   switch (def.type) {
-    case 'bool':
-      return <Toggle value={value as string} defaultValue={def.default} onChange={onChange} />
+    case 'bool': {
+      if (!def.invert) return <Toggle value={value as string} defaultValue={def.default} onChange={onChange} />
+      // 取反显示：TOML 存 true = 开关关（如 [ui] yolo=true 呈现为"询问权限"关闭）
+      const raw = value as string
+      const flipped = raw === 'true' ? 'false' : raw === 'false' ? 'true' : ''
+      return <Toggle value={flipped} defaultValue={def.default} onChange={v => onChange(v === 'true' ? 'false' : 'true')} />
+    }
     case 'enum':
       return (
         <SelectField
