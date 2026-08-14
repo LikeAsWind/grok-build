@@ -5,21 +5,37 @@
 // ============================================
 
 import type { ApiPermissionRequest, ApiQuestionRequest } from './types'
+import type { PermissionOptionInfo } from '../types/api/permission'
 
-// ── 应答回调注册（请求 ID → ACP respond 函数）─────────────────────────
+// ── 应答回调注册（请求 ID → ACP respond 函数 + 后端下发的选项）──────────
 
-const respondCallbacks = new Map<string, (response: Record<string, unknown>) => void>()
+interface PendingAcpResponder {
+  respond: (response: Record<string, unknown>) => void
+  /** 后端 prompter 下发的选项；replyPermission 据此把语义值解析成真实 optionId */
+  options: PermissionOptionInfo[]
+}
 
-/** 注册 ACP 应答回调 */
-export function registerAcpResponder(requestId: string, respond: (r: Record<string, unknown>) => void) {
-  respondCallbacks.set(requestId, respond)
+const respondCallbacks = new Map<string, PendingAcpResponder>()
+
+/** 注册 ACP 应答回调（options 供语义 reply 解析 optionId，回包须原样回显） */
+export function registerAcpResponder(
+  requestId: string,
+  respond: (r: Record<string, unknown>) => void,
+  options: PermissionOptionInfo[] = [],
+) {
+  respondCallbacks.set(requestId, { respond, options })
+}
+
+/** 查看待应答请求的选项列表（不消费；消费前调用） */
+export function peekAcpPermissionOptions(requestId: string): PermissionOptionInfo[] {
+  return respondCallbacks.get(requestId)?.options ?? []
 }
 
 /** 取回并消费 ACP 应答回调 */
 export function consumeAcpResponder(requestId: string): ((r: Record<string, unknown>) => void) | null {
-  const fn = respondCallbacks.get(requestId) ?? null
+  const entry = respondCallbacks.get(requestId) ?? null
   respondCallbacks.delete(requestId)
-  return fn
+  return entry?.respond ?? null
 }
 
 // ── 数据映射 ───────────────────────────────────────────────────
@@ -44,11 +60,13 @@ export function mapAcpPermissionToApi(params: Record<string, unknown>): ApiPermi
     permission: tool,
     patterns: [title],
     args,
-    options: options.map((o: unknown) => ({
-      id: isRecord(o) ? String(o.optionId ?? o.option_id ?? '') : '',
-      name: isRecord(o) ? String(o.name ?? '') : '',
-      kind: isRecord(o) ? String(o.kind ?? 'allow_once') : 'allow_once',
-    })),
+    options: options
+      .map((o: unknown) => ({
+        id: isRecord(o) ? String(o.optionId ?? o.option_id ?? '') : '',
+        name: isRecord(o) ? String(o.name ?? '') : '',
+        kind: isRecord(o) ? String(o.kind ?? 'allow_once') : 'allow_once',
+      }))
+      .filter(o => o.id !== ''),
   } as unknown as ApiPermissionRequest
 }
 

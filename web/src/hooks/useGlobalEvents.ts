@@ -291,7 +291,7 @@ export function useGlobalEvents(directories?: string[]) {
         const { params, respond } = e.detail as { params: Record<string, unknown>; respond: (r: Record<string, unknown>) => void }
         const mapped = mapAcpPermissionToApi(params)
         if (!mapped) return
-        registerAcpResponder(mapped.id, respond)
+        registerAcpResponder(mapped.id, respond, mapped.options ?? [])
         dispatchToConsumers(mapped.sessionID, cb => cb.onPermissionAsked?.(mapped))
         // 兜底：没有匹配的消费者时，通知所有注册的消费者
         if (!hasConsumerForSession(mapped.sessionID)) {

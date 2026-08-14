@@ -211,6 +211,50 @@ describe('Web 对话交互全量可用性', () => {
     expect(consumeAcpResponder(mapped!.id)).toBeNull()
   })
 
+  it('replyPermission 把语义 reply 解析成后端下发的真实 optionId', async () => {
+    const { replyPermission } = await import('./permission')
+    const options = [
+      { optionId: 'always-allow', name: 'always allow', kind: 'allow_always' },
+      { optionId: 'allow-once', name: 'allow once', kind: 'allow_once' },
+      { optionId: 'reject-once', name: 'reject once', kind: 'reject_once' },
+    ]
+    const cases: Array<['once' | 'always' | 'reject', string]> = [
+      ['once', 'allow-once'],
+      ['always', 'always-allow'],
+      ['reject', 'reject-once'],
+    ]
+    for (const [reply, expectedId] of cases) {
+      const mapped = mapAcpPermissionToApi({
+        sessionId: SID,
+        permissionId: `perm-${reply}`,
+        toolCall: { toolCallId: `tc-${reply}`, title: 'bash', rawInput: {} },
+        options,
+      })
+      let replied: Record<string, unknown> | null = null
+      registerAcpResponder(mapped!.id, r => { replied = r }, mapped!.options ?? [])
+      await replyPermission(mapped!.id, reply)
+      // 拒绝也是 selected + reject-once（cancelled 语义是"取消提问"，非用户拒绝）
+      expect(replied).toEqual({ outcome: { outcome: 'selected', optionId: expectedId } })
+    }
+  })
+
+  it('replyPermission 直接携带 optionId（动态按钮路径）原样回显', async () => {
+    const { replyPermission } = await import('./permission')
+    const mapped = mapAcpPermissionToApi({
+      sessionId: SID,
+      permissionId: 'perm-dynamic',
+      toolCall: { toolCallId: 'tc-dyn', title: 'bash', rawInput: {} },
+      options: [
+        { optionId: 'allow-always-command', name: 'Always allow: git push', kind: 'allow_always' },
+        { optionId: 'allow-once', name: 'Yes, proceed', kind: 'allow_once' },
+      ],
+    })
+    let replied: Record<string, unknown> | null = null
+    registerAcpResponder(mapped!.id, r => { replied = r }, mapped!.options ?? [])
+    await replyPermission(mapped!.id, { optionId: 'allow-always-command' })
+    expect(replied).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-always-command' } })
+  })
+
   // ── 4. AskUserQuestion 弹窗数据链路 ─────────────────────────
 
   it('提问请求映射为 question.asked 格式', () => {

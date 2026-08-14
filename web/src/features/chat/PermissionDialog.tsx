@@ -6,6 +6,7 @@ import { ContentBlock } from '../../components'
 import { childSessionStore, autoApproveStore } from '../../store'
 import { usePresence } from '../../hooks'
 import { useChatViewport } from './chatViewport'
+import { sortPermissionOptions, permissionOptionTone, type PermissionOptionTone } from './permissionOptions'
 
 interface PermissionDialogProps {
   request: ApiPermissionRequest
@@ -16,6 +17,14 @@ interface PermissionDialogProps {
   currentSessionId?: string | null // 当前主 session ID，用于判断是否来自子 agent
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+}
+
+/** kind → 弹窗按钮样式（primary 实底主按钮 / secondary 描边 / muted 弱化 / danger 红） */
+const DIALOG_TONE_CLASS: Record<PermissionOptionTone, string> = {
+  primary: 'bg-text-100 text-bg-000 hover:bg-text-200 font-medium',
+  secondary: 'border border-border-200/50 text-text-100 hover:bg-bg-200',
+  muted: 'text-text-300 hover:bg-bg-200',
+  danger: 'text-danger-100/80 hover:bg-danger-100/10',
 }
 
 export function PermissionDialog({
@@ -52,6 +61,9 @@ export function PermissionDialog({
 
   // 判断是否是文件编辑类权限
   const isFileEdit = request.permission === 'edit' || request.permission === 'write'
+
+  // ACP 下发的动态选项；有则替代写死的三按钮，回包原样回显 optionId
+  const acpOptions = sortPermissionOptions(request.options ?? [])
 
   // 判断是否来自子 session
   const isFromChildSession = currentSessionId && request.sessionID !== currentSessionId
@@ -158,52 +170,74 @@ export function PermissionDialog({
 
             {/* Actions */}
             <div className="px-3 py-3 space-y-[6px]">
-              {/* Primary: Allow once */}
-              <button
-                onClick={() => onReply('once')}
-                disabled={isReplying}
-                className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg bg-text-100 text-bg-000 hover:bg-text-200 transition-colors font-medium text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <span>{isReplying ? t('common:sending') : t('permissionDialog.allowOnce')}</span>
-                {!isReplying && <ReturnIcon />}
-              </button>
+              {acpOptions.length > 0 ? (
+                <>
+                  {acpOptions.map(opt => {
+                    const tone = permissionOptionTone(opt.kind)
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => onReply({ optionId: opt.id })}
+                        disabled={isReplying}
+                        className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed ${DIALOG_TONE_CLASS[tone]}`}
+                      >
+                        <span>{isReplying && tone === 'primary' ? t('common:sending') : (opt.name || opt.id)}</span>
+                        {tone === 'primary' && !isReplying && <ReturnIcon />}
+                        {tone === 'muted' && <span className="text-[length:var(--fs-sm)] text-text-500">Esc</span>}
+                      </button>
+                    )
+                  })}
+                </>
+              ) : (
+                <>
+                  {/* Primary: Allow once */}
+                  <button
+                    onClick={() => onReply('once')}
+                    disabled={isReplying}
+                    className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg bg-text-100 text-bg-000 hover:bg-text-200 transition-colors font-medium text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span>{isReplying ? t('common:sending') : t('permissionDialog.allowOnce')}</span>
+                    {!isReplying && <ReturnIcon />}
+                  </button>
 
-              {/* Secondary: Always allow */}
-              <button
-                onClick={() => {
-                  if (autoApproveStore.enabled) {
-                    // 同时存 always + patterns，确保下次不管哪种格式都能命中
-                    const rulePatterns = [...(request.always || []), ...(request.patterns || [])]
-                    // 去重
-                    const unique = [...new Set(rulePatterns)]
-                    if (unique.length > 0) {
-                      autoApproveStore.addRules(request.sessionID, request.permission, unique)
-                      onAutoApprove?.(request.sessionID, request.permission, unique)
-                      onReply('once')
-                      return
-                    }
-                  }
-                  // fallback：发送 always 给后端
-                  onReply('always')
-                }}
-                disabled={isReplying}
-                className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg border border-border-200/50 text-text-100 hover:bg-bg-200 transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <span>{t('permissionDialog.alwaysAllow')}</span>
-                <span className="text-[length:var(--fs-sm)] text-text-400">
-                  {autoApproveStore.enabled ? t('permissionDialog.browserSession') : t('permissionDialog.thisSession')}
-                </span>
-              </button>
+                  {/* Secondary: Always allow */}
+                  <button
+                    onClick={() => {
+                      if (autoApproveStore.enabled) {
+                        // 同时存 always + patterns，确保下次不管哪种格式都能命中
+                        const rulePatterns = [...(request.always || []), ...(request.patterns || [])]
+                        // 去重
+                        const unique = [...new Set(rulePatterns)]
+                        if (unique.length > 0) {
+                          autoApproveStore.addRules(request.sessionID, request.permission, unique)
+                          onAutoApprove?.(request.sessionID, request.permission, unique)
+                          onReply('once')
+                          return
+                        }
+                      }
+                      // fallback：发送 always 给后端
+                      onReply('always')
+                    }}
+                    disabled={isReplying}
+                    className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg border border-border-200/50 text-text-100 hover:bg-bg-200 transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span>{t('permissionDialog.alwaysAllow')}</span>
+                    <span className="text-[length:var(--fs-sm)] text-text-400">
+                      {autoApproveStore.enabled ? t('permissionDialog.browserSession') : t('permissionDialog.thisSession')}
+                    </span>
+                  </button>
 
-              {/* Tertiary: Reject */}
-              <button
-                onClick={() => onReply('reject')}
-                disabled={isReplying}
-                className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-text-300 hover:bg-bg-200 transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <span>{t('common:reject')}</span>
-                <span className="text-[length:var(--fs-sm)] text-text-500">Esc</span>
-              </button>
+                  {/* Tertiary: Reject */}
+                  <button
+                    onClick={() => onReply('reject')}
+                    disabled={isReplying}
+                    className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-text-300 hover:bg-bg-200 transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span>{t('common:reject')}</span>
+                    <span className="text-[length:var(--fs-sm)] text-text-500">Esc</span>
+                  </button>
+                </>
+              )}
 
               <p className="text-[length:var(--fs-xs)] text-text-500 pt-1 px-1 leading-relaxed">
                 {autoApproveStore.enabled

@@ -21,6 +21,24 @@ export async function getPendingPermissions(_sessionId?: string, _directory?: st
 }
 
 /**
+ * 语义 reply → 后端下发 options 里对应 kind 的 optionId。
+ * 后端按 optionId 查表映射 outcome（查不到 = Error 拒绝执行），
+ * 因此必须回显真实 id，不能造。匹配不到时回退 kind 惯例 id
+ * （always-allow / allow-once / reject-once，对齐后端 fallback_options）。
+ */
+function resolveOptionId(reply: 'once' | 'always' | 'reject', options: Array<{ id: string; kind: string }>): string {
+  const kindOf = (kinds: string[]) => options.find(o => kinds.includes(o.kind))?.id
+  switch (reply) {
+    case 'always':
+      return kindOf(['allow_always']) ?? kindOf(['allow_once']) ?? 'always-allow'
+    case 'reject':
+      return kindOf(['reject_once']) ?? 'reject-once'
+    default:
+      return kindOf(['allow_once']) ?? 'allow-once'
+  }
+}
+
+/**
  * 回复权限请求
  * ACP 模式优先：检查是否有待处理的 respond 回调（来自 acp:requestPermission），
  * 有则直接回包给 ACP；无则走 REST（已 stub 安全返回）
@@ -33,21 +51,24 @@ export async function replyPermission(
   sessionId?: string,
 ): Promise<boolean> {
   // ACP 模式：检查待处理的 respond 回调
-  const { consumeAcpResponder } = await import('./acpPermissionBridge')
+  const { consumeAcpResponder, peekAcpPermissionOptions } = await import('./acpPermissionBridge')
+  const options = peekAcpPermissionOptions(requestId)
   const respond = consumeAcpResponder(requestId)
   if (respond) {
-    // reply: 'once' | 'always' | 'reject'
-    const outcomeId = reply === 'always' ? 'allow_always' : reply === 'reject' ? 'reject' : 'allow_once'
+    // 动态按钮直接携带 optionId；语义值（once/always/reject）解析成对应选项。
+    // 拒绝也走 selected + reject-once（cancelled 语义是"取消提问"，非用户拒绝）。
+    const optionId = typeof reply === 'object' ? reply.optionId : resolveOptionId(reply, options)
     respond({
       outcome: {
-        outcome: reply === 'reject' ? 'cancelled' : 'selected',
-        ...(reply !== 'reject' ? { optionId: outcomeId } : {}),
+        outcome: 'selected',
+        optionId,
         ...(message ? { message } : {}),
       },
     })
     return true
   }
-  // 回退 REST
+  // 回退 REST（stub 路径只认语义值；optionId 形式降级为 once）
+  const restReply = typeof reply === 'object' ? 'once' : reply
   const sdk = getSDKClient()
   if (sessionId) {
     unwrap(
@@ -55,7 +76,7 @@ export async function replyPermission(
         sessionID: sessionId,
         permissionID: requestId,
         directory: formatPathForApi(directory),
-        response: reply,
+        response: restReply,
       }),
     )
     return true
@@ -64,7 +85,7 @@ export async function replyPermission(
     await sdk.permission.reply({
       requestID: requestId,
       directory: formatPathForApi(directory),
-      reply,
+      reply: restReply,
       message,
     }),
   )
