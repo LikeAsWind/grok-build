@@ -50,6 +50,10 @@
     "retrying": "Retrying (attempt {{attempt}})",
     "nextIn": "next in {{label}}"
   },
+  "streamingStatus": {
+    "waiting": "Waiting for response…",
+    "responding": "Responding…"
+  },
   "shareDialog": {
     "title": "Share Chat",
     "publicLink": "Public Link",

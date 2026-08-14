@@ -50,6 +50,10 @@
     "retrying": "重试中（第 {{attempt}} 次）",
     "nextIn": "{{label}} 后重试"
   },
+  "streamingStatus": {
+    "waiting": "等待响应…",
+    "responding": "回复中…"
+  },
   "shareDialog": {
     "title": "分享对话",
     "publicLink": "公开链接",

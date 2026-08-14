@@ -26,6 +26,7 @@ import { MessageRenderer, ProcessCollapseBlock, messageHasFinalContent, messageH
 import { MessageErrorView } from '../message/parts'
 import type { Message, MessageError } from '../../types/message'
 import { RetryStatusInline, type RetryStatusInlineData } from './RetryStatusInline'
+import { StreamingStatusInline, deriveStreamingPhase } from './StreamingStatusInline'
 import {
   buildVisibleMessageEntries,
   getVisibleMessageForkTargetId,
@@ -412,6 +413,12 @@ export const ChatArea = memo(
 
       // 空 Working 壳闸门：入场完成 + 额外停顿；idle 清空；有 assistant 立刻挂
       const emptyShellGate = useEmptyWorkingShellGate(isStreaming, EMPTY_WORKING_SHELL_EXTRA_DELAY_MS)
+
+      // 流式状态行（非过程壳模式）：等待响应 / 回复中
+      const streamingPhase = useMemo(
+        () => (isStreaming ? deriveStreamingPhase(visibleMessages) : 'waiting' as const),
+        [isStreaming, visibleMessages],
+      )
 
       // 过程折叠：按 user 回合建时间线；关闭时退回「一行一条消息」
       // previous 用于 item 级 structural sharing：流式只脏热行，VirtualRow memo 才能命中
@@ -1040,6 +1047,12 @@ export const ChatArea = memo(
 
             {/* 顺序必须是：消息 → 重试/错误提示 → 输入框占位。
                 旧 Virtuoso Footer 就是这样；换 virtualizer 后 paddingEnd 在前、提示在后，会叠到输入框下。 */}
+            {isStreaming && !processCollapseEnabled && (
+              <div className={`w-full ${maxWidthClass} mx-auto ${paddingClass}`}>
+                <StreamingStatusInline isStreaming={isStreaming} phase={streamingPhase} />
+              </div>
+            )}
+
             {retryStatus && (
               <div className={`w-full ${maxWidthClass} mx-auto ${paddingClass}`}>
                 <div className="flex justify-start">
