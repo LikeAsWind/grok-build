@@ -111,10 +111,9 @@ async fn plan_mode_rejects_grok_edit_outside_plan_file_despite_allow_all_permiss
         })
         .await;
 }
-/// The carve-out: the plan file itself prepares cleanly (the gate defers to
-/// `should_auto_approve_edit`, the same predicate as the permission bypass).
+/// Plan mode now rejects all edits unconditionally — no plan-file carve-out.
 #[tokio::test(flavor = "current_thread")]
-async fn plan_mode_allows_plan_file_edit() {
+async fn plan_mode_rejects_plan_file_edit() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -126,9 +125,9 @@ async fn plan_mode_allows_plan_file_edit() {
             )
             .await;
             assert!(
-                result.is_ok(),
-                "plan-file edit must pass the gate and prepare; got {:?}",
-                result.err()
+                result.is_err(),
+                "plan-file edit must be rejected; got {:?}",
+                result.ok()
             );
         })
         .await;

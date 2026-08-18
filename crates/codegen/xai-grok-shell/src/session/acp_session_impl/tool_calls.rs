@@ -142,52 +142,15 @@ impl Drop for AwaitingApprovalGuard<'_> {
         self.0.persist_plan_mode_state();
     }
 }
-/// Outcome of reading the on-disk plan file for the exit-plan intercept path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PlanFileRead {
-    Present(String),
-    Absent,
-    Unreadable,
-}
-/// Classify a plan-file read result into present / absent / unreadable.
-pub(super) fn classify_plan_file_read(result: Result<String, std::io::Error>) -> PlanFileRead {
-    match result {
-        Ok(text) if !text.trim().is_empty() => PlanFileRead::Present(text),
-        Ok(_) => PlanFileRead::Absent,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PlanFileRead::Absent,
-        Err(_) => PlanFileRead::Unreadable,
-    }
-}
-/// Whether to intercept exit-plan tools for client-side plan approval.
-///
-/// A mode-switch back to agent with `PlanFileRead::Absent` skips intercept
-/// (leaving without approving is allowed). `Present` / `Unreadable` still intercept
-/// (unreadable = fail-closed, empty approval UI rather than silent exit).
-pub(super) fn should_intercept_exit_plan_approval(
-    is_exit_plan_mode: bool,
-    is_cursor_switch_to_agent: bool,
-    is_cursor_create_plan: bool,
-    plan_read: &PlanFileRead,
-) -> bool {
-    if !is_exit_plan_mode && !is_cursor_switch_to_agent && !is_cursor_create_plan {
-        return false;
-    }
-    if is_cursor_switch_to_agent && matches!(plan_read, PlanFileRead::Absent) {
-        return false;
-    }
-    true
-}
-/// Whether this tool call exits file-backed plan mode (not inline plan creation).
-pub(super) fn is_file_backed_exit_plan_input(tool_input: &ToolInput) -> bool {
-    if matches!(tool_input, ToolInput::ExitPlanMode(_)) {
-        return true;
-    }
-    false
-}
+/// Split ExitPlan-kind calls into the tail so they run after the rest of the batch.
 pub(super) fn is_file_backed_exit_plan_kind(
     kind: Option<xai_grok_tools::types::tool::ToolKind>,
 ) -> bool {
     matches!(kind, Some(xai_grok_tools::types::tool::ToolKind::ExitPlan))
+}
+/// Whether to intercept exit-plan tools for client-side plan approval.
+pub(super) fn should_intercept_exit_plan_approval(is_exit_plan_mode: bool) -> bool {
+    is_exit_plan_mode
 }
 /// Split ExitPlan-kind calls into the tail so they run after the rest of the batch.
 fn split_exit_plan_tail(
@@ -222,18 +185,8 @@ pub(super) enum PlanEditGate {
 /// - **Compat-toolset `Delete`** is **not** on the markdown carve-out: it maps to
 ///   `AccessKind::Edit` and is plan-file-only (same as grok edits). Deleting
 ///   an arbitrary `.md` in plan mode must not pass.
-/// - **Every other edit tool** (`AccessKind::Edit`) is restricted to the plan
-///   file itself, via the same predicate that auto-approves plan-file edits
-///   ([`PlanModeTracker::should_auto_approve_edit`]) so the gate and the
-///   permission bypass can never disagree.
-///
-/// `apply_patch` maps to a placeholder `AccessKind::Edit("apply_patch")` and
-/// therefore never matches the plan file: it is always rejected in plan mode
-/// (conservative — per-file targets are only known after patch parsing).
-/// Non-edit tools (bash, read, grep, MCP, web) are never gated here; they
-/// flow to the normal permission path, where yolo may still auto-approve
-/// them. `enter_plan_mode` / `exit_plan_mode` map to `AccessKind::Read` and
-/// are likewise never gated.
+/// In plan mode, ALL edit tools are unconditionally rejected. Plan mode is
+/// strictly read-only — the model passes its plan directly to `exit_plan_mode`.
 pub(super) fn plan_mode_edit_gate(
     tracker: &crate::session::plan_mode::PlanModeTracker,
     tool_input: &ToolInput,
@@ -244,9 +197,7 @@ pub(super) fn plan_mode_edit_gate(
     }
     let _ = tool_input;
     match access_kind {
-        AccessKind::Edit(path) if !tracker.should_auto_approve_edit(Path::new(path)) => {
-            PlanEditGate::RejectNonPlanFile
-        }
+        AccessKind::Edit(_) => PlanEditGate::RejectNonPlanFile,
         _ => PlanEditGate::Allow,
     }
 }
@@ -1086,33 +1037,14 @@ impl SessionActor {
                 return Ok(Err(denied));
             }
         }
-        let plan_file_auto_approve = if let AccessKind::Edit(ref path) = access_kind {
-            self.plan_mode
-                .lock()
-                .should_auto_approve_edit(std::path::Path::new(path))
-        } else {
-            false
-        };
-        if plan_file_auto_approve {
-            tracing::info_span!(
-                "tool.decision",
-                tool_name = %call.function.name,
-                tool_use_id = %call.id,
-                decision = "allow",
-                source = "config",
-                wait_ms = 0_i64,
-            )
-            .in_scope(|| {});
-        }
-        if !plan_file_auto_approve {
-            let (perm_title, perm_kind, perm_raw_input) = tool_call_display
-                .as_ref()
-                .map(|(t, k, r)| (Some(t.clone()), Some(*k), Some(r.clone())))
-                .unwrap_or((None, None, None));
-            let tool_call_update = acp::ToolCallUpdate::new(
-                tool_call_id.clone(),
-                acp::ToolCallUpdateFields::new()
-                    .title(perm_title)
+        let (perm_title, perm_kind, perm_raw_input) = tool_call_display
+            .as_ref()
+            .map(|(t, k, r)| (Some(t.clone()), Some(*k), Some(r.clone())))
+            .unwrap_or((None, None, None));
+        let tool_call_update = acp::ToolCallUpdate::new(
+            tool_call_id.clone(),
+            acp::ToolCallUpdateFields::new()
+                .title(perm_title)
                     .kind(perm_kind)
                     .raw_input(perm_raw_input),
             )
@@ -1314,46 +1246,24 @@ impl SessionActor {
                 }
                 Decision::Allow | Decision::Ask => {}
             }
-        }
         let is_exit_plan_mode = matches!(&tool_input, ToolInput::ExitPlanMode(_));
-        let is_file_backed_exit = is_file_backed_exit_plan_input(&tool_input);
-        let is_cursor_switch_to_agent = false;
-        let is_cursor_create_plan = false;
-        let plan_file_path = self.plan_mode.lock().plan_file_path().to_path_buf();
-        let plan_read = if is_file_backed_exit || is_cursor_create_plan {
-            let inline_cursor_plan: Option<PlanFileRead> = None;
-            if let Some(plan) = inline_cursor_plan {
-                plan
-            } else {
-                let io_result = tokio::fs::read_to_string(&plan_file_path).await;
-                if let Err(ref e) = io_result
-                    && e.kind() != std::io::ErrorKind::NotFound
-                {
-                    tracing::warn!(
-                        path = %plan_file_path.display(),
-                        error = %e,
-                        "[exit_plan_mode] plan file unreadable; intercepting anyway"
-                    );
+        let plan_content = if is_exit_plan_mode {
+            if let ToolInput::ExitPlanMode(ref input) = tool_input {
+                let trimmed = input.plan_content.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
                 }
-                classify_plan_file_read(io_result)
+            } else {
+                None
             }
         } else {
-            PlanFileRead::Absent
+            None
         };
-        let plan_content = match &plan_read {
-            PlanFileRead::Present(s) => Some(s.clone()),
-            PlanFileRead::Absent | PlanFileRead::Unreadable => None,
-        };
-        if should_intercept_exit_plan_approval(
-            is_exit_plan_mode,
-            is_cursor_switch_to_agent,
-            is_cursor_create_plan,
-            &plan_read,
-        ) {
+        if is_exit_plan_mode {
             tracing::info!(
                 tool_call_id = %tool_call_id,
-                cursor_create_plan = is_cursor_create_plan,
-                cursor_switch_to_agent = is_cursor_switch_to_agent,
                 has_plan_content = plan_content.is_some(),
                 "[exit_plan_mode] intercepted, sending ext_method to client"
             );
@@ -1427,11 +1337,6 @@ impl SessionActor {
                     }
                 }
             }
-        } else if is_cursor_switch_to_agent {
-            tracing::info!(
-                tool_call_id = %tool_call_id,
-                "[exit_plan_mode] cursor SwitchMode(agent) with empty plan — skipping intercept"
-            );
         }
         let is_read_only = self
             .agent
@@ -1551,16 +1456,10 @@ impl SessionActor {
             ));
         }
     }
-    /// Resume hook: re-issue the parked `exit_plan_mode` approval
-    /// after a session restored with `awaiting_plan_approval == true`, so the
-    /// client re-shows approval chrome over a real live waiter. Handles the
-    /// decision with no in-flight turn — approve: leave plan mode + start an
-    /// implement turn; request-changes: stay in plan mode + feed the comments
-    /// back as a turn; abandon: leave plan mode and wait for the user.
-    pub(super) async fn resume_plan_approval(
-        self: Arc<Self>,
-        completion_tx: mpsc::UnboundedSender<(String, PromptTurnResult)>,
-    ) {
+    /// Resume hook: clear a stale `awaiting_plan_approval` flag when a session
+    /// restored without a live parked approval (the plan content was carried by
+    /// the `exit_plan_mode` tool input and is no longer recoverable from disk).
+    pub(super) async fn resume_plan_approval(self: Arc<Self>) {
         if !self.plan_mode.lock().is_awaiting_plan_approval() {
             return;
         }
@@ -1569,54 +1468,9 @@ impl SessionActor {
             tracing::debug!("[exit_plan_mode] resume: approval already pending; skip re-park");
             return;
         }
-        let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
-        let plan_content = match tokio::fs::read_to_string(&plan_path).await {
-            Ok(s) if !s.trim().is_empty() => s,
-            _ => {
-                tracing::info!("[exit_plan_mode] resume: no plan.md; clearing awaiting flag");
-                self.plan_mode.lock().set_awaiting_plan_approval(false);
-                self.persist_plan_mode_state();
-                return;
-            }
-        };
-        let tool_call_id = acp::ToolCallId::new(Arc::from(
-            format!("exit-plan-mode-resume-{}", self.session_info.id.0).as_str(),
-        ));
-        tracing::info!(
-            tool_call_id = %tool_call_id,
-            "[exit_plan_mode] re-parking approval after resume"
-        );
-        let parsed = match self
-            .request_plan_approval(&tool_call_id, Some(plan_content))
-            .await
-        {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                tracing::debug!(%err, "resume exit_plan_mode reverse-request failed");
-                return;
-            }
-        };
-        match resume_action_for(PlanApprovalOutcome::from_response(&parsed), parsed.feedback) {
-            ResumeAction::LeaveOnly => {
-                tracing::info!("[exit_plan_mode] resume: user abandoned plan");
-                self.leave_plan_mode_to_default();
-            }
-            ResumeAction::StayAndRevise(text) => {
-                tracing::info!("[exit_plan_mode] resume: user requested changes");
-                self.start_resume_turn(text, PromptMode::Plan, completion_tx)
-                    .await;
-            }
-            ResumeAction::LeaveAndImplement => {
-                tracing::info!("[exit_plan_mode] resume: user approved plan");
-                self.leave_plan_mode_to_default();
-                self.start_resume_turn(
-                    PLAN_APPROVED_IMPLEMENT_MESSAGE.to_string(),
-                    PromptMode::Agent,
-                    completion_tx,
-                )
-                .await;
-            }
-        }
+        tracing::info!("[exit_plan_mode] resume: no parked approval; clearing awaiting flag");
+        self.plan_mode.lock().set_awaiting_plan_approval(false);
+        self.persist_plan_mode_state();
     }
     /// Inject a synthetic user turn after a resumed plan decision and kick the
     /// scheduler (no in-flight turn exists on resume to continue).
@@ -2294,7 +2148,6 @@ impl SessionActor {
                 xai_grok_tools::types::output::ToolOutput::EnterPlanMode(_)
                     | xai_grok_tools::types::output::ToolOutput::ExitPlanMode(_)
             ) {
-                let plan_path = self.plan_mode.lock().plan_file_path().display().to_string();
                 if let Some(ref mut content) = tool_update.fields.content {
                     for item in content.iter_mut() {
                         if let acp::ToolCallContent::Content(acp::Content {
@@ -2302,7 +2155,7 @@ impl SessionActor {
                             ..
                         }) = item
                         {
-                            t.text = format!("Plan file: {}", plan_path);
+                            t.text = result.output.to_prompt_format();
                         }
                     }
                 }
@@ -2823,22 +2676,16 @@ impl SessionActor {
         }
     }
     /// Model-facing rejection for a non-plan-file edit while plan mode is
-    /// active. Rendered via the session's `TemplateRenderer` so
-    /// `${{ plan_path }}` resolves; falls back if rendering fails.
+    /// active. Rendered via the session's `TemplateRenderer`
+    /// falls back if rendering fails.
     pub(super) async fn plan_mode_edit_rejected_message(&self) -> String {
-        let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
         self.render_plan_template(
             crate::session::plan_mode::plan_mode_edit_rejected_template(),
-            &plan_path,
-            false,
         )
         .await
         .unwrap_or_else(|| {
-            format!(
-                "Rejected: file edits are not allowed in plan mode - the only editable \
-                 file is the plan file ({}).",
-                plan_path.display()
-            )
+            "Rejected: file edits are not allowed in plan mode. All write tools are disabled."
+                .to_string()
         })
     }
     pub(super) async fn handle_tool_not_executed(
@@ -2903,9 +2750,8 @@ mod execute_tool_call_parts_tests {
 #[cfg(test)]
 mod exit_plan_tail_predicate_tests {
     use super::{
-        is_file_backed_exit_plan_input, is_file_backed_exit_plan_kind, split_exit_plan_tail,
+        is_file_backed_exit_plan_kind, split_exit_plan_tail,
     };
-    use xai_grok_tools::types::ToolInput;
     use xai_grok_tools::types::tool::ToolKind;
     fn call(name: &str, args: &str) -> crate::sampling::types::ToolCallResponse {
         crate::sampling::types::ToolCallResponse {
@@ -2926,9 +2772,6 @@ mod exit_plan_tail_predicate_tests {
         assert!(is_file_backed_exit_plan_kind(Some(ToolKind::ExitPlan)));
         assert!(!is_file_backed_exit_plan_kind(Some(ToolKind::Edit)));
         assert!(!is_file_backed_exit_plan_kind(None));
-        assert!(is_file_backed_exit_plan_input(&ToolInput::ExitPlanMode(
-            xai_grok_tools::implementations::grok_build::exit_plan_mode::ExitPlanModeInput {}
-        )));
     }
     fn mixed(calls: Vec<crate::sampling::types::ToolCallResponse>) -> bool {
         let (body, tail) = split_exit_plan_tail(calls, kind_of);
@@ -2957,91 +2800,14 @@ mod exit_plan_tail_predicate_tests {
 }
 #[cfg(test)]
 mod exit_plan_intercept_tests {
-    use super::{PlanFileRead, classify_plan_file_read, should_intercept_exit_plan_approval};
+    use super::should_intercept_exit_plan_approval;
     #[test]
-    fn exit_plan_mode_empty_plan_still_intercepts() {
-        assert!(should_intercept_exit_plan_approval(
-            true,
-            false,
-            false,
-            &PlanFileRead::Absent,
-        ));
+    fn exit_plan_mode_intercepts() {
+        assert!(should_intercept_exit_plan_approval(true));
     }
     #[test]
-    fn exit_plan_mode_nonempty_plan_intercepts() {
-        assert!(should_intercept_exit_plan_approval(
-            true,
-            false,
-            false,
-            &PlanFileRead::Present("plan body".into()),
-        ));
-    }
-    #[test]
-    fn create_plan_empty_still_intercepts() {
-        assert!(should_intercept_exit_plan_approval(
-            false,
-            false,
-            true,
-            &PlanFileRead::Absent,
-        ));
-    }
-    #[test]
-    fn create_plan_nonempty_intercepts() {
-        assert!(should_intercept_exit_plan_approval(
-            false,
-            false,
-            true,
-            &PlanFileRead::Present("inline plan".into()),
-        ));
-    }
-    #[test]
-    fn unrelated_tool_does_not_intercept() {
-        assert!(!should_intercept_exit_plan_approval(
-            false,
-            false,
-            false,
-            &PlanFileRead::Absent,
-        ));
-        assert!(!should_intercept_exit_plan_approval(
-            false,
-            false,
-            false,
-            &PlanFileRead::Present("ignored".into()),
-        ));
-    }
-    #[test]
-    fn classify_plan_file_read_present() {
-        assert_eq!(
-            classify_plan_file_read(Ok("# plan".into())),
-            PlanFileRead::Present("# plan".into())
-        );
-    }
-    #[test]
-    fn classify_plan_file_read_absent_empty() {
-        assert_eq!(
-            classify_plan_file_read(Ok("  \n".into())),
-            PlanFileRead::Absent
-        );
-    }
-    #[test]
-    fn classify_plan_file_read_absent_not_found() {
-        assert_eq!(
-            classify_plan_file_read(Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "missing",
-            ))),
-            PlanFileRead::Absent
-        );
-    }
-    #[test]
-    fn classify_plan_file_read_unreadable_permission_denied() {
-        assert_eq!(
-            classify_plan_file_read(Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "denied",
-            ))),
-            PlanFileRead::Unreadable
-        );
+    fn non_exit_plan_does_not_intercept() {
+        assert!(!should_intercept_exit_plan_approval(false));
     }
 }
 #[cfg(test)]
@@ -3092,18 +2858,17 @@ mod plan_mode_edit_gate_tests {
             "grok tools get no markdown exception — plan file only"
         );
     }
-    /// The carve-out and the permission bypass share `should_auto_approve_edit`,
-    /// so the plan file itself stays editable.
+    /// All edits are rejected in plan mode — no plan-file carve-out.
     #[test]
-    fn plan_file_edit_allowed() {
+    fn plan_file_edit_rejected() {
         let t = active_tracker();
         assert_eq!(
             gate(&t, &search_replace("/tmp/gate-session/plan.md")),
-            PlanEditGate::Allow
+            PlanEditGate::RejectNonPlanFile
         );
         assert_eq!(
             gate(&t, &write("/tmp/gate-session/plan.md")),
-            PlanEditGate::Allow
+            PlanEditGate::RejectNonPlanFile
         );
     }
     /// `apply_patch` carries a placeholder access path, never the plan file:

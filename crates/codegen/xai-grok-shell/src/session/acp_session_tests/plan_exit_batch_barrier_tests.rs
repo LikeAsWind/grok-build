@@ -82,16 +82,8 @@ async fn seeded_active_plan_actor_with_edit_tools() -> (
         *tracker = crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
         tracker.activate_from_tool();
     }
-    actor
-        .agent
-        .borrow()
-        .tool_bridge()
-        .update_resource(xai_grok_tools::types::resources::PlanFilePath(
-            plan_path.clone(),
-        ))
-        .await;
     // Phase-2 file tools dispatch through workspace_ops; without a bound
-    // session, search_replace hard-errors before writing plan.md.
+    // session, search_replace hard-errors before writing.
     actor
         .workspace_ops
         .bind_local_session(
@@ -233,20 +225,12 @@ async fn mixed_permission_cancel_skips_exit_reverse_request() {
             .await;
 
             let dir = tempfile::tempdir().unwrap();
-            let plan_path = dir.path().join("plan.md");
-            std::fs::write(&plan_path, SEED_PLAN).unwrap();
             {
                 let mut tracker = actor.plan_mode.lock();
                 *tracker =
                     crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
                 tracker.activate_from_tool();
             }
-            actor
-                .agent
-                .borrow()
-                .tool_bridge()
-                .update_resource(xai_grok_tools::types::resources::PlanFilePath(plan_path))
-                .await;
 
             let cwd = AbsPathBuf::new(std::path::PathBuf::from(actor.session_info.cwd.clone()))
                 .unwrap_or_else(|_| AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap());

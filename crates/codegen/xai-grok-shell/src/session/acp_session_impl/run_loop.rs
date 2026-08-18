@@ -583,9 +583,8 @@ pub(super) async fn run_session(
                             // also self-guards against a concurrent/duplicate
                             // re-park via the `pending_interactions` registry.
                             let s = session.clone();
-                            let completion_tx = completion_tx.clone();
                             tokio::task::spawn_local(async move {
-                                s.resume_plan_approval(completion_tx).await;
+                                s.resume_plan_approval().await;
                             });
                         }
                         SessionCommand::GetToolOverrides { respond_to } => {

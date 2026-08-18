@@ -1537,19 +1537,15 @@ impl SessionActor {
             .await
         };
         let system_reminder = {
-            let plan_path = {
+            let plan_active = {
                 let guard = self.plan_mode.lock();
-                guard
-                    .is_active()
-                    .then(|| guard.plan_file_path().to_path_buf())
+                guard.is_active()
             };
-            if let Some(plan_path) = plan_path {
-                let plan_has_content =
-                    crate::session::plan_mode::plan_file_has_content(&plan_path).await;
+            if plan_active {
                 let template = crate::session::plan_mode::plan_mode_reminder_full_template();
                 let wrapper = self.reminder_wrapper_tag();
                 let rendered = self
-                    .render_plan_template(template, &plan_path, plan_has_content)
+                    .render_plan_template(template)
                     .await;
                 match (system_reminder, rendered) {
                     (Some(mut existing), Some(plan_section)) => {

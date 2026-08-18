@@ -234,16 +234,14 @@ impl SessionActor {
         let activation = {
             let tracker = self.plan_mode.lock();
             (tracker.state() == PlanModeState::Pending)
-                .then(|| (tracker.is_reentry(), tracker.plan_file_path().to_path_buf()))
+                .then(|| tracker.is_reentry())
         };
-        if let Some((is_reentry, plan_path)) = activation {
+        if let Some(is_reentry) = activation {
             self.plan_mode.lock().activate();
             self.persist_plan_mode_state();
-            let plan_has_content =
-                crate::session::plan_mode::plan_file_has_content(&plan_path).await;
             let template = self.plan_activation_template(is_reentry);
             if let Some(rendered) = self
-                .render_plan_template(template, &plan_path, plan_has_content)
+                .render_plan_template(template)
                 .await
             {
                 push_reminder(self, &rendered);
@@ -261,23 +259,16 @@ impl SessionActor {
         if !injected_this_turn {
             let per_turn = {
                 let tracker = self.plan_mode.lock();
-                tracker.is_active().then(|| {
-                    (
-                        tracker.should_use_full_reminder(),
-                        tracker.plan_file_path().to_path_buf(),
-                    )
-                })
+                tracker.is_active().then(|| tracker.should_use_full_reminder())
             };
-            if let Some((use_full, plan_path)) = per_turn {
-                let plan_has_content =
-                    crate::session::plan_mode::plan_file_has_content(&plan_path).await;
+            if let Some(use_full) = per_turn {
                 let template = if use_full {
                     plan_mode_reminder_full_template()
                 } else {
                     plan_mode_reminder_sparse_template()
                 };
                 if let Some(rendered) = self
-                    .render_plan_template(template, &plan_path, plan_has_content)
+                    .render_plan_template(template)
                     .await
                 {
                     push_reminder(self, &rendered);
@@ -287,9 +278,8 @@ impl SessionActor {
             }
         }
         if self.plan_mode.lock().has_pending_exit_reminder() {
-            let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
             let template = plan_mode_exit_reminder_template();
-            if let Some(rendered) = self.render_plan_template(template, &plan_path, false).await {
+            if let Some(rendered) = self.render_plan_template(template).await {
                 push_reminder(self, &rendered);
             }
             self.plan_mode.lock().clear_pending_exit_reminder();
@@ -321,15 +311,14 @@ impl SessionActor {
         let activation = {
             let tracker = self.plan_mode.lock();
             (tracker.state() == PlanModeState::Pending)
-                .then(|| (tracker.is_reentry(), tracker.plan_file_path().to_path_buf()))
+                .then(|| tracker.is_reentry())
         };
-        let Some((is_reentry, plan_path)) = activation else {
+        let Some(is_reentry) = activation else {
             return;
         };
-        let plan_has_content = crate::session::plan_mode::plan_file_has_content(&plan_path).await;
         let template = self.plan_activation_template(is_reentry);
         let rendered = self
-            .render_plan_template(template, &plan_path, plan_has_content)
+            .render_plan_template(template)
             .await;
         let tag = self.reminder_wrapper_tag();
         let buffered = rendered.is_some();
@@ -374,18 +363,12 @@ impl SessionActor {
     }
     /// Render a plan mode template via the tool bridge's `TemplateRenderer`.
     ///
-    /// Passes `plan_path` and `plan_has_content` as extra context alongside the
-    /// registry's `tools.by_kind.*` mappings.
+    /// Tool names are resolved at render time via `TemplateRenderer`.
     pub(super) async fn render_plan_template(
         &self,
         template: &str,
-        plan_path: &std::path::Path,
-        plan_has_content: bool,
     ) -> Option<String> {
-        let extra = serde_json::json!({
-            "plan_path": plan_path.display().to_string(),
-            "plan_has_content": plan_has_content,
-        });
+        let extra = serde_json::json!({});
         self.agent
             .borrow()
             .tool_bridge()

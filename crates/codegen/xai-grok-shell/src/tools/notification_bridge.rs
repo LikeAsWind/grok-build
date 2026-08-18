@@ -2129,7 +2129,6 @@ mod tests {
             ToolNotification::PlanModeExited(xai_grok_tools::notification::types::PlanModeExited {
                 tool_call_id: "tc-exit-1".into(),
                 plan_content: Some("- step 1".into()),
-                plan_file_path: "/tmp/test-session/plan.md".into(),
             });
         let mut offsets = HashMap::new();
         handle_notification(&config, notification, &mut offsets).await;
@@ -2179,7 +2178,6 @@ mod tests {
             ToolNotification::PlanModeExited(xai_grok_tools::notification::types::PlanModeExited {
                 tool_call_id: "tc-exit-grok".into(),
                 plan_content: Some("- step 1".into()),
-                plan_file_path: "/tmp/test-session/plan.md".into(),
             });
         let mut offsets = HashMap::new();
         handle_notification(&config, notification, &mut offsets).await;
@@ -2218,7 +2216,6 @@ mod tests {
             ToolNotification::PlanModeExited(xai_grok_tools::notification::types::PlanModeExited {
                 tool_call_id: "tc-exit-gated".into(),
                 plan_content: Some("- step 1".into()),
-                plan_file_path: "/tmp/test-session/plan.md".into(),
             });
         let mut offsets = HashMap::new();
         handle_notification(&config, notification, &mut offsets).await;

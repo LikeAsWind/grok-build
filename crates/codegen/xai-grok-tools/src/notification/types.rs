@@ -233,12 +233,9 @@ pub struct PlanModeExited {
     /// The tool call ID (correlates with the ExitPlanMode tool invocation)
     pub tool_call_id: String,
 
-    /// The plan file content at the time ExitPlanMode was called.
-    /// `None` if the plan file did not exist or was empty.
+    /// The plan content at the time ExitPlanMode was called.
+    /// `None` if no plan content was provided.
     pub plan_content: Option<String>,
-
-    /// The path where the plan file lives (e.g., `.grok/plan.md`).
-    pub plan_file_path: String,
 }
 
 /// Notification that the agent is asking the user a question.

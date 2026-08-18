@@ -407,12 +407,11 @@ async fn resume_no_plan_md_clears_flag_without_request() {
                 tracker.set_awaiting_plan_approval(true);
             }
 
-            let (completion_tx, _completion_rx) = tokio::sync::mpsc::unbounded_channel();
-            actor.clone().resume_plan_approval(completion_tx).await;
+            actor.clone().resume_plan_approval().await;
 
             assert!(
                 !actor.plan_mode.lock().is_awaiting_plan_approval(),
-                "missing plan.md must clear the stuck awaiting bit"
+                "stale flag must be cleared when no plan content is recoverable"
             );
             assert!(
                 gateway_rx.try_recv().is_err(),

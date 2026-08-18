@@ -4,10 +4,9 @@
 //! to warrant a planning phase before writing code. This is the
 //! **agent-initiated** entry path into plan mode.
 //!
-//! On success it notifies orchestration (`PlanModeEntered`) and seeds an empty
-//! session plan file if missing (never truncating existing content), so the
-//! model can read it before writing. Read-only enforcement and plan-file gating
-//! stay in orchestration.
+//! On success it notifies orchestration (`PlanModeEntered`). Plan mode is
+//! strictly read-only — the model gathers information, then passes its plan
+//! content directly to `exit_plan_mode` when ready. No plan file is written.
 //!
 //! ## User Consent
 //!
@@ -15,17 +14,12 @@
 //! confirmation dialog. If the user declines, the tool result is rejected and
 //! the model receives `"User declined to enter plan mode."`.
 
-use crate::computer::types::AsyncFileSystem;
 use crate::notification::types::PlanModeEntered;
-use crate::types::output::{
-    EnterPlanModeOutput, EnterPlanModeToolHints, PlanFileSeedFailure, PlanFileSeedStatus,
-};
+use crate::types::output::EnterPlanModeOutput;
 use crate::types::requirements::{Expr, ToolRequirement};
-use crate::types::resources::{FileSystem, NotificationHandle, resolve_plan_file_path};
+use crate::types::resources::NotificationHandle;
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
-use std::path::Path;
-use std::sync::Arc;
 
 /// Input for the `EnterPlanMode` tool.
 ///
@@ -35,8 +29,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct EnterPlanModeInput {}
 
-/// `EnterPlanMode` tool: signals plan mode entry and seeds the session plan
-/// file, returning a [`PlanFileSeedStatus`].
+/// `EnterPlanMode` tool: signals plan mode entry, returning a confirmation message.
 ///
 /// Params: `()` — no per-tool configuration.
 #[derive(Debug, Default)]
@@ -108,7 +101,7 @@ impl xai_tool_runtime::Tool for EnterPlanModeTool {
         use crate::types::tool_metadata::shared_resources;
         let resources = shared_resources(&ctx)?;
 
-        let (seed_target, plan_file_path, tool_hints, fs) = {
+        let (ask_user, exit_plan, task) = {
             let res = resources.lock().await;
 
             // Send notification first.
@@ -118,167 +111,63 @@ impl xai_tool_runtime::Tool for EnterPlanModeTool {
                 });
             }
 
-            let (seed_target, plan_file_path) = resolve_plan_file_path(&res);
-
-            // Resolve client-facing tool names via TemplateRenderer.
-            // Presence-aware lookups (not template renders): a missing kind
-            // renders as empty-`Ok`, so a `Result` fallback never fires.
-            let hints = if let Some(renderer) = res.get::<TemplateRenderer>() {
-                EnterPlanModeToolHints {
-                    ask_user: renderer
-                        .tool_for_kind(crate::types::tool::ToolKind::AskUser)
+            if let Some(renderer) = res.get::<TemplateRenderer>() {
+                (
+                    renderer
+                        .tool_for_kind(ToolKind::AskUser)
                         .unwrap_or("ask_user_question")
                         .to_owned(),
-                    exit_plan: renderer
-                        .tool_for_kind(crate::types::tool::ToolKind::ExitPlan)
+                    renderer
+                        .tool_for_kind(ToolKind::ExitPlan)
                         .unwrap_or("exit_plan_mode")
                         .to_owned(),
-                    task: renderer
-                        .tool_for_kind(crate::types::tool::ToolKind::Task)
+                    renderer
+                        .tool_for_kind(ToolKind::Task)
                         .unwrap_or_default()
                         .to_owned(),
-                }
+                )
             } else {
-                EnterPlanModeToolHints::default()
-            };
-
-            let fs = res.get::<FileSystem>().map(|f| Arc::clone(&f.0));
-
-            (seed_target, plan_file_path, hints, fs)
-        };
-
-        // Seed only with both an FS and an absolute target; never write a relative path or truncate.
-        let plan_file_seed = match (fs.as_ref(), seed_target.as_deref()) {
-            (Some(fs), Some(target)) => probe_or_create_empty_plan_file(fs.as_ref(), target).await,
-            _ => {
-                tracing::warn!(
-                    %plan_file_path,
-                    "No FileSystem resource or no absolute plan path; not seeding plan file"
-                );
-                PlanFileSeedStatus::Missing(PlanFileSeedFailure::Unavailable)
+                (
+                    "ask_user_question".to_owned(),
+                    "exit_plan_mode".to_owned(),
+                    String::new(),
+                )
             }
         };
 
-        tracing::info!(
-            %plan_file_path,
-            ?plan_file_seed,
-            "Entered plan mode"
+        let task_hint = if task.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n     You can use the {task} tool with subagent_type=\"explore\" to \
+                 parallelize codebase exploration without filling your context window."
+            )
+        };
+
+        let message = format!(
+            "You have entered plan mode. You should now focus on exploring the codebase \
+             and designing an implementation plan.\n\n\
+             In plan mode, you should:\n\
+             1. Thoroughly explore the codebase to understand existing patterns{task_hint}\n\
+             2. Identify similar features, codebase architecture, and understand trade-offs\n\
+             3. Use {ask_user} if you need to clarify the approach\n\
+             4. Design a concrete implementation strategy\n\
+             5. When ready, use {exit_plan} to present your plan to the user."
         );
 
-        Ok(EnterPlanModeOutput::Entered {
-            message: "You have entered plan mode. You should now focus on exploring the codebase \
-                      and creating an implementation plan."
-                .to_string(),
-            plan_file_path,
-            tool_hints,
-            plan_file_seed,
-        })
-    }
-}
+        tracing::info!("Entered plan mode");
 
-/// Probe the plan file; create an empty one only on not-found.
-///
-/// Never truncates existing content. Non-NotFound read errors fail closed as
-/// [`PlanFileSeedStatus::Missing`] without calling `write_file`.
-async fn probe_or_create_empty_plan_file(
-    fs: &dyn AsyncFileSystem,
-    path: &Path,
-) -> PlanFileSeedStatus {
-    match fs.read_file(path).await {
-        Ok(bytes) if bytes.is_empty() => PlanFileSeedStatus::Empty,
-        Ok(_) => PlanFileSeedStatus::NonEmpty,
-        Err(e) if e.io_error_kind() == Some(std::io::ErrorKind::NotFound) => {
-            match fs.write_file(path, b"").await {
-                Ok(()) => PlanFileSeedStatus::Empty,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        path = %path.display(),
-                        "Failed to create empty plan file"
-                    );
-                    PlanFileSeedStatus::Missing(PlanFileSeedFailure::NotCreated)
-                }
-            }
-        }
-        Err(e) => {
-            // Non-NotFound read error: a directory at the path reads as IsADirectory;
-            // anything else is treated as inaccessible. Never write (avoid truncate risk).
-            let reason = match e.io_error_kind() {
-                Some(std::io::ErrorKind::IsADirectory) => PlanFileSeedFailure::NotAFile,
-                _ => PlanFileSeedFailure::Inaccessible,
-            };
-            tracing::warn!(
-                error = %e,
-                ?reason,
-                path = %path.display(),
-                "Failed to probe plan file; not creating (avoid truncate risk)"
-            );
-            PlanFileSeedStatus::Missing(reason)
-        }
+        Ok(EnterPlanModeOutput::Entered { message })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computer::local::LocalFs;
-    use crate::computer::types::ComputerError;
     use crate::types::output::ToolOutput;
-    use crate::types::resources::{Cwd, PlanFilePath, Resources};
+    use crate::types::resources::Resources;
     use crate::types::tool_metadata::test_ctx_with_call_id;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tempfile::TempDir;
-
-    fn resources_with_plan_fs(tmp: &TempDir) -> (Resources, PathBuf) {
-        let plan = tmp.path().join("session").join("plan.md");
-        let mut resources = Resources::new();
-        resources.insert(FileSystem(Arc::new(LocalFs)));
-        resources.insert(PlanFilePath(plan.clone()));
-        (resources, plan)
-    }
-
-    /// Parametrized FS mock: injects the read/write outcomes and counts calls
-    /// so a test can assert the tool never touched the FS.
-    struct ProbeMockFs {
-        read: Result<Vec<u8>, ComputerError>,
-        write: Result<(), ComputerError>,
-        reads: AtomicUsize,
-        writes: AtomicUsize,
-    }
-
-    impl ProbeMockFs {
-        fn new(read: Result<Vec<u8>, ComputerError>, write: Result<(), ComputerError>) -> Self {
-            Self {
-                read,
-                write,
-                reads: AtomicUsize::new(0),
-                writes: AtomicUsize::new(0),
-            }
-        }
-
-        fn err(kind: std::io::ErrorKind) -> ComputerError {
-            ComputerError::IOError(format!("{kind:?}"), Some(kind))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl AsyncFileSystem for ProbeMockFs {
-        async fn read_file(&self, _path: &Path) -> Result<Vec<u8>, ComputerError> {
-            self.reads.fetch_add(1, Ordering::SeqCst);
-            self.read.clone()
-        }
-
-        async fn write_file(&self, _path: &Path, _data: &[u8]) -> Result<(), ComputerError> {
-            self.writes.fetch_add(1, Ordering::SeqCst);
-            self.write.clone()
-        }
-
-        async fn delete_file(&self, _path: &Path) -> Result<(), ComputerError> {
-            Ok(())
-        }
-    }
+    use std::collections::HashMap;
 
     #[test]
     fn tool_name_and_description() {
@@ -308,8 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn enter_plan_mode_returns_confirmation() {
-        let tmp = TempDir::new().unwrap();
-        let (resources, _) = resources_with_plan_fs(&tmp);
+        let resources = Resources::new();
         let shared = resources.into_shared();
         let tool = EnterPlanModeTool;
 
@@ -321,17 +209,12 @@ mod tests {
         .await
         .unwrap();
 
-        let EnterPlanModeOutput::Entered {
-            ref message,
-            ref plan_file_path,
-            plan_file_seed,
-            ..
-        } = result;
+        let EnterPlanModeOutput::Entered { ref message } = result;
         assert!(message.contains("entered plan mode"));
         assert!(message.contains("exploring the codebase"));
         assert!(message.contains("implementation plan"));
-        assert!(plan_file_path.contains("plan.md"));
-        assert_eq!(plan_file_seed, PlanFileSeedStatus::Empty);
+        assert!(message.contains("exit_plan_mode"));
+        assert!(message.contains("ask_user_question"));
     }
 
     #[tokio::test]
@@ -378,74 +261,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn without_filesystem_resource_plan_not_ready() {
-        let resources = Resources::new();
-        let shared = resources.into_shared();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "test-call"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered { plan_file_seed, .. } = &result;
-        assert_eq!(
-            *plan_file_seed,
-            PlanFileSeedStatus::Missing(PlanFileSeedFailure::Unavailable)
-        );
-
-        let output: ToolOutput = result.into();
-        let prompt = output.to_prompt_format();
-        assert!(
-            prompt.contains("The plan file location is unavailable."),
-            "expected not-ready status: {prompt}"
-        );
-        assert!(
-            prompt.contains("5. Write your plan to the plan file above"),
-            "expected constant write-plan step: {prompt}"
-        );
-    }
-
-    #[tokio::test]
-    async fn no_absolute_path_does_not_write() {
-        // FileSystem present but no PlanFilePath and no Cwd: nothing to anchor an
-        // absolute path on, so the tool must not write a relative path.
-        let fs = Arc::new(ProbeMockFs::new(
-            Err(ProbeMockFs::err(std::io::ErrorKind::NotFound)),
-            Ok(()),
-        ));
-        let mut resources = Resources::new();
-        resources.insert(FileSystem(fs.clone()));
-        let shared = resources.into_shared();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "no-anchor"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered {
-            plan_file_seed,
-            plan_file_path,
-            ..
-        } = &result;
-        assert_eq!(
-            *plan_file_seed,
-            PlanFileSeedStatus::Missing(PlanFileSeedFailure::Unavailable)
-        );
-        assert_eq!(plan_file_path, ".grok/plan.md");
-        assert_eq!(fs.reads.load(Ordering::SeqCst), 0, "must not probe");
-        assert_eq!(fs.writes.load(Ordering::SeqCst), 0, "must not write");
-    }
-
-    #[tokio::test]
     async fn prompt_format_returns_message() {
-        let tmp = TempDir::new().unwrap();
-        let (resources, _) = resources_with_plan_fs(&tmp);
+        let resources = Resources::new();
         let shared = resources.into_shared();
         let tool = EnterPlanModeTool;
 
@@ -460,186 +277,13 @@ mod tests {
         let output: ToolOutput = result.into();
         let prompt = output.to_prompt_format();
         assert!(prompt.contains("entered plan mode"));
-        assert!(prompt.contains("plan.md"));
-        assert!(
-            prompt.contains("The file exists and is empty."),
-            "expected empty plan status: {prompt}"
-        );
         assert!(prompt.contains("exit_plan_mode"));
         assert!(prompt.contains("ask_user_question"));
-        assert!(prompt.contains("5. Write your plan to the plan file above"));
-        assert!(
-            prompt.contains("6. When ready, use exit_plan_mode to present your plan to the user")
-        );
-        assert!(
-            !prompt.contains("create it at that path first if needed"),
-            "ready path should not include not-ready create hint: {prompt}"
-        );
-    }
-
-    #[tokio::test]
-    async fn does_not_truncate_existing_nonempty_plan() {
-        let tmp = TempDir::new().unwrap();
-        let (resources, plan_path) = resources_with_plan_fs(&tmp);
-        let shared = resources.into_shared();
-
-        let fs = LocalFs;
-        fs.write_file(&plan_path, b"# prior plan\n").await.unwrap();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "reentry"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered { plan_file_seed, .. } = &result;
-        assert_eq!(*plan_file_seed, PlanFileSeedStatus::NonEmpty);
-
-        let bytes = fs.read_file(&plan_path).await.unwrap();
-        assert_eq!(bytes, b"# prior plan\n");
-
-        let output: ToolOutput = result.into();
-        let prompt = output.to_prompt_format();
-        assert!(
-            prompt.contains("The file exists but is not empty."),
-            "expected nonempty status: {prompt}"
-        );
-    }
-
-    #[tokio::test]
-    async fn existing_empty_plan_reports_empty_without_rewrite() {
-        let tmp = TempDir::new().unwrap();
-        let (resources, plan_path) = resources_with_plan_fs(&tmp);
-        let shared = resources.into_shared();
-
-        let fs = LocalFs;
-        fs.write_file(&plan_path, b"").await.unwrap();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "empty-reentry"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered { plan_file_seed, .. } = &result;
-        assert_eq!(*plan_file_seed, PlanFileSeedStatus::Empty);
-
-        let bytes = fs.read_file(&plan_path).await.unwrap();
-        assert_eq!(bytes, b"");
-    }
-
-    #[tokio::test]
-    async fn probe_or_create_empty_plan_file_via_fs_creates_parents() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("nested").join("dir").join("plan.md");
-        let fs = LocalFs;
-        let status = probe_or_create_empty_plan_file(&fs, &path).await;
-        assert_eq!(status, PlanFileSeedStatus::Empty);
-        assert!(path.is_file());
-        assert_eq!(fs.read_file(&path).await.unwrap(), b"");
-    }
-
-    #[tokio::test]
-    async fn non_not_found_read_error_does_not_write() {
-        let fs = ProbeMockFs::new(
-            Err(ProbeMockFs::err(std::io::ErrorKind::PermissionDenied)),
-            Ok(()),
-        );
-        let path = Path::new("/session/plan.md");
-        let status = probe_or_create_empty_plan_file(&fs, path).await;
-        assert_eq!(
-            status,
-            PlanFileSeedStatus::Missing(PlanFileSeedFailure::Inaccessible)
-        );
-        assert_eq!(fs.writes.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn write_failure_after_not_found_returns_missing() {
-        let fs = ProbeMockFs::new(
-            Err(ProbeMockFs::err(std::io::ErrorKind::NotFound)),
-            Err(ProbeMockFs::err(std::io::ErrorKind::Other)),
-        );
-        let path = Path::new("/session/plan.md");
-        let status = probe_or_create_empty_plan_file(&fs, path).await;
-        assert_eq!(
-            status,
-            PlanFileSeedStatus::Missing(PlanFileSeedFailure::NotCreated)
-        );
-        assert_eq!(fs.writes.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn directory_at_path_reports_not_a_file() {
-        let fs = ProbeMockFs::new(
-            Err(ProbeMockFs::err(std::io::ErrorKind::IsADirectory)),
-            Ok(()),
-        );
-        let path = Path::new("/session/plan.md");
-        let status = probe_or_create_empty_plan_file(&fs, path).await;
-        assert_eq!(
-            status,
-            PlanFileSeedStatus::Missing(PlanFileSeedFailure::NotAFile)
-        );
-        assert_eq!(
-            fs.writes.load(Ordering::SeqCst),
-            0,
-            "must not write over a directory"
-        );
-    }
-
-    // -- PlanFilePath resource tests --
-
-    #[tokio::test]
-    async fn uses_plan_file_path_resource_when_set() {
-        let mut resources = Resources::new();
-        let session_plan = PathBuf::from("/home/user/.grok/sessions/abc123/plan.md");
-        resources.insert(PlanFilePath(session_plan.clone()));
-        let shared = resources.into_shared();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "t1"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered {
-            ref plan_file_path, ..
-        } = result;
-        assert_eq!(plan_file_path, &session_plan.display().to_string());
-        assert!(!plan_file_path.contains(".grok/plan.md"));
-    }
-
-    #[tokio::test]
-    async fn falls_back_to_cwd_when_no_plan_file_path_resource() {
-        let mut resources = Resources::new();
-        resources.insert(Cwd(PathBuf::from("/workspace/my-project")));
-        let shared = resources.into_shared();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "t2"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered {
-            ref plan_file_path, ..
-        } = result;
-        assert_eq!(plan_file_path, "/workspace/my-project/.grok/plan.md");
+        assert!(prompt.contains("5. When ready, use exit_plan_mode to present your plan to the user"));
     }
 
     #[tokio::test]
     async fn tool_hints_resolved_from_template_renderer() {
-        use std::collections::HashMap;
-
         let mut resources = Resources::new();
         let tools: HashMap<ToolKind, String> = [
             (ToolKind::AskUser, "AskUser".to_owned()),
@@ -658,10 +302,10 @@ mod tests {
         .await
         .unwrap();
 
-        let EnterPlanModeOutput::Entered { tool_hints, .. } = &result;
-        assert_eq!(tool_hints.ask_user, "AskUser");
-        assert_eq!(tool_hints.exit_plan, "FinishPlan");
-        assert_eq!(tool_hints.task, "delegate");
+        let EnterPlanModeOutput::Entered { message } = &result;
+        assert!(message.contains("AskUser"));
+        assert!(message.contains("FinishPlan"));
+        assert!(message.contains("delegate"));
     }
 
     #[tokio::test]
@@ -677,36 +321,12 @@ mod tests {
         .await
         .unwrap();
 
-        let EnterPlanModeOutput::Entered { tool_hints, .. } = &result;
-        assert_eq!(tool_hints.ask_user, "ask_user_question");
-        assert_eq!(tool_hints.exit_plan, "exit_plan_mode");
+        let EnterPlanModeOutput::Entered { message } = &result;
+        assert!(message.contains("ask_user_question"));
+        assert!(message.contains("exit_plan_mode"));
         assert!(
-            tool_hints.task.is_empty(),
-            "task should be empty when no TemplateRenderer and no Task tool registered"
+            !message.contains("subagent_type"),
+            "task tool hint should be empty when no Task tool registered"
         );
-    }
-
-    #[tokio::test]
-    async fn plan_file_path_prefers_resource_over_cwd() {
-        let mut resources = Resources::new();
-        resources.insert(Cwd(PathBuf::from("/workspace/my-project")));
-        resources.insert(PlanFilePath(PathBuf::from(
-            "/home/user/.grok/sessions/xyz/plan.md",
-        )));
-        let shared = resources.into_shared();
-
-        let result = xai_tool_runtime::Tool::run(
-            &EnterPlanModeTool,
-            test_ctx_with_call_id(shared, "t4"),
-            EnterPlanModeInput {},
-        )
-        .await
-        .unwrap();
-
-        let EnterPlanModeOutput::Entered {
-            ref plan_file_path, ..
-        } = result;
-        assert_eq!(plan_file_path, "/home/user/.grok/sessions/xyz/plan.md");
-        assert!(!plan_file_path.contains(".grok/plan.md"));
     }
 }
