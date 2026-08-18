@@ -294,6 +294,11 @@ impl SessionActor {
         for contributor in self.extension_registry.turn_lifecycle_contributors() {
             contributor.on_turn_start(&turn_start_input).await;
         }
+        // Reset the same-turn background task polling guard so
+        // get_task_output / wait_tasks are usable again this turn.
+        self.tool_bridge_handle()
+            .update_resource(xai_grok_tools::types::resources::BackgroundTaskStartedThisTurn::default())
+            .await;
         if let Ok(mut pending) = self.rewind_pending_prompt.lock()
             && let Some(prev_text) = pending.take()
         {

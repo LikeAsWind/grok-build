@@ -13,7 +13,7 @@ use crate::implementations::grok_build::task_output::{
     MAX_MULTI_WAIT_IDS, TaskOutputTool, WaitHint, resolve_tasks, wait_any_event_driven,
 };
 use crate::types::requirements::{Expr, ToolRequirement};
-use crate::types::resources::{Terminal, TruncationCfg};
+use crate::types::resources::{BackgroundTaskStartedThisTurn, Terminal, TruncationCfg};
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
 use xai_tool_types::{MultiTaskOutputResult, TaskOutputOutput, WaitMode, WaitTasksToolInput};
@@ -139,6 +139,22 @@ impl xai_tool_runtime::Tool for WaitTasksTool {
         use crate::types::tool_metadata::shared_resources;
 
         let resources = shared_resources(&ctx)?;
+
+        // Reject same-turn polling: if a background task was started earlier in
+        // this turn, the model must end the turn and wait for the completion
+        // notification instead of polling.
+        {
+            let res = resources.lock().await;
+            if let Some(flag) = res.get::<BackgroundTaskStartedThisTurn>() {
+                if flag.get() {
+                    return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                        "A background task was started earlier in this turn. \
+                         Do not wait for it here — end the turn and wait for the \
+                         completion notification instead.",
+                    ));
+                }
+            }
+        }
 
         if input.task_ids.is_empty() {
             return Err(xai_tool_runtime::ToolError::invalid_arguments(

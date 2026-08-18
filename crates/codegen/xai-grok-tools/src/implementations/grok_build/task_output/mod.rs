@@ -18,7 +18,9 @@ use crate::implementations::grok_build_concise::BashConciseTool;
 use crate::implementations::opencode::OpenCodeBashTool;
 use crate::implementations::task_output::tool::snapshot_to_result;
 use crate::types::requirements::{Expr, ToolParamsRequirement, ToolRequirement};
-use crate::types::resources::{SharedResources, Terminal, TruncationCfg};
+use crate::types::resources::{
+    BackgroundTaskStartedThisTurn, SharedResources, Terminal, TruncationCfg,
+};
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
 use xai_tool_types::{
@@ -920,6 +922,22 @@ impl xai_tool_runtime::Tool for TaskOutputTool {
     ) -> Result<TaskOutputOutput, xai_tool_runtime::ToolError> {
         use crate::types::tool_metadata::shared_resources;
         let resources = shared_resources(&ctx)?;
+
+        // Reject same-turn polling: if a background task was started earlier in
+        // this turn, the model must end the turn and wait for the completion
+        // notification instead of polling.
+        {
+            let res = resources.lock().await;
+            if let Some(flag) = res.get::<BackgroundTaskStartedThisTurn>() {
+                if flag.get() {
+                    return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                        "A background task was started earlier in this turn. \
+                         Do not poll for its output — end the turn and wait for \
+                         the completion notification instead.",
+                    ));
+                }
+            }
+        }
 
         let ids = input.resolved_task_ids();
         if ids.is_empty() {

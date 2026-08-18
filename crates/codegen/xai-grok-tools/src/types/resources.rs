@@ -863,6 +863,35 @@ pub struct CompletionTracker {
 impl ResourceType for CompletionTracker {
     const ID: &'static str = "";
 }
+/// Tracks whether a background task was started during the current turn.
+///
+/// Set by `BashTool::run` when a command is executed with `is_background: true`.
+/// Checked by `TaskOutputTool::run` / `WaitTasksTool::run` to prevent same-turn
+/// polling — the model must end the turn and wait for the completion notification.
+///
+/// Ephemeral — NOT persisted. Reset at turn start by the shell layer.
+#[derive(Debug)]
+pub struct BackgroundTaskStartedThisTurn(pub std::sync::atomic::AtomicBool);
+
+impl Default for BackgroundTaskStartedThisTurn {
+    fn default() -> Self {
+        Self(std::sync::atomic::AtomicBool::new(false))
+    }
+}
+
+impl BackgroundTaskStartedThisTurn {
+    pub fn set(&self, v: bool) {
+        self.0.store(v, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn get(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ResourceType for BackgroundTaskStartedThisTurn {
+    const ID: &'static str = "";
+}
 /// Metadata for a single MCP resource, returned by [`McpResourceProvider::list_resources`].
 #[derive(Debug, Clone)]
 pub struct McpResourceInfo {

@@ -40,8 +40,8 @@ use crate::types::output::{BackgroundTaskStarted, BashOutput};
 use crate::types::requirements::{Expr, ToolParamsRequirement, ToolRequirement};
 #[allow(unused_imports)]
 use crate::types::resources::{
-    Cwd, NotificationHandle, Params, SessionEnv, SessionFolder, SharedResources, Terminal,
-    TruncationCfg,
+    BackgroundTaskStartedThisTurn, Cwd, NotificationHandle, Params, SessionEnv, SessionFolder,
+    SharedResources, Terminal, TruncationCfg,
 };
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
@@ -2029,6 +2029,17 @@ impl xai_tool_runtime::Tool for BashTool {
                     return Err(bash_err.into());
                 }
             };
+
+            // Mark that a background task was started this turn so
+            // get_task_output / wait_tasks reject same-turn polling.
+            {
+                resources
+                    .lock()
+                    .await
+                    .insert(BackgroundTaskStartedThisTurn(
+                        std::sync::atomic::AtomicBool::new(true),
+                    ));
+            }
 
             let task_id = handle.task_id;
             let bg_output_file = handle.output_file;
