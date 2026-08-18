@@ -21,6 +21,7 @@ const PlanApprovalModal = memo(function PlanApprovalModal() {
   const [feedbackMode, setFeedbackMode] = useState(false)
   const [feedback, setFeedback] = useState('')
   const feedbackRef = useRef<HTMLTextAreaElement>(null)
+  const approveRef = useRef<HTMLButtonElement>(null)
 
   // 新请求到达时复位内部状态
   const requestRef = useRef(request)
@@ -37,23 +38,23 @@ const PlanApprovalModal = memo(function PlanApprovalModal() {
     if (feedbackMode) feedbackRef.current?.focus()
   }, [feedbackMode])
 
-  // 键盘：Enter 批准 / Esc 收起反馈框（反馈框内不劫持 Enter）
+  // 批准按钮自动聚焦：Enter 走原生按钮激活，焦点在弹窗外时不会误批准
   useEffect(() => {
-    if (!request) return
+    if (request && !feedbackMode) approveRef.current?.focus()
+  }, [request, feedbackMode])
+
+  // 键盘：Esc 收起反馈框（不设全局 Enter 热键）
+  useEffect(() => {
+    if (!request || !feedbackMode) return
     const onKey = (e: KeyboardEvent) => {
-      if (responding) return
-      if (e.key === 'Enter' && !feedbackMode && !e.shiftKey && !e.isComposing) {
-        e.preventDefault()
-        setResponding(true)
-        request.respond({ outcome: 'approved' })
-      } else if (e.key === 'Escape' && feedbackMode) {
+      if (e.key === 'Escape') {
         e.preventDefault()
         setFeedbackMode(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [request, responding, feedbackMode])
+  }, [request, feedbackMode])
 
   if (!request) return null
 
@@ -139,6 +140,7 @@ const PlanApprovalModal = memo(function PlanApprovalModal() {
               </button>
             )}
             <button
+              ref={approveRef}
               type="button"
               disabled={responding}
               onClick={handleApprove}

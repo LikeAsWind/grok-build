@@ -1171,6 +1171,11 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
     case 'current_mode_update': {
       if (typeof update.currentModeId === 'string') {
         currentModes.set(sessionId, update.currentModeId)
+        window.dispatchEvent(
+          new CustomEvent('acp:modeChanged', {
+            detail: { sessionId, modeId: update.currentModeId },
+          }),
+        )
       }
       break
     }

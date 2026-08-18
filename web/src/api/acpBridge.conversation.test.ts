@@ -885,6 +885,18 @@ describe('Web 对话交互全量可用性', () => {
     expect(getCurrentMode(SID)).toBe('plan')
   })
 
+  it('current_mode_update 派发 acp:modeChanged 供 UI 同步模式指示器', () => {
+    const events: Array<{ sessionId: string; modeId: string }> = []
+    const onMode = (e: Event) => events.push((e as CustomEvent).detail)
+    window.addEventListener('acp:modeChanged', onMode)
+    try {
+      update({ sessionUpdate: 'current_mode_update', currentModeId: 'default' })
+    } finally {
+      window.removeEventListener('acp:modeChanged', onMode)
+    }
+    expect(events).toEqual([{ sessionId: SID, modeId: 'default' }])
+  })
+
   it('session_info_update 广播 session.updated（标题）', () => {
     update({ sessionUpdate: 'session_info_update', title: '新标题' })
     expect(sessionUpdated).toHaveLength(1)

@@ -20,6 +20,7 @@ import { FolderProjectDropOverlay } from './FolderProjectDropOverlay'
 import { useChatSession, useModels, useModelSelection } from '../../hooks'
 import { useServerStore } from '../../hooks/useServerStore'
 import { useCancelHint } from '../../hooks/useCancelHint'
+import { useAcpMode } from '../../hooks/useAcpMode'
 import { InlineToolRequestContext, type InlineToolRequestContextValue } from './InlineToolRequestContext'
 import { ChatViewportProvider, canUseSplitPane, useChatViewportMaybe, type ChatViewportValue } from './chatViewport'
 import { useChatPageViewModel } from './useChatPageViewModel'
@@ -754,10 +755,10 @@ export const ChatPane = memo(function ChatPane({
   // ============================================
   // Mode state (default / plan / ask) — ACP session-level
   // ============================================
-  const [currentMode, setCurrentMode] = useState('default')
+  const [currentMode, setCurrentMode] = useAcpMode(sessionId)
   const handleModeChange = useCallback((newMode: string) => {
     setCurrentMode(newMode)
-  }, [])
+  }, [setCurrentMode])
 
   // ============================================
   // Dialog Collapsed State
