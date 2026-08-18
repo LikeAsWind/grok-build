@@ -12,7 +12,7 @@ import { keybindingStore, matchesKeybinding } from '../../store/keybindingStore'
 
 interface InlineQuestionProps {
   request: ApiQuestionRequest
-  onReply: (requestId: string, answers: QuestionAnswer[]) => void
+  onReply: (requestId: string, answers: QuestionAnswer[], questions?: ApiQuestionInfo[]) => void
   onReject: (requestId: string) => void
   isReplying: boolean
 }
@@ -106,7 +106,7 @@ export const InlineQuestion = memo(function InlineQuestion({
       }
       return isCustom && customValue ? [customValue] : selected
     })
-    onReply(request.id, result)
+    onReply(request.id, result, request.questions)
   }, [request, answers, customEnabled, customValues, onReply])
 
   const canSubmit = request.questions.every((_q, idx) => {

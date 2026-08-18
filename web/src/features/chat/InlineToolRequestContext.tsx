@@ -7,7 +7,7 @@
  */
 
 import { createContext, useContext } from 'react'
-import type { ApiPermissionRequest, ApiQuestionRequest, PermissionReply, QuestionAnswer } from '../../api'
+import type { ApiPermissionRequest, ApiQuestionInfo, ApiQuestionRequest, PermissionReply, QuestionAnswer } from '../../api'
 import { childSessionStore } from '../../store'
 
 export interface InlineToolRequestContextValue {
@@ -18,7 +18,7 @@ export interface InlineToolRequestContextValue {
   /** 回复权限 */
   onPermissionReply: (requestId: string, reply: PermissionReply) => void
   /** 回复提问 */
-  onQuestionReply: (requestId: string, answers: QuestionAnswer[]) => void
+  onQuestionReply: (requestId: string, answers: QuestionAnswer[], questions?: ApiQuestionInfo[]) => void
   /** 拒绝提问 */
   onQuestionReject: (requestId: string) => void
   /** 是否正在发送回复 */

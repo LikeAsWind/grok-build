@@ -785,7 +785,8 @@ export const ChatPane = memo(function ChatPane({
         const request = pendingPermissionRequests.find(r => r.id === requestId)
         return handlePermissionReply(requestId, reply, effectiveDirectory, request?.sessionID)
       },
-      onQuestionReply: (requestId, answers) => handleQuestionReply(requestId, answers, effectiveDirectory),
+      onQuestionReply: (requestId, answers, questions) =>
+        handleQuestionReply(requestId, answers, effectiveDirectory, questions),
       onQuestionReject: requestId => handleQuestionReject(requestId, effectiveDirectory),
       isReplying,
     }),

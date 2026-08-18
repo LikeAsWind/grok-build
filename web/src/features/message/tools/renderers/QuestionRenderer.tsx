@@ -169,7 +169,12 @@ function buildQAList(
   if (questions.length > 0) {
     return questions.map((q, idx) => ({
       ...q,
-      answers: answerMap.get(q.question) || answerMap.get(String(idx)) || [],
+      answers:
+        answerMap.get(q.question) ||
+        (q.header ? answerMap.get(q.header) : undefined) ||
+        answerMap.get(`q${idx}`) ||
+        answerMap.get(String(idx)) ||
+        [],
     }))
   }
 
