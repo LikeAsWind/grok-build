@@ -49,8 +49,7 @@ import { clearSessionRuntimeState } from '../utils/sessionLifecycle'
 import { serverStorage } from '../utils/perServerStorage'
 import { STORAGE_KEY_SELECTED_AGENT } from '../constants'
 import type { ChatAreaHandle } from '../features/chat'
-import { followupQueueStore, useFollowupQueue } from '../store/followupQueueStore'
-import { themeStore } from '../store/themeStore'
+import { followupQueueStore, shouldQueueFollowup, useFollowupQueue } from '../store/followupQueueStore'
 
 const handleError = createErrorHandler('session')
 
@@ -105,7 +104,6 @@ export function useChatSession({
   navigateHome,
 }: UseChatSessionOptions) {
   const { statusMap } = useActiveSessionStore()
-  const { queueFollowupMessages } = useSyncExternalStore(themeStore.subscribe, themeStore.getSnapshot)
 
   // Agents
   const [agents, setAgents] = useState<ApiAgent[]>([])
@@ -736,10 +734,14 @@ export function useChatSession({
         followupQueueStore.remove(routeSessionId, queuedFollowupFailedId)
       }
 
-      const shouldQueueFollowup =
-        !!routeSessionId && (queuedFollowups.length > 0 || (queueFollowupMessages && isSessionBusy))
-
-      if (shouldQueueFollowup) {
+      if (
+        routeSessionId &&
+        shouldQueueFollowup({
+          sessionId: routeSessionId,
+          queuedCount: queuedFollowups.length,
+          sessionBusy: isSessionBusy,
+        })
+      ) {
         const queued = followupQueueStore.enqueue({
           sessionId: routeSessionId,
           directory: effectiveDirectory || '',
@@ -786,7 +788,6 @@ export function useChatSession({
       routeSessionId,
       queuedFollowups.length,
       queuedFollowupFailedId,
-      queueFollowupMessages,
       isSessionBusy,
       effectiveDirectory,
       buildLocalQueuedMessage,

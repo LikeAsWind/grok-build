@@ -211,6 +211,20 @@ class FollowupQueueStore {
 
 export const followupQueueStore = new FollowupQueueStore()
 
+/**
+ * 是否应把本次发送放入 follow-up 队列。
+ * 会话忙碌时必须排队：ACP 同会话不能并发 prompt，直接调 acpPrompt 会在
+ * `await prior` 处静默阻塞到当前轮结束（期间发送按钮卡灰、无停止按钮，
+ * 消息延迟到整轮结束才真正发出）。
+ */
+export function shouldQueueFollowup(input: {
+  sessionId: string | null
+  queuedCount: number
+  sessionBusy: boolean
+}): boolean {
+  return !!input.sessionId && (input.queuedCount > 0 || input.sessionBusy)
+}
+
 export function useFollowupQueue(sessionId: string | null) {
   const state = useSyncExternalStore(followupQueueStore.subscribe, followupQueueStore.getSnapshot)
 
