@@ -69,7 +69,8 @@
     "title": "Question",
     "moreCount": "+{{count}} more",
     "minimize": "Minimize",
-    "typeYourAnswer": "Type your own answer..."
+    "typeYourAnswer": "Type your own answer...",
+    "skipDisabledHint": "Option selected, please submit"
   },
   "planApproval": {
     "title": "Plan Approval",

@@ -150,11 +150,20 @@ export function QuestionDialog({
     }
   })
 
+  // 检查是否有任何问题已做选择（选中选项或启用自定义输入）
+  const hasAnySelection = request.questions.some((_q, idx) => {
+    const selected = answers.get(idx) || new Set()
+    const isCustomEnabled = customEnabled.get(idx)
+    const customValue = customValues.get(idx)?.trim()
+    return selected.size > 0 || (isCustomEnabled && !!customValue)
+  })
+
   // 键盘快捷键：和主输入框一致的 send keybinding 提交，Escape 跳过
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      // Escape → 跳过
+      // Escape → 跳过（已有选择时不响应，避免误操作）
       if (e.key === 'Escape') {
+        if (hasAnySelection) return
         e.preventDefault()
         onReject()
         return
@@ -168,7 +177,7 @@ export function QuestionDialog({
         }
       }
     },
-    [onReject, canSubmit, isReplying, handleSubmit],
+    [onReject, canSubmit, isReplying, handleSubmit, hasAnySelection],
   )
 
   // 弹出/收起动画
@@ -251,8 +260,9 @@ export function QuestionDialog({
 
               <button
                 onClick={onReject}
-                disabled={isReplying}
+                disabled={isReplying || hasAnySelection}
                 className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-text-300 hover:bg-bg-200 transition-colors text-[length:var(--fs-base)] disabled:opacity-50 disabled:cursor-not-allowed"
+                title={hasAnySelection ? t('questionDialog.skipDisabledHint') : undefined}
               >
                 <span>{t('common:skip')}</span>
                 <span className="text-[length:var(--fs-sm)] text-text-500">{t('common:esc')}</span>
@@ -335,7 +345,9 @@ function QuestionItem({
               key={idx}
               onClick={() => (isMultiple ? onToggleOption(option.label) : onSelectOption(option.label))}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors text-left ${
-                isSelected ? 'border-text-100 bg-bg-200' : 'border-border-200/50 hover:bg-bg-200'
+                isSelected
+                  ? 'border-accent-main-100/50 bg-accent-main-100/10'
+                  : 'border-border-200/50 hover:bg-bg-200'
               }`}
             >
               <Indicator type={isMultiple ? 'checkbox' : 'radio'} checked={isSelected} />
@@ -355,7 +367,9 @@ function QuestionItem({
           <div
             onClick={() => (isMultiple ? onToggleCustom() : onSelectCustom())}
             className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
-              isCustomEnabled ? 'border-text-100 bg-bg-200' : 'border-border-200/50 hover:bg-bg-200'
+              isCustomEnabled
+                ? 'border-accent-main-100/50 bg-accent-main-100/10'
+                : 'border-border-200/50 hover:bg-bg-200'
             }`}
           >
             <div className="pt-0.5">
@@ -391,7 +405,9 @@ function QuestionItem({
 function Indicator({ type, checked }: { type: 'radio' | 'checkbox'; checked: boolean }) {
   const baseClass = `flex-shrink-0 w-[18px] h-[18px] border-2 flex items-center justify-center transition-colors`
   const shapeClass = type === 'radio' ? 'rounded-full' : 'rounded'
-  const stateClass = checked ? 'border-text-100 bg-text-100 text-bg-000' : 'border-border-300'
+  const stateClass = checked
+    ? 'border-accent-main-100 bg-accent-main-100 text-bg-000'
+    : 'border-border-300'
 
   return <span className={`${baseClass} ${shapeClass} ${stateClass}`}>{checked && <CheckIcon />}</span>
 }

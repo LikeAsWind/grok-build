@@ -69,7 +69,8 @@
     "title": "问题",
     "moreCount": "还有 {{count}} 个",
     "minimize": "最小化",
-    "typeYourAnswer": "输入你的回答..."
+    "typeYourAnswer": "输入你的回答...",
+    "skipDisabledHint": "已选择选项，请提交答案"
   },
   "planApproval": {
     "title": "计划审批",
