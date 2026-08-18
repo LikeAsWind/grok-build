@@ -687,9 +687,27 @@ export function buildTurnDurationMap(messages: Message[], visibleMessages: Messa
       continue
     }
 
-    if (currentUserCreated == null || message.info.role !== 'assistant') continue
-    // 任务完成通知/唤醒回复是后台任务驱动的合成消息，不参与 turn 耗时归属
-    if (isTaskNotificationMessage(message) || isWakeReplyMessage(message)) continue
+    if (message.info.role !== 'assistant') continue
+
+    // 任务完成通知卡片不参与 turn 耗时归属（纯通知，无模型回复）
+    if (isTaskNotificationMessage(message)) continue
+
+    // 唤醒回复自成回合：以自身 created 为起点计算耗时
+    if (isWakeReplyMessage(message)) {
+      commitTurn()
+      currentUserCreated = message.info.time.created
+      currentVisibleAssistantId = null
+      currentLastCompleted = null
+      if (visibleAssistantIds.has(message.info.id)) {
+        currentVisibleAssistantId = message.info.id
+      }
+      if (message.info.time.completed != null) {
+        currentLastCompleted = message.info.time.completed
+      }
+      continue
+    }
+
+    if (currentUserCreated == null) continue
 
     if (visibleAssistantIds.has(message.info.id)) {
       currentVisibleAssistantId = message.info.id

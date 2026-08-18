@@ -1,3 +1,6 @@
+// 队列状态是模块级单例：HMR 热更会分裂出第二份实例，必须整页刷新。
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
+
 import { useMemo, useSyncExternalStore } from 'react'
 import type { Attachment } from '../features/attachment'
 import { QUEUED_MESSAGE_ID_PREFIX } from '../features/message/queuedMessage'

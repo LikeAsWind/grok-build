@@ -71,6 +71,10 @@ class JsonRpc {
   request(method: string, params?: unknown): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
+      if (this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error(`WebSocket not open (readyState=${this.ws.readyState})`))
+        return
+      }
       this.pending.set(id, { resolve, reject });
       this.send({ jsonrpc: "2.0", id, method, params });
     });
@@ -81,7 +85,9 @@ class JsonRpc {
   }
 
   private send(msg: unknown) {
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg))
+    }
   }
 
   close() {

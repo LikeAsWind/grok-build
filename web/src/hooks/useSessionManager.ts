@@ -465,6 +465,17 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
     }
   }, [sessionId])
 
+  // ACP 意外断开自动重连成功后，重新拉取当前会话快照，
+  // 补齐断线窗口内丢失的流式帧（后端 MvpAgent 跨重连持久，历史已落盘）
+  useEffect(() => {
+    if (!sessionId) return
+    const onReconnected = () => {
+      void loadSessionRef.current(sessionId)
+    }
+    window.addEventListener('acp:reconnected', onReconnected)
+    return () => window.removeEventListener('acp:reconnected', onReconnected)
+  }, [sessionId])
+
   return {
     loadSession,
     loadMoreHistory,

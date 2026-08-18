@@ -2,6 +2,9 @@
 // Global Event Subscription (SSE) - Singleton Pattern
 // ============================================
 
+// 事件总线是模块级单例：HMR 热更会分裂出第二份实例，必须整页刷新。
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
+
 import { getApiBaseUrl, getAuthHeader } from './http'
 import { createSseTextParser } from './sse'
 import { normalizeTodoItems } from './todo'

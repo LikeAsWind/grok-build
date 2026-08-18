@@ -9,6 +9,7 @@ import { DirectoryProvider, FullscreenProvider, SessionProvider } from './contex
 import { AcpProvider } from './contexts/AcpContext'
 import { themeStore } from './store/themeStore'
 import { serverStore } from './store/serverStore'
+import { readSecret } from './api/acpBridge'
 import { messageStore } from './store/messageStore'
 import { childSessionStore } from './store/childSessionStore'
 import { todoStore } from './store/todoStore'
@@ -176,6 +177,9 @@ function bootstrap() {
 }
 
 function startApp() {
+  // 在 React 渲染前提取 URL hash 中的 key，避免 SPA 路由改写 hash 导致密钥丢失
+  readSecret()
+
   bootstrap()
 
   void initializeNativeDesktopService()

@@ -2,6 +2,9 @@
 // Server Store - 多后端服务器配置管理
 // ============================================
 
+// 服务器配置是模块级单例：HMR 热更会分裂出第二份实例，必须整页刷新。
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
+
 import { API_BASE_URL } from '../constants'
 import { isTauri } from '../utils/tauri'
 
@@ -510,7 +513,9 @@ class ServerStore {
     try {
       const headers: Record<string, string> = {}
       if (server.auth?.password) {
-        headers['Authorization'] = makeBasicAuthHeader(server.auth)
+        // grok 后端用 x-server-key（password 字段即 server-key），
+        // Basic Auth 会触发 preflight 且后端 CORS 不放行 authorization
+        headers['x-server-key'] = server.auth.password
       }
 
       const f = await getUnifiedFetch()

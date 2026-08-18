@@ -12,12 +12,12 @@
 ## A. 核心消息回路
 
 ### A1. 流式文本回复
-- **TUI 对标**：主聊天区流式渲染（`agent_message_chunk`）
+- **TUI 对标**：主聊天区流式渲染（`agent_message_chunk`）+ 状态行（Waiting for response / Responding）
 - **操作**：新建会话，发送「用三句话解释一下这个仓库是干什么的」
 - **预期**：
   - [ ] 回复流式逐字出现，不是整段闪现
   - [ ] Markdown 正确渲染（代码块高亮、列表、表格）
-  - [ ] 流式期间显示 streaming 状态，结束后回到 idle
+  - [ ] 发出后消息流末尾出现「等待响应… N.Ns」，首 chunk 到达后变「回复中… N.Ns」（spinner + 秒表，`StreamingStatusInline`），结束后消失
 
 ### A2. Thinking / Reasoning 折叠
 - **TUI 对标**：thinking 折叠块（`agent_thought_chunk`）
@@ -80,7 +80,7 @@
 - **TUI 对标**：`tasks_pane` 通知（`task_completed`）
 - **操作**：发送「在后台跑一个 sleep 5 的 bash 命令，然后告诉我结果」
 - **预期**：
-  - [ ] 任务完成时会话内出现「✅ Task … completed」内联系统消息
+  - [ ] 任务完成时出现「✅ Task … completed」**独立系统消息**（`msg_tasknotif_<taskId>`，不吸进上一条 assistant 消息；streaming 期间缓冲，idle 时 flush）
 
 ---
 
@@ -88,16 +88,18 @@
 
 ### C1. 权限弹窗 — 允许
 - **TUI 对标**：`permission_view`
-- **前置**：确认 `[ui] yolo` 未开启（设置 → 表单）
+- **前置**：确认 `[ui] yolo` 未开启（设置 → 表单）。默认**内联模式**（`inlineToolRequests`，设置 → Agent 可切换为独立底部弹窗）
 - **操作**：发送「在项目根目录创建 test-perm.txt」
 - **预期**：
-  - [ ] 弹出权限框，显示工具名 + 参数
-  - [ ] 「允许一次」后工具执行并出卡片
+  - [ ] 工具卡片下方出现内联权限按钮（按 `tool.callID` 关联到卡片）
+  - [ ] 选项文案为中文：「允许」「始终允许，不再询问」「拒绝，并告诉 Grok 怎么做」「拒绝，之后也不再执行」（后端英文 name 按 kind 映射 i18n；动态命令选项如「始终允许：git push」保留命令）
+  - [ ] 「允许」后工具执行并出卡片，权限按钮消失
 
 ### C2. 权限弹窗 — 拒绝
-- **操作**：再发一次同样请求，选「拒绝」
+- **操作**：再发一次同样请求，选「拒绝，并告诉 Grok 怎么做」
 - **预期**：
   - [ ] agent 收到拒绝，不执行该操作，正常回复（不卡死、不转圈）
+  - [ ] 注意：`needs_input` 期间发的新消息会静默排队（已知缺口，无 UI 提示），审批必须先回答
 
 ### C3. 权限弹窗 — 流式中到达
 - **操作**：发一个先解释后写文件的任务，权限弹窗在文字流式中弹出
@@ -108,7 +110,7 @@
 - **TUI 对标**：`question_view`
 - **操作**：发送「用 AskUserQuestion 问我一个二选一的问题」
 - **预期**：
-  - [ ] 弹出问题框，header + 选项可点
+  - [ ] 出现问题交互（内联模式下为 `InlineQuestion` 卡片；关闭 `inlineToolRequests` 后为 `QuestionDialog` 底部弹窗），header + 选项可点
   - [ ] 选择后 agent 收到答案并继续
   - [ ] 「其他」入口可输入自定义文本
 - **多问题变体**：发送「一次问我两个问题，每个两个选项」→ [ ] 两个问题都展示、都能作答
@@ -119,13 +121,15 @@
 - **操作**：发送「计划一下怎么给 README 加一个 FAQ 章节」
 - **预期**：
   - [ ] agent 完成规划调 `x.ai/exit_plan_mode` 时**弹出 Plan Approval 弹窗**（不是自动放行）
-  - [ ] 弹窗里能看到 plan 条目内容
-  - [ ] 批准后 agent 退出 plan 模式开始执行
+  - [ ] 弹窗展示 **plan.md 全文**（`planContent`，MarkdownRenderer 渲染，标题/列表/代码块），不是步骤列表
+  - [ ] 三个动作：「批准并执行」（主按钮，Enter 快捷键）/「要求修改」（展开反馈输入框）/「放弃计划」（左下弱化）
+  - [ ] 批准回包 `{outcome:"approved"}`，agent 退出 plan 模式开始执行
 
-### C6. Plan 审批 — 拒绝
-- **操作**：重复 C5，这次拒绝
+### C6. Plan 审批 — 要求修改
+- **操作**：重复 C5，这次点「要求修改」，输入修改意见后发送
 - **预期**：
-  - [ ] agent 停留在 plan 模式，不执行任何写操作
+  - [ ] 回包 `{outcome:"cancelled", feedback:"…"}`，agent 停留在 plan 模式，带着反馈修订计划，不执行任何写操作
+  - [ ] 「放弃计划」则回 `{outcome:"abandoned"}`，退出计划模式不执行
 
 ### C7. Plan 审批 — yolo 自动批准
 - **操作**：设置 `[ui] yolo` = true，重复 C5
@@ -162,9 +166,10 @@
 
 ### D4. 错误 / 重试卡片
 - **TUI 对标**：采样失败提示（`retry_state`）
-- **操作**：设置里把模型 API key 改成无效值，发一条消息
+- **操作**：设置里把模型 API key 改成无效值，发一条消息（或选一个网络不通的模型如 grok-4.5）
 - **预期**：
-  - [ ] 出现结构化错误卡片（RetryPartView），可展开看 error_type
+  - [ ] 重试期间消息流末尾出现 `RetryStatusInline` 黄色横条（重试中（第 N 次）+ 倒计时），可展开看原始错误
+  - [ ] 重试耗尽后出现结构化错误卡片（`RetryPartView` / `MessageErrorView`「API 错误」），可展开详情
   - [ ] 会话回到 idle，不白屏、不永久转圈
   - [ ] key 改回后同会话恢复正常
 
@@ -197,7 +202,8 @@
 - **TUI 对标**：状态栏切换器（`set_model` / `set_mode` / `current_mode_update` / `model_changed`）
 - **操作**：Header 切换模型；切换模式（default / plan / accept-edits）
 - **预期**：
-  - [ ] 切换立即生效，发消息验证新模型在响应
+  - [ ] 无持久化选择时（全新浏览器）Header 默认显示 config.toml `[models] default` 解析出的模型，不是列表第一个
+  - [ ] 切换立即生效（`set_model` 即时发送），发消息验证新模型在响应
   - [ ] 模式切换后 agent 行为对应变化（plan 模式只读）
   - [ ] 开两个浏览器标签连同一后端，一边切模型另一边同步（`model_changed` 推送）
 
@@ -222,7 +228,7 @@
 - **预期**：
   - [ ] revert 后该消息之后的内容隐藏
   - [ ] unrevert 恢复全部
-  - [ ]（已知缺口：多检查点面板 `x.ai/rewind/points` 未实现，不测）
+    - [ ]（已知缺口：多检查点面板 `x.ai/rewind/points` 未实现，不测）
 
 ### E7. 内嵌终端
 - **TUI 对标**：内嵌 PTY
@@ -237,8 +243,8 @@
 - **操作**：对话中途重启后端（`grok web` 停掉再起），或断网几秒
 - **预期**：
   - [ ] UI 显示断线状态，恢复后自动重连
-  - [ ] 重连后会话列表和当前会话历史恢复，pending 的权限/问题请求重新拉取
-  - [ ] 不产生重复消息
+  - [ ] 重连后会话列表和当前会话历史恢复，不产生重复消息
+  - [ ] **已知缺口**：断连期间 parked 的权限/计划审批请求**不会 replay** 到新连接（后端 `pending_interaction` 是内存 oneshot，`session/load` 不重发）。审批悬着时刷新页面 → session 永久 `needs_input`，新消息静默排队。解法：点停止按钮（`session/cancel`）打断 parked 审批后重试
 
 ### E9. 多后端切换 + 工作目录
 - **TUI 对标**：（对标 TUI 启动参数 `--cwd`）
@@ -259,6 +265,10 @@
 ## 已知缺口（预期不可用，跳过不算失败）
 
 MCP 运行时面板、Skills 面板、Cron / 定时任务 UI、Rewind 多检查点面板、Subagent 树状视图、Worktree 生命周期、历史搜索、Memory 面板、`/btw` 内联问答、完整 usage 面板。详见 `CLAUDE.md` 已知缺口。
+
+**后端侧已知问题**（前端无法修复，测试时注意区分）：
+- parked 审批不 replay（见 E8）——审批悬着时断连/刷新会导致 session 卡 `needs_input`
+- `needs_input` 期间新 prompt 静默排队，前端无「前面有审批挡着」提示（`_x.ai/queue/changed` 未订阅渲染）
 
 ## 结果记录
 

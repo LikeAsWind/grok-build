@@ -8,6 +8,10 @@
 // 3. 提供 prompt / cancel / createSession / models 给各 api 模块调用
 // ============================================
 
+// 连接/回合状态是模块级单例：HMR 热更会分裂出第二份实例（WS 帧写新实例、
+// UI 绑旧实例，消息"到了却看不见"），必须整页刷新。
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
+
 import { AcpClient } from './acp'
 import { injectGlobalEvent, setAcpConnectionState } from './events'
 import { sessionCwdForWire } from './sessionCwd'
@@ -114,6 +118,36 @@ let _serverCwd = ''
 let _modelState: AcpModelState | null = null
 let _initMeta: Record<string, unknown> = {}
 
+// ── 自动重连（意外断开时指数退避）────────────────────────────────
+let _reconnectAttempt = 0
+let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelReconnect() {
+  if (_reconnectTimer) {
+    clearTimeout(_reconnectTimer)
+    _reconnectTimer = null
+  }
+  _reconnectAttempt = 0
+}
+
+function scheduleReconnect() {
+  if (_reconnectTimer) return
+  const delay = Math.min(30_000, 1_000 * 2 ** _reconnectAttempt)
+  _reconnectAttempt++
+  _reconnectTimer = setTimeout(() => {
+    _reconnectTimer = null
+    void ensureAcp()
+      .then(() => {
+        // 断线窗口内的通知已丢失；由 useSessionManager 监听此事件
+        // 重新拉取当前会话快照补齐
+        window.dispatchEvent(new CustomEvent('acp:reconnected'))
+      })
+      .catch(() => {
+        scheduleReconnect()
+      })
+  }, delay)
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
@@ -161,10 +195,15 @@ export async function ensureAcp(): Promise<AcpClient> {
       })
 
       client.ws.onclose = () => {
+        // 必须 reject 全部在途 RPC（否则在途 session/prompt 永不 settle，
+        // pendingPrompts 留着死 promise，该会话后续消息全部排队夯死）。
+        // close() 幂等：主动断开路径（disconnectAcpBridge）已清空 pending。
+        client.close()
         if (_client === client) {
           _client = null
           _connectPromise = null
           setStatus('disconnected', 'WebSocket 连接已断开')
+          scheduleReconnect()
         }
       }
 
@@ -194,6 +233,7 @@ export async function ensureAcp(): Promise<AcpClient> {
       }
 
       _client = client
+      _reconnectAttempt = 0
       setStatus('connected')
       return client
     } catch (err) {
@@ -207,9 +247,13 @@ export async function ensureAcp(): Promise<AcpClient> {
 }
 
 export function disconnectAcpBridge() {
-  _client?.close()
+  cancelReconnect()
+  // 先摘 _client 再 close：onclose 里 `_client === client` 判假，
+  // 主动断开不会触发自动重连（onclose 可能同步或异步触发）
+  const client = _client
   _client = null
   _connectPromise = null
+  client?.close()
   setStatus('disconnected')
 }
 
@@ -567,6 +611,7 @@ export function settlePromptTurn(sessionId: string) {
     // 回合已被唤醒轮接管：不 finalize（会清 wakeTaskId 把唤醒回复劈成两段）、
     // 不发 idle（wake 轮仍在跑，session 尚未真正空闲）——定稿交给唤醒轮自己的
     // turn_completed（wasWake 分支补发 idle）。
+    traceIdle(sessionId, 'settlePromptTurn', false, 'wake turn took over')
     return
   }
   cancelDanglingTools(sessionId, turn)
@@ -574,6 +619,17 @@ export function settlePromptTurn(sessionId: string) {
   flushPendingTaskNotifications(sessionId)
   emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
   emit('session.idle', { sessionID: sessionId }, sessionId)
+  traceIdle(sessionId, 'settlePromptTurn', true, '')
+}
+
+/**
+ * idle 发射追踪：记录每次 settlePromptTurn / turn_completed 的 idle 决策，
+ * 用于诊断「回复中...」状态不同步（卡住时看哪个路径没发射、原因是什么）。
+ */
+function traceIdle(sessionId: string, source: string, emitted: boolean, reason: string) {
+  const w = window as unknown as { __idleLog?: Array<{ t: number; sessionId: string; source: string; emitted: boolean; reason: string }> }
+  if (!w.__idleLog) w.__idleLog = []
+  w.__idleLog.push({ t: performance.now(), sessionId, source, emitted, reason })
 }
 
 /**
@@ -599,6 +655,19 @@ function emitPartUpdated(sessionId: string, messageId: string, part: Record<stri
 }
 
 function emitTextDelta(sessionId: string, messageId: string, partId: string, delta: string) {
+  // streaming 诊断：记录每条 delta 的时间戳和长度，供排查流式卡顿
+  const w = window as unknown as {
+    __deltaLog?: Array<{ t: number; len: number }>
+    __streamDiag?: { sessionId: string; deltaCount: number; totalChars: number; startTime: number }
+  }
+  if (!w.__deltaLog) w.__deltaLog = []
+  w.__deltaLog.push({ t: performance.now(), len: delta.length })
+  // 按 turn 聚合统计
+  if (!w.__streamDiag || w.__streamDiag.sessionId !== sessionId) {
+    w.__streamDiag = { sessionId, deltaCount: 0, totalChars: 0, startTime: performance.now() }
+  }
+  w.__streamDiag.deltaCount++
+  w.__streamDiag.totalChars += delta.length
   emit('message.part.delta', { sessionID: sessionId, messageID: messageId, partID: partId, field: 'text', delta }, sessionId)
 }
 
@@ -1132,6 +1201,9 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
         // 让 messageStore 给 msg_wake_ 消息定稿（补 time.completed、退 streaming）
         emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
         emit('session.idle', { sessionID: sessionId }, sessionId)
+        traceIdle(sessionId, 'turn_completed', true, 'wake turn')
+      } else {
+        traceIdle(sessionId, 'turn_completed', false, wasWake ? 'promptInFlight still true' : 'not a wake turn')
       }
       break
     }
@@ -1220,6 +1292,11 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       //   到消息流末尾；回放窗口内一律立即渲染以保持历史位置。
       const t = update as Record<string, unknown>
       const snap = isRecord(t.task_snapshot) ? t.task_snapshot : undefined
+      // 后端对每个后台任务无条件下发完成帧（TUI 滚动行/持久化需要），
+      // 但 block_waited=true 表示模型已同步等到结果（等效前台执行）、
+      // explicitly_killed=true 表示任务被显式 kill——这两类对用户而言
+      // 都不是「后台任务完成」，渲染独立卡会造成误导，直接跳过。
+      if (snap?.block_waited === true || snap?.explicitly_killed === true) break
       const n = parseTaskNotification(t, snap)
       const existing = getTaskNotifRecord(sessionId, n.taskId)
       const record: TaskNotifRecord = existing

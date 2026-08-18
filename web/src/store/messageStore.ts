@@ -8,6 +8,9 @@
 // 3. Undo/Redo 通过 revertState 实现
 // 4. RAF 批量通知 React 组件更新
 
+// 消息数据是模块级单例：HMR 热更会分裂出第二份实例（帧写新实例、UI 读旧实例），必须整页刷新。
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
+
 import type { Message, MessageError, Part, FilePart, AgentPart } from '../types/message'
 import type { ApiMessageWithParts, ApiMessage, ApiPart, ApiSession, Attachment } from '../api/types'
 import { logger } from '../utils/logger'

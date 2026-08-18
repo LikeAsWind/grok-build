@@ -344,6 +344,25 @@ describe('Web 对话交互全量可用性', () => {
     expect(part.exitCode).toBe(1)
   })
 
+  it('block_waited 任务（模型已同步等到结果）不渲染独立完成卡', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-blocked', command: 'cargo build', exit_code: 0, completed: true, block_waited: true },
+      will_wake: false,
+    })
+    expect(taskMsgs()).toHaveLength(0)
+    expect(messageStore.getIsStreaming(SID)).toBe(false)
+  })
+
+  it('explicitly_killed 任务不渲染独立完成卡', () => {
+    update({
+      sessionUpdate: 'task_completed',
+      task_snapshot: { task_id: 't-killed', command: 'sleep 999', signal: 'SIGKILL', completed: true, explicitly_killed: true },
+      will_wake: false,
+    })
+    expect(taskMsgs()).toHaveLength(0)
+  })
+
   it('流式期间 task_completed 缓冲，turn_completed 后 flush 到消息流末尾', () => {
     textChunk('正在处理另一个问题')
     update({
