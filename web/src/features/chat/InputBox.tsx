@@ -1267,7 +1267,7 @@ function InputBoxComponent({
             className={`z-30 transition-[opacity,transform] duration-200 ease-out ${
               isCollapsed
                 ? 'pointer-events-none absolute inset-x-0 bottom-0 opacity-0 scale-95'
-                : 'relative opacity-100 scale-100'
+                : 'relative opacity-100 scale-100 pointer-events-auto'
             }`}
           >
             {/* @ Mention Menu */}

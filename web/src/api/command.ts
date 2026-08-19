@@ -43,9 +43,11 @@ async function fetchCommands(directory?: string): Promise<Command[]> {
     // Backend unreachable — frontend commands still available
   }
   const frontendCommands = getFrontendCommands()
-  const commandsFromApi: Command[] = apiCommands.map(command => ({ ...command, source: 'api' }))
-  const apiNames = new Set(commandsFromApi.map(c => c.name))
-  return [...commandsFromApi, ...frontendCommands.filter(c => !apiNames.has(c.name))]
+  const frontendNames = new Set(frontendCommands.map(c => c.name))
+  const commandsFromApi: Command[] = apiCommands
+    .filter(c => !frontendNames.has(c.name))
+    .map(command => ({ ...command, source: 'api' }))
+  return [...commandsFromApi, ...frontendCommands]
 }
 
 export async function getCommands(directory?: string): Promise<Command[]> {

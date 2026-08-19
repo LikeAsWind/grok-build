@@ -35,14 +35,14 @@ describe('getCommands', () => {
     ])
   })
 
-  it('keeps API commands as api commands even if names overlap frontend commands', async () => {
+  it('frontend commands win when names overlap api commands', async () => {
     listMock.mockResolvedValue({ data: [{ name: 'compact', description: 'Native compact command' }] })
 
     const commands = await getCommands('/workspace/project-overlap')
 
     expect(commands).toEqual([
-      { name: 'compact', description: 'Native compact command', source: 'api' },
       { name: 'new', description: 'Create a new chat session', source: 'frontend' },
+      { name: 'compact', description: 'Compact session by summarizing conversation history', source: 'frontend' },
     ])
   })
 })

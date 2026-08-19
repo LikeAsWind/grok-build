@@ -146,11 +146,13 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
       setLoading(true)
 
       // 并行取 REST 和 ACP 命令
+      console.log('[DEBUG slash] fetching', { rootPath, sessionId, requestId })
       Promise.all([
         getCommands(rootPath),
         sessionId ? Promise.resolve(getAvailableCommands(sessionId)) : Promise.resolve([]),
       ])
         .then(([restCmds, acpCmds]) => {
+          console.log('[DEBUG slash] resolved', { requestId, current: requestIdRef.current, restCmds, acpCmds })
           if (requestId !== requestIdRef.current) return
           // ACP 命令优先（同名覆盖 REST），转成 Command 格式
           const restNames = new Set(restCmds.map(c => c.name))
@@ -236,7 +238,7 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
     <div
       ref={menuRef}
       data-dropdown-open
-      className="absolute z-50 w-full md:max-w-[360px] flex flex-col glass border border-border-200/60 rounded-xl shadow-lg overflow-hidden"
+      className="absolute z-50 w-full md:max-w-[360px] flex flex-col glass border border-border-200/60 rounded-xl shadow-lg overflow-hidden pointer-events-auto"
       style={{
         bottom: '100%',
         left: 0,
