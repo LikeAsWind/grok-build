@@ -139,6 +139,15 @@
     "truncated": "Output truncated — full output at {{file}}",
     "wakeReplyLabel": "Auto reply to background task"
   },
+  "agentNotification": {
+    "completedTitle": "Sub-agent completed",
+    "failedTitle": "Sub-agent failed",
+    "noOutput": "No output",
+    "turns_one": "{{count}} turn",
+    "turns_other": "{{count}} turns",
+    "tools_one": "{{count}} tool call",
+    "tools_other": "{{count}} tool calls"
+  },
   "subtask": {
     "running": "Running",
     "done": "Done",

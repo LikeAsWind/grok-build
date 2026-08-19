@@ -312,6 +312,26 @@ export interface TaskCompletionPart extends PartBase {
   description?: string
 }
 
+/** 后台子 agent 完成通知（grok 扩展：subagent_finished 独立系统消息的唯一 part） */
+export interface AgentCompletionPart extends PartBase {
+  type: 'agent-completion'
+  taskId: string
+  /** 子 agent 标识（subagent_id，可能为空串） */
+  command: string
+  /** 任务描述（spawned 时的 description/command） */
+  description?: string
+  agentType?: string
+  childSessionId?: string
+  ok: boolean
+  /** 子 agent 输出的 final text（markdown 渲染） */
+  output?: string
+  turns?: number
+  toolCalls?: number
+  durationMs?: number
+  /** 前端收到通知帧的时间（epoch ms） */
+  receivedAt: number
+}
+
 export type Part =
   | TextPart
   | ReasoningPart
@@ -326,6 +346,7 @@ export type Part =
   | RetryPart
   | CompactionPart
   | TaskCompletionPart
+  | AgentCompletionPart
 
 // ============================================
 // Message (完整消息)
@@ -382,6 +403,7 @@ export function isRenderablePart(part: Part): boolean {
     case 'retry':
     case 'compaction':
     case 'task-completion':
+    case 'agent-completion':
       return true
     default:
       return false

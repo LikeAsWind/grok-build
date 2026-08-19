@@ -113,6 +113,13 @@
     "truncated": "输出已截断——完整输出见 {{file}}",
     "wakeReplyLabel": "后台任务自动回复"
   },
+  "agentNotification": {
+    "completedTitle": "子代理已完成",
+    "failedTitle": "子代理失败",
+    "noOutput": "无输出",
+    "turns": "{{count}} 轮",
+    "tools": "{{count}} 次工具调用"
+  },
   "subtask": {
     "running": "运行中",
     "done": "Done",
