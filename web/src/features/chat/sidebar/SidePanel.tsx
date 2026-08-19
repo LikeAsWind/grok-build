@@ -307,7 +307,7 @@ export function SidePanel({
   // Active sessions
   const busySessions = useBusySessions()
   const busyCount = useBusyCount()
-  useSyncExternalStore(
+  const childSessionVersion = useSyncExternalStore(
     childSessionStore.subscribe.bind(childSessionStore),
     childSessionStore.getVersion,
     childSessionStore.getVersion,
@@ -350,14 +350,35 @@ export function SidePanel({
     return map
   }, [sessions, fetchedSessions])
 
+  // roster 无父子关系字段——靠 childSessionStore（subagent_spawned / 恢复的
+  // completion 通知）识别子会话：id → parentID
+  const childParentIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of sessions) {
+      const pid = s.parentID || childSessionStore.getSessionInfo(s.id)?.parentID
+      if (pid) map.set(s.id, pid)
+    }
+    return map
+    // childSessionVersion：spawned/恢复通知到达时重算
+  }, [sessions, childSessionVersion])
+
+  // 父在列表内的子会话不平级展示（挂到父行下，见 inlineChildSessions）
+  const topLevelSessions = useMemo(() => {
+    const allIds = new Set(sessions.map(s => s.id))
+    return sessions.filter(s => {
+      const pid = childParentIds.get(s.id)
+      return !(pid && allIds.has(pid))
+    })
+  }, [sessions, childParentIds])
+
   const orderedSessions = useMemo(() => {
     const pinnedSet = new Set(pinnedEntries.map(e => e.sessionId))
     const pinned = pinnedEntries
       .map(entry => sessionLookup.get(entry.sessionId))
       .filter((session): session is ApiSession => Boolean(session))
-    const rest = sessions.filter(s => !pinnedSet.has(s.id))
+    const rest = topLevelSessions.filter(s => !pinnedSet.has(s.id))
     return [...pinned, ...rest]
-  }, [pinnedEntries, sessionLookup, sessions])
+  }, [pinnedEntries, sessionLookup, topLevelSessions])
   const pinnedDividerAfterIds = useMemo(() => {
     const lastPinned = pinnedEntries
       .map(entry => sessionLookup.get(entry.sessionId))
@@ -471,7 +492,7 @@ export function SidePanel({
   }, [missingSessionsKey, sessionLookup])
 
   // ---- 子 session 展示数据 ----
-  const rootSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions])
+  const rootSessionIds = useMemo(() => new Set(topLevelSessions.map(s => s.id)), [topLevelSessions])
 
   const findParentId = useCallback(
     (id: string) => {
@@ -491,7 +512,7 @@ export function SidePanel({
     return undefined
   }, [search, sidebarShowChildSessions, selectedSessionId, rootSessionIds, findParentId])
 
-  // 开关关 → 只挂活跃的 + 选中的子 session
+  // 开关关 → 挂已知子会话（roster 平级返回的 + 活跃的 + 选中的）
   const inlineChildSessions = useMemo(() => {
     if (search) return undefined
     const map = new Map<string, ApiSession[]>()
@@ -503,6 +524,11 @@ export function SidePanel({
         map.set(parentId, arr)
       }
       if (!arr.some(s => s.id === session.id)) arr.push(session)
+    }
+    // roster 平级返回的子会话（已从顶层过滤）常驻挂到父行下
+    for (const s of sessions) {
+      const pid = childParentIds.get(s.id)
+      if (pid && rootSessionIds.has(pid)) add(pid, s)
     }
     for (const entry of busySessions) {
       const pid = findParentId(entry.sessionId)
@@ -521,6 +547,8 @@ export function SidePanel({
     return map.size > 0 ? map : undefined
   }, [
     search,
+    sessions,
+    childParentIds,
     busySessions,
     selectedSessionId,
     sidebarShowChildSessions,

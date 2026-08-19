@@ -255,11 +255,29 @@ export async function getLastTurnDiff(_sessionId: string, _directory?: string): 
 }
 
 /**
- * 获取子 session
- * ACP roster 无父子关系，返回空
+ * 获取子 session。
+ * ACP roster 无父子关系——从 childSessionStore（subagent_spawned / 恢复的
+ * completion 通知）读取记录，优先用 roster 里的真实 ApiSession，缺席时
+ * 合成最小条目（title = spawn description）。
  */
-export async function getSessionChildren(_sessionId: string, _directory?: string): Promise<ApiSession[]> {
-  return []
+export async function getSessionChildren(sessionId: string, _directory?: string): Promise<ApiSession[]> {
+  const { childSessionStore } = await import('../store/childSessionStore')
+  const infos = childSessionStore.getChildSessions(sessionId)
+  if (!infos.length) return []
+  const roster = await getSessions().catch(() => [] as ApiSession[])
+  const byId = new Map(roster.map(s => [s.id, s]))
+  return infos.map(info => {
+    const live = byId.get(info.id)
+    if (live) return { ...live, parentID: info.parentID, title: live.title || info.title } as ApiSession
+    return {
+      id: info.id,
+      parentID: info.parentID,
+      title: info.title,
+      directory: '',
+      version: '',
+      time: { created: info.createdAt, updated: info.createdAt },
+    } as unknown as ApiSession
+  })
 }
 
 /**

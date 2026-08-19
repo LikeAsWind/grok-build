@@ -11,6 +11,7 @@ import { SessionChildrenSlot } from '../chat/sidebar/SessionChildrenSlot'
 import type { ApiSession } from '../../api'
 import { startInternalDrag } from '../../lib/internalDragCore'
 import { pinnedSessionsStore, type PinnedSessionEntry } from '../../store/pinnedSessionsStore'
+import { childSessionStore } from '../../store/childSessionStore'
 
 interface SessionListProps {
   sessions: ApiSession[]
@@ -421,6 +422,14 @@ export function SessionListItem({
           : { dot: 'bg-success-100', label: t('chat:activeSession.working'), pulse: true }
     : null
   const hasUnreadCompletedNotification = useHasUnreadCompletedNotification(session.id)
+  // 子会话（spawn_subagent 产生）后端不生成标题——用 childSessionStore 里
+  // spawned/completion 通知带来的 description 兜底，避免显示「未命名对话」
+  const childTitle = useSyncExternalStore(
+    childSessionStore.subscribe.bind(childSessionStore),
+    () => childSessionStore.getSessionInfo(session.id)?.title,
+    () => childSessionStore.getSessionInfo(session.id)?.title,
+  )
+  const displayTitle = session.title || childTitle || t('sessions.untitledChat')
   const itemRef = useRef<HTMLDivElement>(null)
   const isCompact = density === 'compact'
   const isMinimal = density === 'minimal'
@@ -462,7 +471,7 @@ export function SessionListItem({
       pinnedSessionsStore.pin({
         sessionId: session.id,
         directory: session.directory || '',
-        title: session.title || t('sessions.untitledChat'),
+        title: displayTitle,
       })
     }
   }
@@ -677,9 +686,9 @@ export function SessionListItem({
           >
             <span
               className="min-w-0 flex-1 truncate text-[length:var(--fs-sm)]"
-              title={session.title || t('sessions.untitledChat')}
+              title={displayTitle}
             >
-              {session.title || t('sessions.untitledChat')}
+              {displayTitle}
             </span>
 
             {((hasSummaryStats && session.summary) || session.time?.updated) && (
@@ -796,9 +805,9 @@ export function SessionListItem({
                 ? 'text-text-100'
                 : 'text-text-200 group-hover:text-text-100'
             }`}
-            title={session.title || t('sessions.untitledChat')}
+            title={displayTitle}
           >
-            {session.title || t('sessions.untitledChat')}
+            {displayTitle}
           </p>
 
           <div
