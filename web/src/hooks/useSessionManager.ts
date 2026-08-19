@@ -189,12 +189,9 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
 
       // ACP 历史回放
       const isFresh = freshSessionIds.has(sid)
-      console.log('[LOAD]', sid.slice(0,12), 'existing:', hasExistingMessages, 'fresh:', isFresh)
       if (isFresh) {
         freshSessionIds.delete(sid)
-        console.log('[LOAD] fresh — skip')
       } else if (!hasExistingMessages) {
-        console.log('[LOAD] calling session/load...')
         // acpLoadSession 可能因 ACP 未连接或后端报错（如 cwd 目录编码不匹配
         // 导致 Path not found）而 reject。必须兜住：否则 loadState 停在
         // 'loading'，UI 无限转圈。失败则落到下方 snapshot 路径，由它的
@@ -204,12 +201,23 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
         } catch (loadErr) {
           console.warn('[LOAD] session/load 失败，改走 snapshot 兜底:', loadErr)
         }
-        // 给足够时间让 history 事件通过 session/update 流入 messageStore
-        await new Promise(resolve => setTimeout(resolve, 500))
+        // 等回放帧 settle。固定延时对大会话不够（残帧在 loaded 之后继续流入，
+        // 表现为先见到部分消息、再「闪」出完整记录），对小会话又白等——改为
+        // 静默检测：消息+part 总量连续两次采样（120ms 间隔）不变即视为回放
+        // 结束；有内容上限 3s，始终无内容 1.2s 退出走 snapshot 兜底。
+        const settleStart = Date.now()
+        let prevSize = -1
+        for (;;) {
+          const replayMsgs = messageStore.getSessionState(sid)?.messages ?? []
+          const size = replayMsgs.length + replayMsgs.reduce((n, m) => n + m.parts.length, 0)
+          if (size > 0 && size === prevSize) break
+          if (Date.now() - settleStart >= (size > 0 ? 3000 : 1200)) break
+          prevSize = size
+          await new Promise(resolve => setTimeout(resolve, 120))
+        }
         // 回放事件已 settle，关闭回放窗口（此后 task_completed 恢复 idle-gated 缓冲）
         finishAcpReplay(sid)
         const msgs = messageStore.getSessionState(sid)?.messages.length ?? 0
-        console.log('[LOAD] after load, msgs in store:', msgs)
         if (msgs > 0) {
           // history 已通过 session/update 进入 store，直接标记 loaded，跳过后续 setMessages 覆盖
           messageStore.updateSessionMetadata(sid, { loadState: 'loaded' })
@@ -220,7 +228,6 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
           onLoadComplete?.()
           return
         }
-        console.log('[LOAD] no msgs after load, falling through to snapshot')
       }
 
       try {
