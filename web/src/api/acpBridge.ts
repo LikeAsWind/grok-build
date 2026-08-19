@@ -16,7 +16,11 @@ import { AcpClient } from './acp'
 import { injectGlobalEvent, setAcpConnectionState } from './events'
 import { sessionCwdForWire } from './sessionCwd'
 import { serverStore } from '../store/serverStore'
+import { childSessionStore } from '../store/childSessionStore'
 import { TASK_NOTIFICATION_MESSAGE_ID_PREFIX, WAKE_REPLY_MESSAGE_ID_PREFIX } from '../features/message/taskNotification'
+import { persistSynthMessage } from '../features/message/synthNotifPersist'
+import { QUEUED_MESSAGE_ID_PREFIX } from '../features/message/queuedMessage'
+import { getMessageText } from '../types/message'
 import type { GlobalEvent } from '../types/api/event'
 import type { ModelInfo } from './types'
 
@@ -416,9 +420,29 @@ interface PendingTaskNotification {
   willWake?: boolean
 }
 
-/** 通知的权威数据源：task_completed 帧建记录（upsert 幂等 + 丢帧兜底合成） */
+/** 后台子 agent 完成通知（subagent_finished → agent-completion part） */
+interface PendingAgentNotification {
+  taskId: string
+  /** 子 agent 标识（subagent_id，可能为空串） */
+  command: string
+  ok: boolean
+  output?: string
+  /** 任务描述（spawned 时的 description/command） */
+  description?: string
+  agentType?: string
+  childSessionId?: string
+  turns?: number
+  toolCalls?: number
+  durationMs?: number
+  /** 前端收到通知帧的时间（epoch ms） */
+  receivedAt: number
+  /** 不参与唤醒轮（WAKE_REMINDER_RE 不识别子 agent 唤醒轮） */
+  willWake?: false
+}
+
+/** 通知的权威数据源：task_completed / subagent_finished 帧建记录（upsert 幂等 + 丢帧兜底合成） */
 interface TaskNotifRecord {
-  data: PendingTaskNotification
+  data: PendingTaskNotification | PendingAgentNotification
   /**
    * 卡片渲染位置：null = 未渲染（缓冲/hold 中）；
    * 'standalone' = 独立系统消息（msg_tasknotif_）；
@@ -430,6 +454,14 @@ interface TaskNotifRecord {
 }
 
 const taskNotifRegistry = new Map<string, Map<string, TaskNotifRecord>>()
+
+/** subagent_spawned 帧携带 description/subagent_type，finished 帧不含这两个字段，需缓存跨帧传递 */
+const subagentMeta = new Map<string, Map<string, { description?: string; agentType?: string }>>()
+
+/** 判别通知是子 agent 完成（agent-completion）还是 bash 任务（task-completion） */
+function isAgentNotification(n: PendingTaskNotification | PendingAgentNotification): n is PendingAgentNotification {
+  return 'agentType' in n
+}
 
 function getTaskNotifRecord(sessionId: string, taskId: string): TaskNotifRecord | undefined {
   return taskNotifRegistry.get(sessionId)?.get(taskId)
@@ -788,36 +820,81 @@ function parseTaskNotification(t: Record<string, unknown>, snap: Record<string, 
   }
 }
 
+/** 通知合成消息的 info + part（emit 与持久化共用同一构造） */
+function buildTaskNotifMessage(sessionId: string, n: PendingTaskNotification | PendingAgentNotification) {
+  const msgId = `${TASK_NOTIFICATION_MESSAGE_ID_PREFIX}${n.taskId}`
+  const now = Date.now()
+  const info = {
+    id: msgId,
+    sessionID: sessionId,
+    role: 'assistant' as const,
+    time: { created: now, completed: now },
+    parentID: '',
+    modelID: getCurrentAcpModelId(),
+    providerID: 'xai',
+    mode: '',
+    agent: '',
+    path: { cwd: _serverCwd, root: _serverCwd },
+    cost: 0,
+    tokens: emptyTokens(),
+  }
+  // subagent_finished → agent-completion part；其余 → task-completion part
+  const part = isAgentNotification(n)
+    ? {
+        id: `${msgId}:task`,
+        type: 'agent-completion' as const,
+        taskId: n.taskId,
+        command: n.command,
+        description: n.description,
+        agentType: n.agentType,
+        childSessionId: n.childSessionId,
+        ok: n.ok,
+        output: n.output,
+        turns: n.turns,
+        toolCalls: n.toolCalls,
+        durationMs: n.durationMs,
+        receivedAt: n.receivedAt,
+      }
+    : { id: `${msgId}:task`, type: 'task-completion' as const, ...n }
+  return { msgId, info, part }
+}
+
+/**
+ * 持久化通知到 localStorage（页面刷新后 messageStore.injectSynthMessages 恢复）。
+ * busy 缓冲 / willWake hold 中的通知也要持久化——否则 flush 前刷新会彻底丢失。
+ * 锚点 = 触发时刻最后一条真实用户消息（文本 + 序数）：回放消息的 id/time 均为
+ * 前端接收时现打（不稳定），恢复定位只能靠对话内容本身。
+ */
+function persistTaskNotifRecord(sessionId: string, record: TaskNotifRecord) {
+  const { msgId, info, part } = buildTaskNotifMessage(sessionId, record.data)
+  void import('../store/messageStore').then(({ messageStore }) => {
+    const msgs = messageStore.getSessionState(sessionId)?.messages ?? []
+    let anchor: { userText: string; userIndex: number } | undefined
+    let userCount = 0
+    for (const m of msgs) {
+      if (m.info.role !== 'user' || m.info.id.startsWith(QUEUED_MESSAGE_ID_PREFIX)) continue
+      userCount++
+      const text = getMessageText(m)
+      if (text) anchor = { userText: text, userIndex: userCount }
+    }
+    persistSynthMessage(sessionId, {
+      info,
+      parts: [{ ...part, sessionID: sessionId, messageID: msgId }],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any, anchor)
+  })
+}
+
 /**
  * 把完成通知作为独立的合成 assistant 消息注入消息流。
  * 消息 ID 确定性（msg_tasknotif_<taskId>）→ 回放/双路帧 upsert 幂等；
  * time.completed 即时定稿 → 不进 streaming 态；完全不触碰 TurnState。
  */
 function emitTaskNotification(sessionId: string, record: TaskNotifRecord) {
-  const n = record.data
-  const msgId = `${TASK_NOTIFICATION_MESSAGE_ID_PREFIX}${n.taskId}`
-  const now = Date.now()
-  emit(
-    'message.updated',
-    {
-      info: {
-        id: msgId,
-        sessionID: sessionId,
-        role: 'assistant',
-        time: { created: now, completed: now },
-        parentID: '',
-        modelID: getCurrentAcpModelId(),
-        providerID: 'xai',
-        mode: '',
-        agent: '',
-        path: { cwd: _serverCwd, root: _serverCwd },
-        cost: 0,
-        tokens: emptyTokens(),
-      },
-    },
-    sessionId,
-  )
-  emitPartUpdated(sessionId, msgId, { id: `${msgId}:task`, type: 'task-completion', ...n })
+  const { msgId, info, part } = buildTaskNotifMessage(sessionId, record.data)
+  emit('message.updated', { info }, sessionId)
+  emitPartUpdated(sessionId, msgId, part)
+  persistTaskNotifRecord(sessionId, record)
   record.placement = 'standalone'
 }
 
@@ -969,6 +1046,33 @@ function handleToolCall(sessionId: string, turn: TurnState, tc: Record<string, u
   }
   turn.tools.set(callId, rec)
   emitToolPart(sessionId, messageId, rec)
+  // 回放窗口：subtask 卡片 live 时由 subagent_spawned 通知产出，该通知不回放——
+  // 从 spawn 工具的入参重建，紧跟工具卡之后（live 时不走这里，避免双卡）
+  if (replayingSessions.has(sessionId) && isSpawnSubagentTool(toolName)) {
+    emitReplaySubtaskPart(sessionId, messageId, callId, tc.rawInput)
+  }
+}
+
+/** spawn_subagent 及其 legacy alias（对齐 TUI tracker 的 Task-family 判定） */
+function isSpawnSubagentTool(name: string): boolean {
+  return name === 'spawn_subagent' || name === 'task' || name === 'Task'
+}
+
+/** 回放时从 spawn_subagent 的 rawInput 重建 subtask part（字段与 subagent_spawned 路径同构） */
+function emitReplaySubtaskPart(sessionId: string, messageId: string, callId: string, rawInput: unknown) {
+  if (!isRecord(rawInput)) return
+  const subagentType = typeof rawInput.subagent_type === 'string' ? rawInput.subagent_type : 'agent'
+  const desc = typeof rawInput.description === 'string' ? rawInput.description : ''
+  const prompt = typeof rawInput.prompt === 'string' ? rawInput.prompt : desc || subagentType
+  const modelId = typeof rawInput.model === 'string' ? rawInput.model : undefined
+  emitPartUpdated(sessionId, messageId, {
+    id: `${messageId}:sub:${callId}`,
+    type: 'subtask',
+    prompt,
+    description: desc,
+    agent: subagentType,
+    ...(modelId ? { model: { providerID: 'grok', modelID: modelId } } : {}),
+  })
 }
 
 function handleToolCallUpdate(sessionId: string, turn: TurnState, tc: Record<string, unknown>) {
@@ -1314,7 +1418,10 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
         break
       }
       if (n.willWake && record.placement === null) {
-        break // hold：等唤醒轮注入（回放流里 wake chunk 紧随其后，同样 hold）
+        // hold：等唤醒轮注入（回放流里 wake chunk 紧随其后，同样 hold）。
+        // 注入前刷新会丢——先持久化；恢复形态为独立卡紧贴 wake 回复之前
+        persistTaskNotifRecord(sessionId, record)
+        break
       }
       const busy = turn.promptInFlight || turn.assistantId != null || turn.wakeTaskId != null
       if (busy && !replayingSessions.has(sessionId)) {
@@ -1322,6 +1429,8 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
           let list = pendingTaskNotifications.get(sessionId)
           if (!list) pendingTaskNotifications.set(sessionId, (list = []))
           if (!list.includes(n.taskId)) list.push(n.taskId)
+          // 缓冲中刷新会丢——先持久化（flush 时 emit 会再 upsert，同 id 幂等）
+          persistTaskNotifRecord(sessionId, record)
         } else {
           // 已渲染独立卡（双路帧重复投递）：直接重发刷新数据
           emitTaskNotification(sessionId, record)
@@ -1332,24 +1441,95 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       break
     }
     // ── Subagent 生命周期 ──────────────────────────────────────────
+    // wire 字段为 snake_case（Rust struct 直接序列化，rename_all 只作用 enum tag）。
+    // 驱动 childSessionStore + 产出 `subtask` part → SubtaskPartView 渲染。
     case 'subagent_spawned': {
       const sa = update as Record<string, unknown>
-      const subagentType = typeof sa.subagentType === 'string' ? sa.subagentType : 'agent'
+      const childId = typeof sa.child_session_id === 'string' ? sa.child_session_id : undefined
+      const subagentType = typeof sa.subagent_type === 'string' ? sa.subagent_type : 'agent'
       const desc = typeof sa.description === 'string' ? sa.description : ''
-      const msg = `🤖 Subagent started: **${subagentType}**${desc ? ` — ${desc}` : ''}`
+      const prompt = typeof sa.command === 'string' ? sa.command : desc || subagentType
+      const modelId = typeof sa.model === 'string' ? sa.model : undefined
+      if (childId) {
+        childSessionStore.registerSubagent({
+          id: childId,
+          parentID: sessionId,
+          title: desc || subagentType,
+          agent: subagentType,
+        })
+      }
+      // 缓存 spawned 帧的 description/agentType，finished 帧不含这两个字段
+      const subagentId = typeof sa.subagent_id === 'string' ? sa.subagent_id : (childId ?? '')
+      if (subagentId) {
+        let sessionMeta = subagentMeta.get(sessionId)
+        if (!sessionMeta) subagentMeta.set(sessionId, (sessionMeta = new Map()))
+        sessionMeta.set(subagentId, { description: desc || undefined, agentType: subagentType !== 'agent' ? subagentType : undefined })
+      }
       const id = ensureAssistant(sessionId, turn)
       breakActiveParts(turn)
-      emitPartUpdated(sessionId, id, { id: `${id}:sub:${Date.now()}`, type: 'text', text: msg })
+      emitPartUpdated(sessionId, id, {
+        // 稳定 id：同一子 agent 只产出一个 part；spawned 前 dispatch 子 session，
+        // 后续 finish 由 store 驱动 UI，不重发 part。
+        id: `${id}:sub:${sa.subagent_id ?? childId ?? Date.now()}`,
+        type: 'subtask',
+        prompt,
+        description: desc,
+        agent: subagentType,
+        ...(modelId ? { model: { providerID: 'grok', modelID: modelId } } : {}),
+      })
       break
     }
     case 'subagent_finished': {
       const sf = update as Record<string, unknown>
-      const subagentType = typeof sf.subagentType === 'string' ? sf.subagentType : 'agent'
-      const tokens = typeof sf.tokensUsed === 'number' ? sf.tokensUsed : 0
-      const msg = `✅ Subagent finished: **${subagentType}**${tokens ? ` (${tokens} tokens)` : ''}`
-      const id = ensureAssistant(sessionId, turn)
-      breakActiveParts(turn)
-      emitPartUpdated(sessionId, id, { id: `${id}:sub:${Date.now()}`, type: 'text', text: msg })
+      const childId = typeof sf.child_session_id === 'string' ? sf.child_session_id : undefined
+      const status = typeof sf.status === 'string' ? sf.status : 'completed'
+      if (childId) {
+        if (status === 'failed' || status === 'cancelled') {
+          childSessionStore.markError(childId)
+        } else {
+          childSessionStore.markIdle(childId)
+        }
+      }
+      // 独立通知卡（复用 task_completed 的缓冲/分发机制）
+      // will_wake 不做 hold：WAKE_REMINDER_RE 不识别子 agent 唤醒轮，hold 只会拖到降级才显示
+      const subagentId = typeof sf.subagent_id === 'string' ? sf.subagent_id : (childId ?? 'unknown')
+      const taskId = `subagent:${subagentId}`
+      const ok = status === 'completed'
+      const now = Date.now()
+      // description/agentType 来自 spawned 帧缓存（finished 帧不含这两个字段）
+      const cachedMeta = subagentMeta.get(sessionId)?.get(subagentId)
+      subagentMeta.get(sessionId)?.delete(subagentId)
+      const n: PendingAgentNotification = {
+        taskId,
+        command: subagentId,
+        ok,
+        output: typeof sf.output === 'string' ? sf.output : undefined,
+        receivedAt: now,
+        willWake: false,
+        description: cachedMeta?.description,
+        agentType: cachedMeta?.agentType,
+        childSessionId: childId,
+        turns: typeof sf.turns === 'number' ? sf.turns : undefined,
+        toolCalls: typeof sf.tool_calls === 'number' ? sf.tool_calls : undefined,
+        durationMs: typeof sf.duration_ms === 'number' ? sf.duration_ms : undefined,
+      }
+      const saExisting = getTaskNotifRecord(sessionId, taskId)
+      const saRecord: TaskNotifRecord = saExisting ? { ...saExisting, data: n } : { data: n, placement: null }
+      setTaskNotifRecord(sessionId, taskId, saRecord)
+      const saBusy = turn.promptInFlight || turn.assistantId != null || turn.wakeTaskId != null
+      if (saBusy && !replayingSessions.has(sessionId)) {
+        if (saRecord.placement === null) {
+          let list = pendingTaskNotifications.get(sessionId)
+          if (!list) pendingTaskNotifications.set(sessionId, (list = []))
+          if (!list.includes(taskId)) list.push(taskId)
+          // 缓冲中刷新会丢——先持久化（flush 时 emit 会再 upsert，同 id 幂等）
+          persistTaskNotifRecord(sessionId, saRecord)
+        } else {
+          emitTaskNotification(sessionId, saRecord)
+        }
+      } else {
+        emitTaskNotification(sessionId, saRecord)
+      }
       break
     }
     // subagent_progress: high-frequency ticks, don't emit UI parts

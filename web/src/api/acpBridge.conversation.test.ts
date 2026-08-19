@@ -20,6 +20,8 @@ import {
 } from './acpBridge'
 import { subscribeToEvents } from './events'
 import { messageStore } from '../store/messageStore'
+import { childSessionStore } from '../store/childSessionStore'
+import { restoreChildSessions } from '../features/message/synthNotifPersist'
 import {
   mapAcpPermissionToApi,
   mapAcpQuestionToApi,
@@ -831,16 +833,186 @@ describe('Web 对话交互全量可用性', () => {
     expect(texts.some(p => p.text.includes('system-reminder'))).toBe(false)
   })
 
-  it('subagent 生命周期内联为系统消息', async () => {
-    update({ sessionUpdate: 'subagent_spawned', subagentType: 'Explore', description: '查找代码' })
-    update({ sessionUpdate: 'subagent_progress' }) // 高频 tick，不产出 part
-    // part id 含 Date.now()，同一毫秒会撞 id；真实 subagent 生命周期为秒级
-    await new Promise(r => setTimeout(r, 2))
-    update({ sessionUpdate: 'subagent_finished', subagentType: 'Explore', tokensUsed: 1234 })
+  it('subagent 生命周期产出 subtask part 并驱动 childSessionStore', async () => {
+    update({
+      sessionUpdate: 'subagent_spawned',
+      subagent_id: 'sag-1',
+      child_session_id: 'conv-child-1',
+      subagent_type: 'Explore',
+      description: '查找代码',
+    })
+    // 高频 tick 不产出 part
+    update({ sessionUpdate: 'subagent_progress' })
+    update({
+      sessionUpdate: 'subagent_finished',
+      child_session_id: 'conv-child-1',
+      status: 'completed',
+    })
 
-    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
-    expect(texts.some(p => p.text.includes('Subagent started') && p.text.includes('Explore'))).toBe(true)
-    expect(texts.some(p => p.text.includes('Subagent finished') && p.text.includes('1234'))).toBe(true)
+    const subs = parts().filter(p => p.type === 'subtask') as Part[]
+    expect(subs).toHaveLength(1)
+    const sub = subs[0] as Part & { agent: string; description: string; prompt: string }
+    expect(sub.agent).toBe('Explore')
+    expect(sub.description).toBe('查找代码')
+
+    // store 中注册同名子 session 且终态为 idle
+    const children = childSessionStore.getChildSessions(SID)
+    expect(children).toHaveLength(1)
+    expect(children[0].agent).toBe('Explore')
+    expect(children[0].status).toBe('idle')
+  })
+
+  it('回放窗口 tool_call(spawn_subagent) 从 rawInput 重建 subtask part', () => {
+    beginAcpReplay(SID)
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-spawn-replay',
+      status: 'completed',
+      title: '查看 git 改动',
+      rawInput: {
+        prompt: '用 Explore 看下 git 改动',
+        description: '查看 git 改动',
+        subagent_type: 'Explore',
+        run_in_background: true,
+      },
+      rawOutput: 'Subagent started in the background and is still running.',
+      _meta: { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task', label: 'Spawn Subagent' } },
+    })
+    finishAcpReplay(SID)
+
+    const kinds = parts().map(p => p.type)
+    expect(kinds).toEqual(['tool', 'subtask'])
+    const sub = parts().find(p => p.type === 'subtask') as Part & { agent: string; description: string; prompt: string }
+    expect(sub.agent).toBe('Explore')
+    expect(sub.description).toBe('查看 git 改动')
+    expect(sub.prompt).toBe('用 Explore 看下 git 改动')
+  })
+
+  it('live（非回放）tool_call(spawn_subagent) 不合成 subtask part（由 subagent_spawned 产出）', () => {
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'c-spawn-live',
+      status: 'completed',
+      rawInput: { prompt: 'x', description: 'y', subagent_type: 'Explore' },
+      _meta: { 'x.ai/tool': { name: 'spawn_subagent', kind: 'task', label: 'Spawn Subagent' } },
+    })
+
+    expect(parts().map(p => p.type)).toEqual(['tool'])
+  })
+
+  it('restoreChildSessions 从持久化 agent-completion 通知重建子会话映射', () => {
+    const entry = {
+      message: {
+        info: {
+          id: 'msg_tasknotif_subagent:sag-restore',
+          sessionID: SID,
+          role: 'assistant' as const,
+          time: { created: 1, completed: 1 },
+        },
+        parts: [{
+          id: 'msg_tasknotif_subagent:sag-restore:task',
+          sessionID: SID,
+          messageID: 'msg_tasknotif_subagent:sag-restore',
+          type: 'agent-completion' as const,
+          taskId: 'subagent:sag-restore',
+          command: 'sag-restore',
+          description: '查看 git 改动',
+          agentType: 'Explore',
+          childSessionId: 'conv-child-restore-1',
+          ok: true,
+          receivedAt: 42,
+        }],
+      },
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    restoreChildSessions(SID, [entry as any])
+
+    const child = childSessionStore.getSessionInfo('conv-child-restore-1')
+    expect(child?.status).toBe('idle')
+    expect(child?.agent).toBe('Explore')
+    expect(child?.parentID).toBe(SID)
+  })
+
+  it('subagent_finished 空闲态产出独立通知卡（msg_tasknotif_subagent:*）', () => {
+    update({
+      sessionUpdate: 'subagent_finished',
+      subagent_id: 'sag-bg-1',
+      child_session_id: 'conv-child-bg-1',
+      status: 'completed',
+      output: '找到了 42 个引用',
+      turns: 3,
+      tool_calls: 7,
+      duration_ms: 1234,
+    })
+
+    const msgs = messageStore.getVisibleMessages(SID)
+    const notifMsg = msgs.find(m => m.info.id.startsWith('msg_tasknotif_subagent:sag-bg-1'))
+    expect(notifMsg).toBeDefined()
+    const part = notifMsg!.parts.find(p => p.type === 'agent-completion')
+    expect(part).toBeDefined()
+    const tp = part as import('../types/message').AgentCompletionPart
+    expect(tp.ok).toBe(true)
+    expect(tp.output).toBe('找到了 42 个引用')
+    expect(tp.turns).toBe(3)
+    expect(tp.toolCalls).toBe(7)
+    expect(tp.durationMs).toBe(1234)
+  })
+
+  it('subagent_finished failed 状态 ok=false，store markError', () => {
+    update({
+      sessionUpdate: 'subagent_spawned',
+      subagent_id: 'sag-fail-1',
+      child_session_id: 'conv-child-fail-1',
+      subagent_type: 'agent',
+      description: '失败任务',
+    })
+    update({
+      sessionUpdate: 'subagent_finished',
+      subagent_id: 'sag-fail-1',
+      child_session_id: 'conv-child-fail-1',
+      status: 'failed',
+      error: '超时',
+      turns: 1,
+      duration_ms: 5000,
+    })
+    // subagent_spawned 建了 assistant turn → saBusy=true → 需 flush
+    update({ sessionUpdate: 'turn_completed' })
+
+    const msgs = messageStore.getVisibleMessages(SID)
+    const notifMsg = msgs.find(m => m.info.id.startsWith('msg_tasknotif_subagent:sag-fail-1'))
+    expect(notifMsg).toBeDefined()
+    const part = notifMsg!.parts.find(p => p.type === 'agent-completion') as import('../types/message').AgentCompletionPart
+    expect(part.ok).toBe(false)
+
+    const children = childSessionStore.getChildSessions(SID)
+    const child = children.find(c => c.id === 'conv-child-fail-1')
+    expect(child?.status).toBe('error')
+  })
+
+  it('流式期间 subagent_finished 缓冲，turn_completed 后 flush', () => {
+    // 建立 assistant 流式 turn
+    textChunk('正在思考...')
+
+    update({
+      sessionUpdate: 'subagent_finished',
+      subagent_id: 'sag-bg-2',
+      child_session_id: 'conv-child-bg-2',
+      status: 'completed',
+      turns: 2,
+      duration_ms: 800,
+    })
+
+    // streaming 期间不应出现通知卡
+    {
+      const msgs = messageStore.getVisibleMessages(SID)
+      expect(msgs.some(m => m.info.id.startsWith('msg_tasknotif_subagent:sag-bg-2'))).toBe(false)
+    }
+
+    // turn_completed → flush
+    update({ sessionUpdate: 'turn_completed' })
+
+    const msgs = messageStore.getVisibleMessages(SID)
+    expect(msgs.some(m => m.info.id.startsWith('msg_tasknotif_subagent:sag-bg-2'))).toBe(true)
   })
 
   it('compaction 开始/完成内联为系统消息', async () => {
