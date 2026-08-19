@@ -21,6 +21,7 @@ import { useLayoutStore } from '../../../store'
 import { useBusySessions } from '../../../store/activeSessionStore'
 import { useNotifications } from '../../../store/notificationStore'
 import { pinnedSessionsStore, type PinnedSessionEntry } from '../../../store/pinnedSessionsStore'
+import { childSessionStore } from '../../../store/childSessionStore'
 import { SessionListItem } from '../../sessions'
 import { getSelectionRoundClass } from '../../sessions/selectionRound'
 import { SessionChildrenSlot } from './SessionChildrenSlot'
@@ -880,10 +881,24 @@ function FolderRecentSection({
     pinnedSessionsStore.getSnapshot,
     pinnedSessionsStore.getSnapshot,
   )
+  const childSessionVersion = useSyncExternalStore(
+    childSessionStore.subscribe.bind(childSessionStore),
+    childSessionStore.getVersion,
+    childSessionStore.getVersion,
+  )
   const visibleSessions = useMemo(() => {
     const pinnedSet = new Set(pinnedEntries.map(entry => entry.sessionId))
-    return sessions.filter(session => !pinnedSet.has(session.id))
-  }, [pinnedEntries, sessions])
+    const allIds = new Set(sessions.map(session => session.id))
+    // 子会话不平级展示：父在本组列表内的挂到父行下（SessionChildrenSlot），
+    // roster 无父子关系字段，靠 childSessionStore 识别
+    return sessions.filter(session => {
+      if (pinnedSet.has(session.id)) return false
+      const pid = session.parentID || childSessionStore.getSessionInfo(session.id)?.parentID
+      return !(pid && allIds.has(pid))
+    })
+    // childSessionVersion：spawned/恢复通知到达时重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinnedEntries, sessions, childSessionVersion])
 
   const handleRename = useCallback(
     async (sessionId: string, newTitle: string) => {
