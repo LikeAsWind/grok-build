@@ -87,8 +87,12 @@ impl SessionActor {
             respond_to,
             fallback,
         } = admission;
-        let super::PromptOrigin::TaskCompleted { task_id } = origin else {
-            return respond_to.send(true).is_ok().then_some(fallback);
+        let task_id: &str = match origin {
+            super::PromptOrigin::TaskCompleted { task_id } => task_id,
+            super::PromptOrigin::SubagentCompleted { subagent_id } => subagent_id,
+            _ => {
+                return respond_to.send(true).is_ok().then_some(fallback);
+            }
         };
         let gate_suppressed = self
             .tool_context

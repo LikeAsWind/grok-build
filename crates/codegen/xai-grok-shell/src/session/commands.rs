@@ -114,6 +114,7 @@ pub enum NotificationSource {
     MonitorEvent { task_id: String },
     MonitorCompleted { task_id: String },
     BashTaskCompleted { task_id: String },
+    SubagentCompleted { subagent_id: String },
 }
 impl NotificationSource {
     pub fn task_id(&self) -> &str {
@@ -121,6 +122,7 @@ impl NotificationSource {
             Self::MonitorEvent { task_id }
             | Self::MonitorCompleted { task_id }
             | Self::BashTaskCompleted { task_id } => task_id,
+            Self::SubagentCompleted { subagent_id } => subagent_id,
         }
     }
 }

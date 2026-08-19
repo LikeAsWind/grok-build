@@ -340,9 +340,45 @@ async fn non_task_prompt_is_not_subject_to_task_wake_barrier() {
             let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
             actor.state.lock().await.notifications_suppressed = true;
             let (admission, response_rx) = task_wake_admission(
-                "sub-1",
+                "drain-1",
                 NotificationSource::BashTaskCompleted {
-                    task_id: "sub-1".to_string(),
+                    task_id: "drain-1".to_string(),
+                },
+            );
+            assert!(
+                actor
+                    .admit_task_completion_wake(
+                        &crate::session::PromptOrigin::NotificationDrain,
+                        admission,
+                    )
+                    .await
+                    .is_some(),
+                "notification-drain prompts are outside terminal task-wake suppression scope"
+            );
+            assert_eq!(response_rx.await, Ok(true));
+        })
+        .await;
+}
+/// Fix: subagent completion must go through the same terminal task-wake
+/// admission gate as bash/monitor task completion, not bypass it. Before
+/// this fix, `SubagentCompleted` origin hit the `admit_task_completion_wake`
+/// fallthrough arm and was always admitted, which raced with
+/// `TaskCompletionReminder::collect_reminders` and could mix the subagent's
+/// completion text into the parent session's in-flight assistant turn.
+#[tokio::test(flavor = "current_thread")]
+async fn subagent_completion_wake_is_subject_to_task_wake_barrier() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            actor.state.lock().await.notifications_suppressed = true;
+            let (admission, response_rx) = task_wake_admission(
+                "sub-1",
+                NotificationSource::SubagentCompleted {
+                    subagent_id: "sub-1".to_string(),
                 },
             );
             assert!(
@@ -354,10 +390,18 @@ async fn non_task_prompt_is_not_subject_to_task_wake_barrier() {
                         admission,
                     )
                     .await
-                    .is_some(),
-                "subagent completion is outside terminal task-wake suppression scope"
+                    .is_none(),
+                "subagent completion must be deferred while the parent session is busy"
             );
-            assert_eq!(response_rx.await, Ok(true));
+            assert_eq!(response_rx.await, Ok(false));
+            let state = actor.state.lock().await;
+            assert!(matches!(
+                state.pending_notifications.as_slice(),
+                [PendingNotification {
+                    source: NotificationSource::SubagentCompleted { subagent_id },
+                    ..
+                }] if subagent_id == "sub-1"
+            ));
         })
         .await;
 }

@@ -28,7 +28,7 @@ use self::types::*;
 use crate::types::output::ToolOutput;
 use crate::types::requirements::{Expr, ToolRequirement};
 #[allow(unused_imports)]
-use crate::types::resources::{SessionFolder, SharedResources};
+use crate::types::resources::{BackgroundTaskStartedThisTurn, SessionFolder, SharedResources};
 use crate::types::tool::{ToolKind, ToolNamespace};
 use regex::Regex;
 use xai_tool_types::{SubagentCompletedOutput, SubagentIsolationMode, TaskToolInput};
@@ -534,6 +534,13 @@ impl xai_tool_runtime::Tool for TaskTool {
                     Ok(_) => {}
                 }
             });
+
+            resources
+                .lock()
+                .await
+                .insert(BackgroundTaskStartedThisTurn(
+                    std::sync::atomic::AtomicBool::new(true),
+                ));
 
             // `resolve_tool_name` (not a template render): a missing kind
             // renders as empty-`Ok`, so a `Result` fallback never fires.

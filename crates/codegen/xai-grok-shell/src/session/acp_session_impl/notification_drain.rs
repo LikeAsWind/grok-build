@@ -54,8 +54,11 @@ impl SessionActor {
             .pending_notifications
             .iter()
             .filter_map(|notification| match &notification.source {
-                NotificationSource::BashTaskCompleted { task_id }
-                | NotificationSource::MonitorCompleted { task_id } => Some(task_id.clone()),
+                NotificationSource::BashTaskCompleted { .. }
+                | NotificationSource::MonitorCompleted { .. }
+                | NotificationSource::SubagentCompleted { .. } => {
+                    Some(notification.source.task_id().to_string())
+                }
                 NotificationSource::MonitorEvent { .. } => None,
             })
             .collect();
@@ -70,7 +73,8 @@ impl SessionActor {
         for notification in notifications {
             let consume = match &notification.source {
                 NotificationSource::BashTaskCompleted { .. }
-                | NotificationSource::MonitorCompleted { .. } => true,
+                | NotificationSource::MonitorCompleted { .. }
+                | NotificationSource::SubagentCompleted { .. } => true,
                 NotificationSource::MonitorEvent { task_id } => {
                     deferred_ids.contains(task_id.as_str())
                 }
@@ -508,7 +512,8 @@ impl SessionActor {
             .filter_map(|notification| match &notification.source {
                 NotificationSource::MonitorCompleted { task_id } => Some(task_id.as_str()),
                 NotificationSource::MonitorEvent { .. }
-                | NotificationSource::BashTaskCompleted { .. } => None,
+                | NotificationSource::BashTaskCompleted { .. }
+                | NotificationSource::SubagentCompleted { .. } => None,
             })
             .collect();
         let mut monitor_events: Vec<MonitorEventNotification> = Vec::new();
@@ -540,7 +545,8 @@ impl SessionActor {
                     }
                 }
                 NotificationSource::MonitorCompleted { .. }
-                | NotificationSource::BashTaskCompleted { .. } => {
+                | NotificationSource::BashTaskCompleted { .. }
+                | NotificationSource::SubagentCompleted { .. } => {
                     sections.push(notification.prompt_blocks.clone());
                 }
             }
@@ -608,6 +614,7 @@ impl SessionActor {
                 NotificationSource::MonitorEvent { task_id } => format!("monitor:{task_id}"),
                 NotificationSource::MonitorCompleted { task_id } => format!("monitor-completed:{task_id}"),
                 NotificationSource::BashTaskCompleted { task_id } => format!("bash:{task_id}"),
+                NotificationSource::SubagentCompleted { subagent_id } => format!("subagent:{subagent_id}"),
             }).collect::<Vec<_>>().join(","),
             "Drained pending notifications into single batched turn"
         );

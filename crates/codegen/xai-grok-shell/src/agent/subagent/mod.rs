@@ -1929,11 +1929,17 @@ fn inject_subagent_completed_prompt(
         None
     };
     let (respond_to, completion_rx) = tokio::sync::oneshot::channel();
+    // Admission result intentionally unawaited here: this call site is
+    // synchronous (invoked from `ChildRunner::on_completed`). If the parent
+    // session is busy, `admit_task_completion_wake` pushes `fallback` into
+    // the pending-notification queue itself and drops this prompt — no
+    // action needed on this end.
+    let (admission_tx, _admission_rx) = tokio::sync::oneshot::channel();
     let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(wrapped))];
     if cmd_tx
         .send(SessionCommand::Prompt {
             prompt_id: prompt_id.clone(),
-            prompt_blocks,
+            prompt_blocks: prompt_blocks.clone(),
             prompt_mode: crate::session::plan_mode::PromptMode::Agent,
             artifact_upload_ctx: None,
             client_identifier: None,
@@ -1942,7 +1948,16 @@ fn inject_subagent_completed_prompt(
             traceparent: None,
             json_schema: None,
             send_now: false,
-            admission: None,
+            admission: Some(crate::session::commands::TaskWakeAdmission {
+                respond_to: admission_tx,
+                fallback: crate::session::commands::TaskWakeFallback {
+                    prompt_id: prompt_id.clone(),
+                    prompt_blocks,
+                    source: crate::session::commands::NotificationSource::SubagentCompleted {
+                        subagent_id: subagent_id.to_string(),
+                    },
+                },
+            }),
             tool_overrides_update: None,
             respond_to,
             persist_ack: None,

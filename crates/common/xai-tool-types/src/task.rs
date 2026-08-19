@@ -382,12 +382,20 @@ pub fn format_subagent_started_background(
     task_output_tool_name: &str,
     continue_parent_work: bool,
 ) -> String {
+    let optional_poll_hint = if task_output_tool_name.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " If you have a blocking need for it before then, you may call \
+             {task_output_tool_name} with task_ids=[\"{subagent_id}\"] and a timeout_ms."
+        )
+    };
     let mut text = format!(
-        "Subagent started in background.\n\
-         subagent_id: {subagent_id}\n\
-         type: {subagent_type}\n\
+        "Subagent started in the background and is still running.\n\
+         <subagent_meta>id={subagent_id}, type={subagent_type}</subagent_meta>\n\
          description: {description}\n\n\
-         Use {task_output_tool_name} with task_ids=[\"{subagent_id}\"] and timeout_ms to wait for results."
+         You will be notified automatically when it completes — you do not need \
+         to query its output yourself.{optional_poll_hint}"
     );
     if continue_parent_work {
         text.push_str("\n\n");
@@ -1828,12 +1836,16 @@ mod tests {
             true,
         );
         assert!(
-            with_cta.contains("subagent_id: sa-1"),
+            with_cta.contains("id=sa-1"),
             "id must stay pollable: {with_cta}"
         );
         assert!(
             with_cta.contains("get_command_or_subagent_output") && with_cta.contains("timeout_ms"),
-            "poll instruction must remain: {with_cta}"
+            "optional poll hint must remain available: {with_cta}"
+        );
+        assert!(
+            with_cta.contains("notified automatically"),
+            "auto-wake framing must replace the poll instruction: {with_cta}"
         );
         assert!(
             !with_cta.contains("<system-reminder>") && !with_cta.contains("<system_reminder>"),
