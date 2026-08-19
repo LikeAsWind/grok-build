@@ -26,6 +26,7 @@ import {
 import { useDirectory, useKeybindingLabel, useGitWorkspaceCatalog, useVcsInfo } from '../../../hooks'
 import { useSessionContext } from '../../../contexts/useSessionContext'
 import { useLayoutStore, childSessionStore } from '../../../store'
+import { restoreAllChildSessions } from '../../message/synthNotifPersist'
 import { useBusySessions, useBusyCount } from '../../../store/activeSessionStore'
 import { notificationStore, useNotifications, useUnreadNotificationCount } from '../../../store/notificationStore'
 import { pinnedSessionsStore } from '../../../store/pinnedSessionsStore'
@@ -115,6 +116,12 @@ export function SidePanel({
   onOpenSettings,
 }: SidePanelProps) {
   const { t } = useTranslation(['chat', 'common'])
+  // 启动预热：从持久化通知一次性重建全部子会话映射（幂等）。
+  // 不预热的话首屏（尚未打开任何会话）没有父子关系与标题数据——
+  // 子会话先平级显示「未命名对话」，等会话加载后才归位。
+  useEffect(() => {
+    restoreAllChildSessions()
+  }, [])
   const {
     currentDirectory,
     savedDirectories,

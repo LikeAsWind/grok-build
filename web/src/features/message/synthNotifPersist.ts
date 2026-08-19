@@ -144,3 +144,26 @@ export function restoreChildSessions(sessionId: string, entries: SynthNotifEntry
     }
   }
 }
+
+let allRestored = false
+
+/**
+ * 启动预热：扫描全部会话的持久化通知，一次性重建 childSessionStore。
+ * 恢复逻辑若只挂在会话加载路径，侧栏首屏（尚未打开任何会话）就没有
+ * 父子关系与标题数据——子会话先平级显示「未命名对话」，等选中会话
+ * 加载后才归位。App 挂载时调用一次即可（幂等）。
+ */
+export function restoreAllChildSessions(): void {
+  if (allRestored) return
+  allRestored = true
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key?.startsWith(KEY_PREFIX)) continue
+      const sessionId = key.slice(KEY_PREFIX.length)
+      restoreChildSessions(sessionId, loadSynthMessages(sessionId))
+    }
+  } catch {
+    // localStorage 不可用时静默降级
+  }
+}
