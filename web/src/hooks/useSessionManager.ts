@@ -19,6 +19,7 @@ import {
   type ApiMessageWithParts,
 } from '../api'
 import { acpLoadSession, finishAcpReplay } from '../api/acpBridge'
+import { loadSynthMessages, restoreChildSessions } from '../features/message/synthNotifPersist'
 import { sessionErrorHandler } from '../utils'
 import { isSessionNotFoundError } from '../utils/sessionErrors'
 import { INITIAL_MESSAGE_LIMIT, HISTORY_LOAD_BATCH_SIZE } from '../constants'
@@ -213,6 +214,9 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
           // history 已通过 session/update 进入 store，直接标记 loaded，跳过后续 setMessages 覆盖
           messageStore.updateSessionMetadata(sid, { loadState: 'loaded' })
           messageStore.handleSessionIdle(sid)
+          const synthEntries = loadSynthMessages(sid)
+          messageStore.injectSynthMessages(sid, synthEntries)
+          restoreChildSessions(sid, synthEntries)
           onLoadComplete?.()
           return
         }
@@ -278,6 +282,9 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
         })
         // 历史回放完成后，消息可能缺 completed 时间戳导致 isStreaming 误判
         messageStore.handleSessionIdle(sid)
+        const synthEntries = loadSynthMessages(sid)
+        messageStore.injectSynthMessages(sid, synthEntries)
+        restoreChildSessions(sid, synthEntries)
 
         cursorRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, apiMessages.length))
 

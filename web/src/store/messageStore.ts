@@ -12,10 +12,13 @@
 if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
 
 import type { Message, MessageError, Part, FilePart, AgentPart } from '../types/message'
+import { getMessageText } from '../types/message'
 import type { ApiMessageWithParts, ApiMessage, ApiPart, ApiSession, Attachment } from '../api/types'
 import { logger } from '../utils/logger'
 import { isUserUIMessage, toUIMessage, toUIMessageInfo, toUIPart } from '../utils/messageConversion'
 import type { RevertState, RevertHistoryItem, SessionState, SendRollbackSnapshot } from './messageStoreTypes'
+import { TASK_NOTIFICATION_MESSAGE_ID_PREFIX, WAKE_REPLY_MESSAGE_ID_PREFIX } from '../features/message/taskNotification'
+import { ANCHOR_TEXT_LIMIT, type SynthNotifEntry, type SynthNotifAnchor } from '../features/message/synthNotifPersist'
 
 // Re-export types for consumers
 export type { RevertState, RevertHistoryItem, SessionState, SendRollbackSnapshot } from './messageStoreTypes'
@@ -68,6 +71,48 @@ function shouldPreserveLiveParts(
 ) {
   if (incoming && !messageIsIncomplete(incoming)) return false
   return messageIsIncomplete(previous)
+}
+
+/** 合成通知的插入位置：wake 回复之前 > 锚点用户消息所在轮之后 > 列表末尾 */
+function synthInsertIndex(msgs: Message[], synthId: string, anchor?: SynthNotifAnchor): number {
+  if (synthId.startsWith(TASK_NOTIFICATION_MESSAGE_ID_PREFIX)) {
+    const taskId = synthId.slice(TASK_NOTIFICATION_MESSAGE_ID_PREFIX.length)
+    const wakeIdx = msgs.findIndex(m => m.info.id === `${WAKE_REPLY_MESSAGE_ID_PREFIX}${taskId}`)
+    if (wakeIdx >= 0) return wakeIdx
+  }
+  const anchorText = anchor?.userText?.trim()
+  // 锚点达到截断上限说明存的是前缀，才允许 startsWith；完整锚点全等匹配，
+  // 避免「跑一下测试」误命中「跑一下测试，然后部署」
+  const truncated = (anchor?.userText?.length ?? 0) >= ANCHOR_TEXT_LIMIT
+  const matches = (m: Message) => {
+    if (!anchorText) return false
+    const text = getMessageText(m).trim()
+    return truncated ? text.startsWith(anchorText) : text === anchorText
+  }
+  const afterUserTurn = (i: number) => {
+    for (let j = i + 1; j < msgs.length; j++) {
+      if (msgs[j].info.role === 'user') return j
+    }
+    return msgs.length
+  }
+  // 序数锚点优先：第 N 条用户消息 + 文本校验，消除重复文本（「继续」）歧义
+  if (anchor?.userIndex !== undefined && anchorText) {
+    let count = 0
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i].info.role !== 'user') continue
+      count++
+      if (count === anchor.userIndex) {
+        if (matches(msgs[i])) return afterUserTurn(i)
+        break // 序数对不上文本（回放消息集变化），落到文本扫描兜底
+      }
+    }
+  }
+  if (anchorText) {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].info.role === 'user' && matches(msgs[i])) return afterUserTurn(i)
+    }
+  }
+  return msgs.length
 }
 
 class MessageStore {
@@ -453,6 +498,21 @@ class MessageStore {
         isStreaming: previous.isStreaming || next.isStreaming,
       }
     })
+
+    // REST snapshot 不含前端合成消息（msg_tasknotif_* / msg_wake_*），需从旧列表补回
+    const newIds = new Set(state.messages.map(m => m.info.id))
+    const syntheticToKeep = previousMessages
+      .filter(
+        m =>
+          (m.info.id.startsWith(TASK_NOTIFICATION_MESSAGE_ID_PREFIX) ||
+            m.info.id.startsWith(WAKE_REPLY_MESSAGE_ID_PREFIX)) &&
+          !newIds.has(m.info.id),
+      )
+      .sort((a, b) => (a.info.time.created ?? 0) - (b.info.time.created ?? 0))
+    if (syntheticToKeep.length > 0) {
+      state.messages = [...state.messages, ...syntheticToKeep]
+    }
+
     state.loadState = 'loaded'
     state.loadError = undefined
     state.hasMoreHistory = options?.hasMoreHistory ?? false
@@ -497,6 +557,28 @@ class MessageStore {
       state.isStreaming = false
     }
 
+    this.notify([sessionId])
+  }
+
+  /**
+   * 把合成通知消息（来自 localStorage 持久化）注入 store，按锚点定位。
+   * 回放消息的 time.created 是前端接收时现打的，无法按时间戳排序还原——
+   * 改用锚点：1) msg_wake_<taskId> 唤醒回复（卡片紧贴其前）；
+   * 2) 持久化的用户消息序数 + 文本校验；3) 全等文本倒序扫描。
+   * 已存在的同 id 消息跳过：live emit / 回放帧已按事件流落在正确位置，
+   * 重定位只会用不可靠的文本锚点推翻正确结果。
+   */
+  injectSynthMessages(sessionId: string, entries: SynthNotifEntry[]): void {
+    if (!entries.length) return
+    const state = this.ensureSession(sessionId)
+    const existingIds = new Set(state.messages.map(m => m.info.id))
+    const toAdd = entries.filter(e => !existingIds.has(e.message.info.id))
+    if (!toAdd.length) return
+    const msgs = [...state.messages]
+    for (const { message, anchor } of toAdd) {
+      msgs.splice(synthInsertIndex(msgs, message.info.id, anchor), 0, message)
+    }
+    state.messages = msgs
     this.notify([sessionId])
   }
 

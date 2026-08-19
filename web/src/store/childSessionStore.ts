@@ -82,6 +82,29 @@ class ChildSessionStore {
   }
 
   /**
+   * 注册一个子 session（从 grok 后端 subagent_spawned 通知调用）。
+   * 通知只带最小字段，不构成完整 ApiSession，故独立于 registerChildSession。
+   * 显式写入 agent 字段，供 SubtaskPartView 的 agent 名称匹配。
+   */
+  registerSubagent(info: { id: string; parentID: string; title?: string; agent?: string; createdAt?: number }) {
+    const children = this.childrenByParent.get(info.parentID)
+    if (children) {
+      children.add(info.id)
+    } else {
+      this.childrenByParent.set(info.parentID, new Set([info.id]))
+    }
+    this.sessionInfo.set(info.id, {
+      id: info.id,
+      parentID: info.parentID,
+      title: info.title || i18n.t('chat:permissionDialog.subtaskFallback'),
+      agent: info.agent,
+      status: 'running',
+      createdAt: info.createdAt ?? Date.now(),
+    })
+    this.notify()
+  }
+
+  /**
    * 更新子 session 状态
    */
   updateChildSession(sessionId: string, updates: Partial<Pick<ChildSessionInfo, 'status' | 'title'>>) {

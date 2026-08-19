@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiMessage, ApiMessageWithParts, ApiPart } from '../api/types'
+import type { Message } from '../types/message'
 import { messageStore } from './messageStore'
 
 function createAssistantMessage(id: string, sessionID = 'session-1'): ApiMessage {
@@ -371,5 +372,124 @@ describe('messageStore', () => {
     unsubscribeSession1()
     unsubscribeSession2()
     unsubscribeAll()
+  })
+})
+
+describe('injectSynthMessages 锚点定位', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    messageStore.clearAll()
+  })
+
+  function userMsg(id: string, text: string): ApiMessageWithParts {
+    return {
+      info: { ...createAssistantMessage(id), role: 'user' } as ApiMessage,
+      parts: [createTextPart(`part-${id}`, id, text)],
+    }
+  }
+
+  function synthNotif(taskId: string): Message {
+    return {
+      info: {
+        id: `msg_tasknotif_${taskId}`,
+        sessionID: 'session-1',
+        role: 'assistant',
+        time: { created: 100, completed: 100 },
+      } as Message['info'],
+      parts: [],
+    }
+  }
+
+  function ids() {
+    return (messageStore.getSessionState('session-1')?.messages ?? []).map(m => m.info.id)
+  }
+
+  it('锚点用户消息命中：插到该轮之后、下一条用户消息之前', () => {
+    messageStore.setMessages('session-1', [
+      userMsg('u1', '启动子代理'),
+      createMessageWithParts('a1', '好的，已启动'),
+      userMsg('u2', '另一个问题'),
+      createMessageWithParts('a2', '回答'),
+    ])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '启动子代理', userIndex: 1 } },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'u2', 'a2'])
+  })
+
+  it('锚点未命中或缺失：追加到末尾', () => {
+    messageStore.setMessages('session-1', [userMsg('u1', 'hello'), createMessageWithParts('a1', 'hi')])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '不存在的文本', userIndex: 1 } },
+      { message: synthNotif('t2') },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'msg_tasknotif_t2'])
+  })
+
+  it('存在 wake 回复：卡片紧贴其前（优先于文本锚点）', () => {
+    messageStore.setMessages('session-1', [
+      userMsg('u1', '启动子代理'),
+      createMessageWithParts('a1', '好的'),
+      createMessageWithParts('msg_wake_t1', '任务完成，结果是……'),
+      userMsg('u2', '继续'),
+    ])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '继续', userIndex: 2 } },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'msg_wake_t1', 'u2'])
+  })
+
+  it('同 id 已存在（live/回放已按事件流定位）：跳过，不重定位', () => {
+    messageStore.setMessages('session-1', [
+      userMsg('u1', '启动子代理'),
+      createMessageWithParts('a1', '好的'),
+      createMessageWithParts('msg_tasknotif_t1', '通知'),
+      userMsg('u2', '下一轮'),
+    ])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '下一轮', userIndex: 2 } },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'u2'])
+  })
+
+  it('多条通知共享同一锚点：保持持久化顺序', () => {
+    messageStore.setMessages('session-1', [
+      userMsg('u1', '并行跑两个任务'),
+      createMessageWithParts('a1', '已启动'),
+      userMsg('u2', '后续'),
+    ])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '并行跑两个任务', userIndex: 1 } },
+      { message: synthNotif('t2'), anchor: { userText: '并行跑两个任务', userIndex: 1 } },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'msg_tasknotif_t2', 'u2'])
+  })
+
+  it('完整锚点全等匹配：不被前缀扩展的后续消息误命中', () => {
+    messageStore.setMessages('session-1', [
+      userMsg('u1', '跑一下测试'),
+      createMessageWithParts('a1', '好'),
+      userMsg('u2', '跑一下测试，然后部署'),
+      createMessageWithParts('a2', '完成'),
+    ])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '跑一下测试', userIndex: 1 } },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'u2', 'a2'])
+  })
+
+  it('重复文本靠序数消歧：命中第 N 条而非最新一条', () => {
+    messageStore.setMessages('session-1', [
+      userMsg('u1', '继续'),
+      createMessageWithParts('a1', 'r1'),
+      userMsg('u2', '继续'),
+      createMessageWithParts('a2', 'r2'),
+      userMsg('u3', '收尾'),
+      createMessageWithParts('a3', 'r3'),
+    ])
+    messageStore.injectSynthMessages('session-1', [
+      { message: synthNotif('t1'), anchor: { userText: '继续', userIndex: 1 } },
+    ])
+    expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'u2', 'a2', 'u3', 'a3'])
   })
 })
