@@ -20,7 +20,7 @@ import {
 import { getCurrentProject } from '../api/client'
 import { disposeInstance } from '../api/global'
 import { listPtySessions, removePtySession } from '../api/pty'
-import { listWorktrees, createWorktree, removeWorktree, resetWorktree } from '../api/worktree'
+import { acpExtRequest } from '../api/acpBridge'
 import { subscribeToEvents } from '../api/events'
 import { useDirectory, useVcsInfo, requestGitWorkspaceCatalogRefresh } from '../hooks'
 import { getDirectoryName, isSameDirectory, normalizeToForwardSlash } from '../utils'
@@ -36,7 +36,7 @@ interface WorktreePanelProps {
 
 export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizing }: WorktreePanelProps) {
   const { t } = useTranslation(['components', 'common'])
-  const { currentDirectory, addDirectory, setCurrentDirectory } = useDirectory()
+  const { currentDirectory, touchDirectory, setCurrentDirectory } = useDirectory()
   const { vcsInfo, refresh: refreshVcs } = useVcsInfo(currentDirectory)
   const [worktrees, setWorktrees] = useState<string[]>([])
   const [rootDirectory, setRootDirectory] = useState<string | null>(null)
@@ -85,10 +85,10 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
         return
       }
 
-      const list = await listWorktrees(baseDirectory)
+      const list = await acpExtRequest('x.ai/git/worktree/list', { repo: baseDirectory })
       if (requestId !== loadRequestIdRef.current) return
 
-      setWorktrees(list)
+      setWorktrees(extractWorktreePaths(list))
     } catch (e) {
       if (requestId !== loadRequestIdRef.current) return
       setError(e instanceof Error ? e.message : t('worktreePanel.failedToLoad'))
@@ -143,40 +143,54 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
 
   const canManageWorktrees = !!rootDirectory && !loading
 
+  // 解析 x.ai/git/worktree/list 响应为路径数组：服务端是 Vec<WorktreeRecord>，
+  // 每条记录有 path 字段。容忍字符串数组、对象数组、{ worktrees } / { paths } 包装。
+  const extractWorktreePaths = useCallback((resp: unknown): string[] => {
+    if (!Array.isArray(resp)) return []
+    const out: string[] = []
+    for (const item of resp) {
+      if (typeof item === 'string' && item) {
+        out.push(item)
+      } else if (item && typeof item === 'object' && 'path' in item && typeof (item as { path: unknown }).path === 'string') {
+        out.push((item as { path: string }).path)
+      }
+    }
+    return out
+  }, [])
+
   // 在 worktree 目录下开启新 session
   const handleOpenSession = useCallback(
     (worktreeDir: string) => {
       const normalized = normalizeToForwardSlash(worktreeDir)
-      // 把 worktree 目录加入项目列表（同时切换过去）
-      addDirectory(normalized)
+      // touchDirectory 只刷新最近使用时间戳，不切换 currentDirectory
+      touchDirectory(normalized)
       // 直接设置 URL hash 到新 session 状态（清掉 sessionId，用 worktree 目录）
       window.location.hash = `#/?dir=${normalized}`
     },
-    [addDirectory],
+    [touchDirectory],
   )
 
   // 创建 worktree
+  // TODO: WorktreePanel migration gap —— create 是 sessions-hub 重构缺口之一
+  // （plan 已说明「Worktree 面板仍缺，先留」）。后端推荐路径是
+  // x.ai/git/worktree/create_from_worktree_sync，UI 集成待 Task 12 决定
+  // （移除按钮 / 重新设计 / 接通 create）。当前点击直接报错。
   const handleCreate = useCallback(
     async (name: string, autoOpen: boolean) => {
       if (!currentDirectory || !name.trim()) return
+      // autoOpen 是 create 的预留参数（Task 12 重新设计时使用），无效引用。
+      void autoOpen
 
       setActionLoading('create')
       try {
-        const baseDirectory = requireRootDirectory()
-        const wt = await createWorktree({ name: name.trim() }, baseDirectory)
-        setShowCreateForm(false)
-        await loadWorktrees()
-        requestGitWorkspaceCatalogRefresh()
-        if (autoOpen && wt.directory) {
-          handleOpenSession(wt.directory)
-        }
+        throw new Error('worktree 创建暂未迁移，见 Task 12')
       } catch (e) {
         setError(e instanceof Error ? e.message : t('worktreePanel.failedToCreate'))
       } finally {
         setActionLoading(null)
       }
     },
-    [currentDirectory, handleOpenSession, loadWorktrees, requireRootDirectory, t],
+    [currentDirectory, t],
   )
 
   // 删除 worktree
@@ -194,7 +208,11 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
         }
 
         await releaseWorktreeResources(directory)
-        await removeWorktree({ directory }, baseDirectory)
+        await acpExtRequest('x.ai/git/worktree/remove', {
+          idOrPath: directory,
+          force: false,
+          dryRun: false,
+        })
         await loadWorktrees()
         requestGitWorkspaceCatalogRefresh()
       } catch (e) {
@@ -208,17 +226,15 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
   )
 
   // 重置 worktree
+  // TODO: WorktreePanel migration gap —— 后端没有直接的 reset ext。
+  // 当前点击直接报错；Task 12 会决定移除按钮 / 重新设计。
   const handleReset = useCallback(
     async (directory: string) => {
       if (!currentDirectory) return
 
       setActionLoading(`reset-${directory}`)
       try {
-        const baseDirectory = requireRootDirectory()
-        await releaseWorktreeResources(directory)
-        await resetWorktree({ directory }, baseDirectory)
-        await loadWorktrees()
-        requestGitWorkspaceCatalogRefresh()
+        throw new Error('worktree reset 暂未迁移，见 Task 12')
       } catch (e) {
         setError(e instanceof Error ? e.message : t('worktreePanel.failedToReset'))
       } finally {
@@ -226,7 +242,7 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
         setResetConfirm({ isOpen: false, directory: null })
       }
     },
-    [currentDirectory, loadWorktrees, releaseWorktreeResources, requireRootDirectory, t],
+    [currentDirectory, t],
   )
 
   // ==========================================

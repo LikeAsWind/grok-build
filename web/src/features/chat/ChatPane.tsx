@@ -155,7 +155,7 @@ export const ChatPane = memo(function ChatPane({
   // ============================================
   const chatAreaRef = useRef<ChatAreaHandle>(null)
   const modelSelectorRef = useRef<ModelSelectorHandle>(null)
-  const { addDirectory } = useDirectory()
+  const { touchDirectory } = useDirectory()
 
   // ============================================
   // Models
@@ -538,7 +538,7 @@ export const ChatPane = memo(function ChatPane({
   const overlayRef = useRef<PaneDropOverlayHandle>(null)
   const paneRootRef = useRef<HTMLDivElement>(null)
   // 桌面端：文件夹拖到信息流 → 添加项目（输入框区域让给附件逻辑）
-  const isFolderDropActive = useFolderProjectDrop(paneRootRef, addDirectory)
+  const isFolderDropActive = useFolderProjectDrop(paneRootRef, touchDirectory)
   const currentZoneRef = useRef<DropZone | null>(null)
   const pendingZoneRef = useRef<DropZone | null>(null)
   const dropRafRef = useRef<number | null>(null)
