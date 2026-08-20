@@ -24,15 +24,15 @@ describe('worktree ACP API', () => {
   })
 
   it('gitRootFor 返回 git root', async () => {
-    acpExtRequestMock.mockResolvedValue({ gitRoot: 'C:\\repo' })
+    acpExtRequestMock.mockResolvedValue({ gitRepo: { gitRoot: 'C:\\repo' } })
     await expect(gitRootFor('C:\\repo\\sub')).resolves.toBe('C:\\repo')
     expect(acpExtRequestMock).toHaveBeenCalledWith('x.ai/git/git_repo_root', {
       currentWorkingDirectory: 'C:\\repo\\sub',
     })
   })
 
-  it('gitRootFor 非 git 仓库返回 null', async () => {
-    acpExtRequestMock.mockResolvedValue({ status: 'notGitRepo' })
+  it('gitRootFor 非 git 仓库返回 null（响应是裸字符串 "notGitRepo"）', async () => {
+    acpExtRequestMock.mockResolvedValue('notGitRepo')
     await expect(gitRootFor('C:\\plain')).resolves.toBeNull()
   })
 
@@ -67,8 +67,35 @@ describe('worktree ACP API', () => {
     expect((params as { gitRef?: string }).gitRef).toBe('feature/x')
   })
 
+  it('createIsolatedWorktree 缺 sourceGitRoot 时 sessionCwd 回退到 worktreePath', async () => {
+    acpExtRequestMock.mockResolvedValue({
+      status: 'created',
+      newSessionId: 'x',
+      worktreePath: 'C:\\repo\\.claude\\worktrees\\w',
+      // no sourceGitRoot
+    })
+    const result = await createIsolatedWorktree({ sourcePath: 'C:\\repo\\sub' })
+    expect(result.sessionCwd).toBe(result.worktreePath)
+  })
+
+  it('createIsolatedWorktree sourcePath 等于 sourceGitRoot（无子目录）sessionCwd 等于 worktreePath', async () => {
+    acpExtRequestMock.mockResolvedValue({
+      status: 'created',
+      newSessionId: 'x',
+      worktreePath: 'C:\\repo\\.claude\\worktrees\\w',
+      sourceGitRoot: 'C:\\repo',
+    })
+    const result = await createIsolatedWorktree({ sourcePath: 'C:\\repo' })
+    expect(result.sessionCwd).toBe(result.worktreePath)
+  })
+
   it('响应缺 worktreePath 时报错', async () => {
     acpExtRequestMock.mockResolvedValue({ status: 'error', message: 'disk full' })
-    await expect(createIsolatedWorktree({ sourcePath: 'C:\\repo' })).rejects.toThrow(/worktreePath/)
+    await expect(createIsolatedWorktree({ sourcePath: 'C:\\repo' })).rejects.toThrow(/worktree.*失败.*disk full/)
+  })
+
+  it('响应缺 worktreePath 且无 message 时给出兜底提示', async () => {
+    acpExtRequestMock.mockResolvedValue({ status: 'error' })
+    await expect(createIsolatedWorktree({ sourcePath: 'C:\\repo' })).rejects.toThrow(/worktree.*失败/)
   })
 })

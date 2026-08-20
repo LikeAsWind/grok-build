@@ -15,12 +15,16 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /**
  * 解析 git root。非 git 仓库返回 null。
- * 响应形状（raw，无 envelope）：{ gitRoot } | { status: "notGitRepo" }
+ * 响应形状（raw，无 envelope，外层标签枚举）：
+ *   - git 仓库：`{ gitRepo: { gitRoot } }`（Rust `GitRepoResponse::GitRepo(GitRepoPathResponse)`）
+ *   - 非 git：`"notGitRepo"`（unit 变体序列化为裸字符串）
  */
 export async function gitRootFor(cwd: string): Promise<string | null> {
   const resp = await acpExtRequest('x.ai/git/git_repo_root', { currentWorkingDirectory: cwd })
   if (!isRecord(resp)) return null
-  if (typeof resp.gitRoot === 'string' && resp.gitRoot) return resp.gitRoot
+  const gitRepo = resp.gitRepo
+  if (!isRecord(gitRepo)) return null
+  if (typeof gitRepo.gitRoot === 'string' && gitRepo.gitRoot) return gitRepo.gitRoot
   return null
 }
 
@@ -44,7 +48,7 @@ export interface CreateIsolatedWorktreeResult {
 
 /**
  * 同步创建隔离 worktree（TUI 同款路径：create_from_worktree_sync）。
- * 响应：{ status, newSessionId, worktreePath, commit?, sourceGitRoot? }
+ * 响应：{ status, newSessionId, worktreePath, commit?, sourceGitRoot?, copiedChanges? }
  */
 export async function createIsolatedWorktree(
   input: CreateIsolatedWorktreeInput,
@@ -59,8 +63,10 @@ export async function createIsolatedWorktree(
 
   const resp = await acpExtRequest('x.ai/git/worktree/create_from_worktree_sync', params)
   if (!isRecord(resp) || typeof resp.worktreePath !== 'string' || !resp.worktreePath) {
-    const detail = isRecord(resp) && typeof resp.message === 'string' ? `: ${resp.message}` : ''
-    throw new Error(`worktree 创建失败（响应缺 worktreePath）${detail}`)
+    // 已知 gap：后端 ExtMethodResult::failure 的 error 字符串被 acpExtRequest 解包时丢弃
+    // （'result' in raw 时只取 result），此处只能基于响应内字段拼诊断。
+    const detail = isRecord(resp) && typeof resp.message === 'string' ? `: ${resp.message}` : '响应缺 worktreePath'
+    throw new Error(`worktree 创建失败${detail}`)
   }
 
   const worktreePath = resp.worktreePath
