@@ -1,7 +1,5 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react'
-import { SidePanel } from './sidebar/SidePanel'
-import { ProjectDialog } from './ProjectDialog'
-import { useDirectory } from '../../hooks'
+import { SessionHubPanel } from '../sessions-hub/SessionHubPanel'
 import { type ApiSession } from '../../api'
 import { useChatViewport } from './chatViewport'
 
@@ -23,10 +21,7 @@ interface SidebarProps {
   onNewSession: () => void
   onOpen: () => void
   onClose: () => void
-  contextLimit?: number
   onOpenSettings?: () => void
-  projectDialogOpen?: boolean
-  onProjectDialogClose?: () => void
   mobileInline?: boolean
 }
 
@@ -37,47 +32,18 @@ export const Sidebar = memo(function Sidebar({
   onNewSession,
   onOpen,
   onClose,
-  contextLimit,
   onOpenSettings,
-  projectDialogOpen,
-  onProjectDialogClose,
   mobileInline = false,
 }: SidebarProps) {
-  const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false)
-  const [projectDialogKey, setProjectDialogKey] = useState(0)
-  const { addDirectory, pathInfo, currentDirectory } = useDirectory()
-  // 已在项目里时，从当前项目路径起步，方便加相邻目录；否则回落 home
-  const projectDialogInitialPath = currentDirectory || pathInfo?.home
   const { interaction, layout, actions } = useChatViewport()
   const isOverlay = interaction.sidebarBehavior === 'overlay'
   const touchCapable = interaction.touchCapable
-  const isProjectDialogVisible = isProjectDialogOpen || !!projectDialogOpen
 
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
   const currentWidthRef = useRef(layout.sidebar.openWidth)
   const rafRef = useRef<number>(0)
   const transitionResizeTimerRef = useRef<number | null>(null)
-
-  const handleAddProject = useCallback(
-    (path: string) => {
-      addDirectory(path)
-      if (!isOverlay) {
-        onOpen()
-      }
-    },
-    [addDirectory, isOverlay, onOpen],
-  )
-
-  const openProjectDialog = useCallback(() => {
-    setProjectDialogKey(key => key + 1)
-    setIsProjectDialogOpen(true)
-  }, [])
-
-  const closeProjectDialog = useCallback(() => {
-    setIsProjectDialogOpen(false)
-    onProjectDialogClose?.()
-  }, [onProjectDialogClose])
 
   const persistSidebarWidth = useCallback(
     (nextWidth: number) => {
@@ -280,30 +246,16 @@ export const Sidebar = memo(function Sidebar({
   if (isOverlay) {
     if (mobileInline) {
       return (
-        <>
-          <div className="relative flex h-full w-full flex-col overflow-hidden bg-bg-100 [contain:strict]">
-            <SidePanel
-              onNewSession={onNewSession}
-              onSelectSession={handleSelectSession}
-              onCloseMobile={onClose}
-              selectedSessionId={selectedSessionId}
-              onAddProject={openProjectDialog}
-              isMobile={true}
-              isExpanded={true}
-              onToggleSidebar={onClose}
-              contextLimit={contextLimit}
-              onOpenSettings={onOpenSettings}
-            />
-          </div>
-
-          <ProjectDialog
-            key={`mobile-${projectDialogKey}-${Number(isProjectDialogVisible)}`}
-            isOpen={isProjectDialogVisible}
-            onClose={closeProjectDialog}
-            onSelect={handleAddProject}
-            initialPath={projectDialogInitialPath}
+        <div className="relative flex h-full w-full flex-col overflow-hidden bg-bg-100 [contain:strict]">
+          <SessionHubPanel
+            onNewSession={onNewSession}
+            onSelectSession={handleSelectSession}
+            selectedSessionId={selectedSessionId}
+            isExpanded={true}
+            onToggleSidebar={onClose}
+            onOpenSettings={onOpenSettings}
           />
-        </>
+        </div>
       )
     }
 
@@ -337,81 +289,55 @@ export const Sidebar = memo(function Sidebar({
             height: 'calc(100% - var(--safe-area-inset-top) - var(--desktop-titlebar-height, 0px))',
           }}
         >
-          <SidePanel
+          <SessionHubPanel
             onNewSession={onNewSession}
             onSelectSession={handleSelectSession}
-            onCloseMobile={onClose}
             selectedSessionId={selectedSessionId}
-            onAddProject={openProjectDialog}
-            isMobile={true}
             isExpanded={true}
             onToggleSidebar={onClose}
-            contextLimit={contextLimit}
             onOpenSettings={onOpenSettings}
           />
         </div>
-
-        <ProjectDialog
-          key={`mobile-${projectDialogKey}-${Number(isProjectDialogVisible)}`}
-          isOpen={isProjectDialogVisible}
-          onClose={closeProjectDialog}
-          onSelect={handleAddProject}
-          initialPath={projectDialogInitialPath}
-        />
       </>
     )
   }
 
   return (
-    <>
-      <div
-        ref={sidebarRef}
-        style={{ width: `${layout.sidebar.dockedWidth}px` }}
-        className={`
-          relative flex flex-col h-full bg-bg-100 overflow-hidden shrink-0 min-w-0
-          border-r border-border-200/50
-          ${isResizing ? 'transition-none' : 'transition-[width] duration-300 ease-out'}
-        `}
-      >
-        <SidePanel
-          onNewSession={onNewSession}
-          onSelectSession={onSelectSession}
-          onCloseMobile={onClose}
-          selectedSessionId={selectedSessionId}
-          onAddProject={openProjectDialog}
-          isMobile={false}
-          isExpanded={isOpen}
-          onToggleSidebar={handleToggle}
-          contextLimit={contextLimit}
-          onOpenSettings={onOpenSettings}
-        />
-
-        {isOpen && (
-          <div
-            className={`
-              absolute top-0 right-0 h-full cursor-col-resize z-50 touch-none bg-transparent
-              ${touchCapable ? 'w-4' : 'w-1'}
-            `}
-            onMouseDown={startResizing}
-            onTouchStart={startTouchResizing}
-          >
-            <div
-              aria-hidden="true"
-              className={`absolute top-0 bottom-0 right-0 transition-colors ${touchCapable ? 'w-1 rounded-full' : 'w-full'} ${
-                isResizing ? 'bg-accent-main-100' : 'bg-transparent hover:bg-accent-main-100/50'
-              }`}
-            />
-          </div>
-        )}
-      </div>
-
-      <ProjectDialog
-        key={`desktop-${projectDialogKey}-${Number(isProjectDialogVisible)}`}
-        isOpen={isProjectDialogVisible}
-        onClose={closeProjectDialog}
-        onSelect={handleAddProject}
-        initialPath={projectDialogInitialPath}
+    <div
+      ref={sidebarRef}
+      style={{ width: `${layout.sidebar.dockedWidth}px` }}
+      className={`
+        relative flex flex-col h-full bg-bg-100 overflow-hidden shrink-0 min-w-0
+        border-r border-border-200/50
+        ${isResizing ? 'transition-none' : 'transition-[width] duration-300 ease-out'}
+      `}
+    >
+      <SessionHubPanel
+        onNewSession={onNewSession}
+        onSelectSession={onSelectSession}
+        selectedSessionId={selectedSessionId}
+        isExpanded={isOpen}
+        onToggleSidebar={handleToggle}
+        onOpenSettings={onOpenSettings}
       />
-    </>
+
+      {isOpen && (
+        <div
+          className={`
+            absolute top-0 right-0 h-full cursor-col-resize z-50 touch-none bg-transparent
+            ${touchCapable ? 'w-4' : 'w-1'}
+          `}
+          onMouseDown={startResizing}
+          onTouchStart={startTouchResizing}
+        >
+          <div
+            aria-hidden="true"
+            className={`absolute top-0 bottom-0 right-0 transition-colors ${touchCapable ? 'w-1 rounded-full' : 'w-full'} ${
+              isResizing ? 'bg-accent-main-100' : 'bg-transparent hover:bg-accent-main-100/50'
+            }`}
+          />
+        </div>
+      )}
+    </div>
   )
 })

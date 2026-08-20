@@ -63,7 +63,7 @@ function App() {
     navigateHome: navigateRouteHome,
     replaceSession,
   } = router
-  const { currentDirectory, savedDirectories, sidebarExpanded, setSidebarExpanded } = useDirectory()
+  const { currentDirectory, recentProjects, sidebarExpanded, setSidebarExpanded } = useDirectory()
   const { rightPanelOpen, rightPanelWidth, wakeLock } = useLayoutStore()
   const { surfaceRef, value: chatViewport } = useChatViewportController({
     sidebarExpanded,
@@ -114,9 +114,9 @@ function App() {
         paneDirectories: paneControllers
           .map(controller => controller.effectiveDirectory)
           .filter((directory): directory is string => Boolean(directory)),
-        projectDirectories: (Array.isArray(savedDirectories) ? savedDirectories : []).map(directory => directory.path),
+        projectDirectories: Object.keys(recentProjects),
       }),
-    [routeDirectory, currentDirectory, paneControllers, savedDirectories],
+    [routeDirectory, currentDirectory, paneControllers, recentProjects],
   )
 
   // 全局唯一 SSE 连接。所有 pane 通过 consumer 机制接收自己的 session 事件。
@@ -505,21 +505,14 @@ function App() {
     ],
   )
 
-  const [projectDialogOpen, setProjectDialogOpen] = useState(false)
-  const openProject = useCallback(() => setProjectDialogOpen(true), [])
-  const closeProjectDialog = useCallback(() => setProjectDialogOpen(false), [])
-
-  // 桌面标题栏通过 CustomEvent 触发打开项目/设置
+  // 桌面标题栏通过 CustomEvent 触发打开设置
   useEffect(() => {
-    const onOpenProject = () => openProject()
     const onOpenSettings = () => openSettings()
-    window.addEventListener('titlebar:open-project', onOpenProject)
     window.addEventListener('titlebar:open-settings', onOpenSettings)
     return () => {
-      window.removeEventListener('titlebar:open-project', onOpenProject)
       window.removeEventListener('titlebar:open-settings', onOpenSettings)
     }
-  }, [openProject, openSettings])
+  }, [openSettings])
 
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
 
@@ -540,7 +533,6 @@ function App() {
   const keybindingHandlers = useMemo<KeybindingHandlers>(
     () => ({
       openSettings,
-      openProject,
       commandPalette: () => setCommandPaletteOpen(true),
       toggleSidebar: handleToggleSidebar,
       toggleRightPanel: handleToggleRightPanel,
@@ -598,7 +590,6 @@ function App() {
     }),
     [
       openSettings,
-      openProject,
       focusedController,
       handleToggleSidebar,
       handleToggleRightPanel,
@@ -624,14 +615,6 @@ function App() {
         category: t('commands:categories.general'),
         shortcut: getShortcut('openSettings'),
         action: openSettings,
-      },
-      {
-        id: 'openProject',
-        label: t('commands:openProject'),
-        description: t('commands:openProjectDesc'),
-        category: t('commands:categories.general'),
-        shortcut: getShortcut('openProject'),
-        action: openProject,
       },
       {
         id: 'openSettingsShortcuts',
@@ -816,7 +799,6 @@ function App() {
   }, [
     t,
     openSettings,
-    openProject,
     openSettingsTab,
     handleToggleSidebar,
     handleToggleRightPanel,
@@ -872,10 +854,7 @@ function App() {
                     onNewSession={handleNewSession}
                     onOpen={handleOpenSidebar}
                     onClose={handleCloseSidebar}
-                    contextLimit={focusedController?.contextLimit}
                     onOpenSettings={openSettings}
-                    projectDialogOpen={projectDialogOpen}
-                    onProjectDialogClose={closeProjectDialog}
                     mobileInline
                   />
                 </section>
@@ -957,10 +936,7 @@ function App() {
                 onNewSession={handleNewSession}
                 onOpen={handleOpenSidebar}
                 onClose={handleCloseSidebar}
-                contextLimit={focusedController?.contextLimit}
                 onOpenSettings={openSettings}
-                projectDialogOpen={projectDialogOpen}
-                onProjectDialogClose={closeProjectDialog}
               />
 
               <div className="flex-1 flex min-w-0 h-full overflow-hidden">
