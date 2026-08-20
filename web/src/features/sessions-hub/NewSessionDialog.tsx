@@ -2,6 +2,7 @@
 // Git 仓库可选在隔离 worktree 中运行，创建成功后通知父组件。
 
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '../../components/ui/Button'
 import { Dialog } from '../../components/ui/Dialog'
 import { SpinnerIcon } from '../../components/Icons'
@@ -20,6 +21,7 @@ export interface NewSessionDialogProps {
 }
 
 export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated }: NewSessionDialogProps) {
+  const { t } = useTranslation('chat')
   const { recentProjects, touchDirectory } = useDirectory()
   const { createSession } = useSessionContext()
 
@@ -103,7 +105,7 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
 
   return (
     <>
-      <Dialog isOpen={isOpen} onClose={onClose} title="新建会话" width={520}>
+      <Dialog isOpen={isOpen} onClose={onClose} title={t('sessionsHub.newChatDialogTitle')} width={520}>
         <div className="space-y-4">
           <DirectorySelector
             recentProjects={recentProjects}
@@ -116,7 +118,7 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
             onClick={() => setBrowserOpen(true)}
             className="w-full flex items-center justify-center gap-1.5 h-8 rounded-md border border-dashed border-border-200 text-[length:var(--fs-sm)] text-text-300 hover:text-text-100 hover:border-border-100 transition-colors"
           >
-            浏览文件系统…
+            {t('sessionsHub.browseFilesystem')}
           </button>
 
           {isGit && (
@@ -129,31 +131,31 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
                 className="accent-accent-main-100"
               />
               <span className="text-[length:var(--fs-sm)] text-text-200">
-                在隔离 worktree 中运行
+                {t('sessionsHub.runInWorktree')}
               </span>
-              <span className="text-[length:var(--fs-xs)] text-text-400">（不影响主代码库）</span>
+              <span className="text-[length:var(--fs-xs)] text-text-400">{t('sessionsHub.worktreeHint')}</span>
             </label>
           )}
 
           {creating && worktreeProgress?.kind === 'progress' && (
             <div className="flex items-center gap-2 text-[length:var(--fs-sm)] text-text-300">
               <SpinnerIcon size={14} className="animate-spin" />
-              <span>{worktreeProgress.message ?? '正在创建 worktree…'}</span>
+              <span>{worktreeProgress.message ?? t('sessionsHub.creating')}</span>
             </div>
           )}
 
           {worktreeProgress?.kind === 'error' && (
             <div className="text-[length:var(--fs-sm)] text-danger-100">
-              {worktreeProgress.message ?? 'worktree 创建失败'}
+              {worktreeProgress.message}
             </div>
           )}
 
           <div className="flex items-center justify-end gap-2 pt-1">
             <Button variant="ghost" size="sm" onClick={onClose}>
-              取消
+              {t('sessionsHub.cancel')}
             </Button>
             <Button size="sm" onClick={handleCreate} disabled={!selectedDir || creating}>
-              {creating ? '创建中…' : '创建会话'}
+              {creating ? t('sessionsHub.creating') : t('sessionsHub.createSession')}
             </Button>
           </div>
         </div>

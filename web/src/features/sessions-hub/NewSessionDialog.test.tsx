@@ -2,6 +2,10 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NewSessionDialog } from './NewSessionDialog'
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, opts?: { count?: number }) => (opts?.count !== undefined ? `${key}:${opts.count}` : key) }),
+}))
+
 const { useDirectoryMock, gitRootForMock, createIsolatedWorktreeMock, pagerWorktreeIdMock, createSessionMock } = vi.hoisted(() => ({
   useDirectoryMock: vi.fn(),
   gitRootForMock: vi.fn(),
@@ -67,7 +71,7 @@ describe('NewSessionDialog', () => {
     createSessionMock.mockResolvedValue({ id: 's1' })
     const props = renderDialog()
     fireEvent.click(screen.getByText('C:\\repo'))
-    fireEvent.click(screen.getByRole('button', { name: /创建/ }))
+    fireEvent.click(screen.getByRole('button', { name: /sessionsHub\.createSession/ }))
     await act(async () => {})
     expect(createSessionMock).toHaveBeenCalledWith(undefined, 'C:\\repo')
     expect(props.onCreated).toHaveBeenCalledWith({ id: 's1' })
@@ -77,7 +81,7 @@ describe('NewSessionDialog', () => {
     gitRootForMock.mockResolvedValue('C:\\repo')
     renderDialog()
     await act(async () => {})
-    expect(screen.getByText(/隔离 worktree/)).toBeInTheDocument()
+    expect(screen.getByText('sessionsHub.runInWorktree')).toBeInTheDocument()
   })
 
   it('worktree 路径：先建 worktree 再用 sessionCwd 建会话', async () => {
@@ -91,7 +95,7 @@ describe('NewSessionDialog', () => {
     await act(async () => {})
     const toggle = screen.getByRole('switch')
     fireEvent.click(toggle)
-    fireEvent.click(screen.getByRole('button', { name: /创建/ }))
+    fireEvent.click(screen.getByRole('button', { name: /sessionsHub\.createSession/ }))
     await act(async () => {})
     expect(createIsolatedWorktreeMock).toHaveBeenCalledWith({
       sourcePath: 'C:\\repo',
@@ -103,7 +107,7 @@ describe('NewSessionDialog', () => {
   it('未选目录时创建按钮禁用', () => {
     useDirectoryMock.mockReturnValue({ recentProjects: {}, touchDirectory: vi.fn() })
     renderDialog({ initialDirectory: '' })
-    expect(screen.getByRole('button', { name: /创建/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /sessionsHub\.createSession/ })).toBeDisabled()
   })
 
   it('worktree 创建失败时不触发 onCreated、按钮重新可用、显示错误', async () => {
@@ -112,11 +116,11 @@ describe('NewSessionDialog', () => {
     const props = renderDialog()
     await act(async () => {})
     fireEvent.click(screen.getByRole('switch'))
-    fireEvent.click(screen.getByRole('button', { name: /创建/ }))
+    fireEvent.click(screen.getByRole('button', { name: /sessionsHub\.createSession/ }))
     await act(async () => {})
     expect(createSessionMock).not.toHaveBeenCalled()
     expect(props.onCreated).not.toHaveBeenCalled()
-    const createBtn = screen.getByRole('button', { name: /创建/ })
+    const createBtn = screen.getByRole('button', { name: /sessionsHub\.createSession/ })
     expect(createBtn).not.toBeDisabled()
     expect(screen.getByText('not a git repo')).toBeInTheDocument()
   })
@@ -128,10 +132,10 @@ describe('NewSessionDialog', () => {
     })
     renderDialog()
     await act(async () => {})
-    expect(screen.getByText(/隔离 worktree/)).toBeInTheDocument()
+    expect(screen.getByText('sessionsHub.runInWorktree')).toBeInTheDocument()
     // 切到非 git 目录
     fireEvent.click(screen.getByText('D:\\other'))
     await act(async () => {})
-    expect(screen.queryByText(/隔离 worktree/)).not.toBeInTheDocument()
+    expect(screen.queryByText('sessionsHub.runInWorktree')).not.toBeInTheDocument()
   })
 })

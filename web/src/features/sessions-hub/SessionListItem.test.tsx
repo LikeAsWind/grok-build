@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionListItem } from './SessionListItem'
 import type { ApiSession } from '../../api'
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, opts?: { count?: number }) => (opts?.count !== undefined ? `${key}:${opts.count}` : key) }),
+}))
+
 vi.mock('../../components/ui/ConfirmDialog', () => ({
   ConfirmDialog: ({ isOpen, onConfirm, title }: { isOpen: boolean; onConfirm: () => void; title: string }) =>
     isOpen ? (
@@ -43,7 +47,7 @@ describe('SessionListItem', () => {
     )
     expect(screen.getByText('修登录 bug')).toBeInTheDocument()
     expect(screen.getByText('repo')).toBeInTheDocument()
-    expect(screen.getByText(/前|刚刚/)).toBeInTheDocument()
+    expect(screen.getByText(/^sessionsHub\.(justNow|minutesAgo|hoursAgo|daysAgo)/)).toBeInTheDocument()
   })
 
   it('选中态有 data-selected 标记', () => {
@@ -87,7 +91,7 @@ describe('SessionListItem', () => {
         onDelete={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText('未命名会话')).toBeInTheDocument()
+    expect(screen.getByText('sessionsHub.untitled')).toBeInTheDocument()
   })
 
   it('删除需确认，确认后调用 onDelete', () => {
@@ -102,7 +106,7 @@ describe('SessionListItem', () => {
         onDelete={onDelete}
       />,
     )
-    fireEvent.click(screen.getByTitle('删除会话'))
+    fireEvent.click(screen.getByTitle('sessionsHub.deleteSession'))
     fireEvent.click(screen.getByText('confirm'))
     expect(onDelete).toHaveBeenCalledWith('s1')
   })

@@ -1,6 +1,7 @@
 // 目录选择器：最近目录列表 + 手动输入路径。被 NewSessionDialog 使用。
 
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { FolderIcon } from '../../components/Icons'
 import { normalizeToForwardSlash } from '../../utils'
 
@@ -13,6 +14,7 @@ export interface DirectorySelectorProps {
 const MAX_RECENT = 5
 
 export function DirectorySelector({ recentProjects, selected, onSelect }: DirectorySelectorProps) {
+  const { t } = useTranslation('chat')
   const [manualPath, setManualPath] = useState('')
 
   const recents = useMemo(() => {
@@ -31,7 +33,7 @@ export function DirectorySelector({ recentProjects, selected, onSelect }: Direct
   return (
     <div className="space-y-2">
       <div className="text-[length:var(--fs-xs)] font-medium uppercase tracking-wider text-text-400">
-        工作目录
+        {t('sessionsHub.workingDirectory')}
       </div>
 
       {recents.length > 0 && (
@@ -63,7 +65,7 @@ export function DirectorySelector({ recentProjects, selected, onSelect }: Direct
           onKeyDown={e => {
             if (e.key === 'Enter') handleManualSubmit()
           }}
-          placeholder="手动输入路径，回车确认"
+          placeholder={t('sessionsHub.manualPathPlaceholder')}
           spellCheck={false}
           className="flex-1 h-8 px-2.5 text-[length:var(--fs-sm)] font-mono rounded-md bg-transparent text-text-100 border border-border-200 outline-none focus:border-accent-main-100"
         />
@@ -72,7 +74,7 @@ export function DirectorySelector({ recentProjects, selected, onSelect }: Direct
           onClick={handleManualSubmit}
           className="h-8 px-2.5 rounded-md text-[length:var(--fs-sm)] text-text-300 hover:text-text-100 hover:bg-bg-200/60 transition-colors"
         >
-          确认
+          {t('sessionsHub.manualConfirm')}
         </button>
       </div>
     </div>

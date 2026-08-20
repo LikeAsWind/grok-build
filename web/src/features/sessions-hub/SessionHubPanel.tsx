@@ -26,13 +26,21 @@ export interface SessionHubPanelProps {
 
 type StatusFilter = 'all' | SessionUiStatus['kind']
 
-const FILTER_LABELS: Record<StatusFilter, string> = {
-  all: '全部',
-  working: 'Working',
-  needs_input: 'Needs input',
-  completed: 'Completed',
-  failed: 'Failed',
-  idle: 'Idle',
+function filterLabelKey(kind: StatusFilter): string {
+  switch (kind) {
+    case 'all':
+      return 'filterAll'
+    case 'working':
+      return 'filterWorking'
+    case 'needs_input':
+      return 'filterNeedsInput'
+    case 'completed':
+      return 'filterCompleted'
+    case 'failed':
+      return 'filterFailed'
+    case 'idle':
+      return 'filterIdle'
+  }
 }
 
 function deriveAllStatuses(
@@ -179,7 +187,7 @@ export function SessionHubPanel({
           type="button"
           onClick={() => setNewDialogOpen(true)}
           aria-label={t('sidebar.newChat')}
-          title="新建会话"
+          title={t('sessionsHub.newChatDialogTitle')}
           className="h-8 flex items-center rounded-lg text-text-300 hover:text-text-100 hover:bg-bg-200 active:scale-[0.98] transition-all duration-300 group overflow-hidden"
           style={{ width: showLabels ? '100%' : 32, paddingLeft: 6, paddingRight: 6 }}
         >
@@ -233,7 +241,9 @@ export function SessionHubPanel({
               statusFilter !== 'all' ? 'text-accent-main-100' : 'text-text-400 hover:text-text-200'
             }`}
           >
-            筛选{statusFilter !== 'all' ? `: ${FILTER_LABELS[statusFilter]}` : ''}
+            {statusFilter !== 'all'
+              ? `${t('sessionsHub.filter')}${t('sessionsHub.filterSeparator')}${t(`sessionsHub.${filterLabelKey(statusFilter)}`)}`
+              : t('sessionsHub.filter')}
           </button>
           <button
             type="button"
@@ -241,16 +251,16 @@ export function SessionHubPanel({
             className={`h-7 px-2 rounded-md text-[length:var(--fs-xs)] transition-colors flex items-center gap-1 ${
               groupByProject ? 'text-accent-main-100' : 'text-text-400 hover:text-text-200'
             }`}
-            title="按项目分组"
+            title={t('sessionsHub.groupByProject')}
           >
             <CheckIcon size={12} className={groupByProject ? '' : 'opacity-0'} />
-            分组
+            {t('sessionsHub.groupByProject')}
           </button>
           <button
             type="button"
             onClick={() => setBellOpen(!bellOpen)}
             className="ml-auto relative p-1 rounded-md text-text-400 hover:text-text-100"
-            title="通知"
+            title={t('sessionsHub.notifications')}
           >
             <BellIcon size={14} />
             {unreadCount > 0 && (
@@ -274,7 +284,7 @@ export function SessionHubPanel({
                     statusFilter === kind ? 'text-accent-main-100 bg-accent-main-100/10' : 'text-text-300 hover:text-text-100 hover:bg-bg-200/50'
                   }`}
                 >
-                  {FILTER_LABELS[kind]}
+                  {t(`sessionsHub.${filterLabelKey(kind)}`)}
                 </button>
               ))}
             </div>
@@ -283,7 +293,7 @@ export function SessionHubPanel({
           {bellOpen && (
             <div className="absolute right-0 top-full mt-1 z-30 w-64 max-h-72 overflow-y-auto custom-scrollbar rounded-lg border border-border-200/60 glass-alt shadow-sm p-1 bg-bg-100">
               {notifications.length === 0 ? (
-                <div className="px-3 py-4 text-center text-[length:var(--fs-sm)] text-text-400">暂无通知</div>
+                <div className="px-3 py-4 text-center text-[length:var(--fs-sm)] text-text-400">{t('sessionsHub.noNotifications')}</div>
               ) : (
                 notifications.map(n => (
                   <div key={n.id} className="px-2 py-1.5 border-b border-border-200/30 last:border-b-0">
@@ -300,17 +310,17 @@ export function SessionHubPanel({
       {/* Session list */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-2">
         {isLoading && sessions.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-text-400/70 text-[length:var(--fs-sm)]">加载中…</div>
+          <div className="flex h-full items-center justify-center text-text-400/70 text-[length:var(--fs-sm)]">{t('sessionsHub.loading')}</div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-text-400 opacity-60">
-            <p className="text-[length:var(--fs-sm)]">{search ? '没有匹配的会话' : '还没有会话，点上方新建'}</p>
+            <p className="text-[length:var(--fs-sm)]">{search ? t('sessionsHub.noMatches') : t('sessionsHub.noSessionsYet')}</p>
           </div>
         ) : groupByProject ? (
           groups.map(group => (
             <div key={group.directory} className="mt-2">
               <div className="flex items-center gap-1.5 px-2 py-1 text-[length:var(--fs-xs)] font-medium text-text-400 uppercase tracking-wider">
-                <span className="truncate">{group.directory === '(none)' ? '无目录' : getDirectoryName(group.directory)}</span>
-                <span className="text-text-500">· {group.sessions.length}</span>
+                <span className="truncate">{group.directory === '(none)' ? t('sessionsHub.noDirectory') : getDirectoryName(group.directory)}</span>
+                <span className="text-text-500">· {t('sessionsHub.groupHeaderCount', { count: group.sessions.length })}</span>
               </div>
               <div className="space-y-0.5">{group.sessions.map(renderItem)}</div>
             </div>

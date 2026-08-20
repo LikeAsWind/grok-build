@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionHubPanel } from './SessionHubPanel'
 import type { ApiSession } from '../../api'
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string, opts?: { count?: number }) => (opts?.count !== undefined ? `${key}:${opts.count}` : key) }),
+}))
+
 const {
   useSessionContextMock,
   useBusySessionsMock,
@@ -149,8 +153,8 @@ describe('SessionHubPanel', () => {
     useBusySessionsMock.mockReturnValue([{ sessionId: 's2', status: { type: 'busy' } }] as never)
     renderPanel()
 
-    fireEvent.click(screen.getByText('筛选'))
-    fireEvent.click(screen.getByText('Working'))
+    fireEvent.click(screen.getByText('sessionsHub.filter'))
+    fireEvent.click(screen.getByText('sessionsHub.filterWorking'))
     // s1 (idle) 被过滤掉
     expect(screen.queryByText('会话 A')).not.toBeInTheDocument()
     // s2 (working) 保留
@@ -167,12 +171,12 @@ describe('SessionHubPanel', () => {
     const { container } = renderPanel()
 
     // 点击 topbar 之外的「分组」切换按钮开启分组
-    fireEvent.click(screen.getByText('分组'))
+    fireEvent.click(screen.getByText('sessionsHub.groupByProject'))
     // getDirectoryName('C:\\repo') = 'repo'；分组头应该显示「repo · 2」
+    // groupHeaderCount mock 返回 "sessionsHub.groupHeaderCount:2"，外加硬编码 "· "
     // 文本被拆到两个 span 中，用 textContent 校验父容器
-    // span 之间用 gap CSS 控制间距，textContent 里没有空格
     const groupHead = container.querySelector('[class*="uppercase"]')
-    expect(groupHead?.textContent).toBe('repo· 2')
+    expect(groupHead?.textContent).toBe('repo· sessionsHub.groupHeaderCount:2')
   })
 
   it('点新建打开对话框，fake-create 后触发 onNewSession', () => {
@@ -180,7 +184,7 @@ describe('SessionHubPanel', () => {
     useSessionContextMock.mockReturnValue(sessionCtx([]))
     renderPanel({ onNewSession })
 
-    fireEvent.click(screen.getByTitle('新建会话'))
+    fireEvent.click(screen.getByTitle('sessionsHub.newChatDialogTitle'))
     fireEvent.click(screen.getByText('fake-create'))
     expect(onNewSession).toHaveBeenCalled()
   })
@@ -202,8 +206,8 @@ describe('SessionHubPanel', () => {
     renderPanel({ selectedSessionId: 'current', onNewSession })
 
     // 点 hover trash 按钮 → ConfirmDialog → 确认按钮
-    fireEvent.click(screen.getByTitle('删除会话'))
-    fireEvent.click(screen.getByText('删除'))
+    fireEvent.click(screen.getByTitle('sessionsHub.deleteSession'))
+    fireEvent.click(screen.getByText('sessionsHub.delete'))
     await act(async () => {})
     expect(deleteSessionMock).toHaveBeenCalledWith('current')
     expect(onNewSession).toHaveBeenCalled()
@@ -215,7 +219,7 @@ describe('SessionHubPanel', () => {
     renderPanel()
 
     // SessionListItem 重命名：点 pencil → input → Enter 提交
-    fireEvent.click(screen.getByTitle('重命名会话'))
+    fireEvent.click(screen.getByTitle('sessionsHub.renameSession'))
     const input = screen.getByDisplayValue('old')
     fireEvent.change(input, { target: { value: 'new title' } })
     fireEvent.keyDown(input, { key: 'Enter' })
@@ -241,7 +245,7 @@ describe('SessionHubPanel', () => {
     useNotificationsMock.mockReturnValue([])
     renderPanel()
 
-    fireEvent.click(screen.getByTitle('通知'))
-    expect(screen.getByText('暂无通知')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('sessionsHub.notifications'))
+    expect(screen.getByText('sessionsHub.noNotifications')).toBeInTheDocument()
   })
 })

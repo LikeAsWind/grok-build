@@ -59,7 +59,14 @@ xai-acp-lib / agent-client-protocol v0.10.x
 - `useSessionManager.ts` — 列表/创建/加载/删除/fork + 服务器切换重连
 
 **UI — `web/src/features/`**
-- `chat/` — `ChatPane`、`Header`（模型+模式+ACP 连接状态+服务器切换）、`InputBox`、`InputToolbar`（`@` 提及 / `/` 命令 / follow-up 队列徽章）、`sidebar/SidePanel`（会话列表 + 服务器健康）、`sidebar/DirBrowserModal`（`browseDirectory` 工作目录选择）
+- `chat/` — `ChatPane`、`Header`（模型+模式+ACP 连接状态+服务器切换）、`InputBox`、`InputToolbar`（`@` 提及 / `/` 命令 / follow-up 队列徽章）、`sidebar/SidebarFooter`、`sidebar/ContextDetailsDialog`、`sidebar/DirBrowserModal`（`browseDirectory` 工作目录选择）
+- `sessions-hub/` — 新侧栏主面板（替换旧 `chat/sidebar/SidePanel` 与 `chat/ProjectDialog`）：
+  - `status.ts` — 会话状态徽章派生纯函数（priority: busy → pending → 通知）
+  - `worktreeStatusStore.ts` — `x.ai/git/worktree/status` 进度订阅
+  - `DirectorySelector.tsx` — 最近目录列表 + 手动路径输入
+  - `NewSessionDialog.tsx` — 新建对话框：目录选择 + worktree 开关 + 创建编排
+  - `SessionListItem.tsx` — 单条会话条目：状态徽章 + 重命名 + 删除
+  - `SessionHubPanel.tsx` — 新侧栏主面板：全局会话 + 筛选 + 分组 + 通知铃铛
 - `settings/` — `SettingsDialog`（双 tab：表单 / TOML 源码）+ `components/`：
   - `GrokConfigSettings.tsx` — 左 rail 列 `grokConfigSchema` 的分区，右 pane 渲染 `ConfigSectionCard`
   - `ConfigFieldControl.tsx` — 数据驱动：开关/输入/下拉、密钥掩码、模型引用下拉、规则对、键值对、Anthropic / OpenAI / Ollama 预设
@@ -79,7 +86,7 @@ xai-acp-lib / agent-client-protocol v0.10.x
 | # | 内容 | 状态 |
 |---|---|---|
 | 1 | 核心聊天回路（发消息 → 流式回复） | ✅ |
-| 2 | 会话管理（list / create / delete / fork / 历史回放） | ✅ |
+| 2 | 会话管理（list / create / delete / fork / 历史回放） | ✅ 全局列表 + 状态徽章 + 新建对话框 |
 | 3a | 权限弹窗 | ✅ |
 | 3b | AskUserQuestion 弹窗 | ✅ |
 | 3c | Plan Approval（`x.ai/exit_plan_mode`） | ✅ `PlanApprovalModal` + `planApprovalStore`，尊重 `[ui] yolo` 配置（yolo=true 自动批准） |
@@ -88,7 +95,7 @@ xai-acp-lib / agent-client-protocol v0.10.x
 | 6a | MCP 配置表单（持久化） | ✅ |
 | 6b | MCP 运行时面板（live 状态） | ❌ |
 | 6c | Skills 面板 | ❌ |
-| 6d | Worktree 生命周期面板 | ❌（`DirBrowserModal` 只选工作目录） |
+| 6d | Worktree 生命周期（create / list / apply） | ⚠️ 创建已入新建对话框，列表/应用面板仍缺 |
 | 7a | Rewind（消息级 undo / redo） | ⚠️ 半成品——`useRevertState` / `useSessionManager` 调 `revertMessage`/`unrevertSession`；`x.ai/rewind/points` 检查点面板未做（后端 handler 已就绪） |
 | 7b | Cron / 定时任务 UI | ❌ |
 | 7c | 后台任务卡片（`TaskCompleted`） | ❌ |
@@ -116,7 +123,7 @@ xai-acp-lib / agent-client-protocol v0.10.x
 3. **Cron / 后台任务卡片缺失**——`useGlobalEvents` 没有 `scheduled_task_*` / `task.completed` 订阅；后端类型已存在。修复：加订阅 + 在 ChatPane 渲染内联卡片（TUI 对应 `tasks_pane`）。
 4. **Rewind 检查点面板**——消息级 revert/unrevert 已有（`useRevertState`），但 `x.ai/rewind/points`（多检查点列表）UI 没做，后端 handler 已就绪。
 5. **Subagent 树状视图**——`SubtaskPartView` 已可跳转子会话，但缺树状 / 并排切换视图。
-6. **Worktree 生命周期**——`DirBrowserModal` 只选目录，没有 create / list / delete worktree（TUI 对应 `new_worktree_dialog`）。
+6. **Worktree 生命周期**——创建入口已入 `NewSessionDialog`（Git 仓库自动显示 worktree 开关），但 list / apply 面板仍缺。
 7. **TUI 独有、Web 未移植的周边面板**——历史搜索（`history_search`）、Memory 面板（`memory_modal`）、Workflows 面板（`workflows_overlay`）、`/btw` 内联问答、完整 usage 面板（`usage_modal`，Web 只有 `useSessionStats` 数据）。
 
 > 新增/修缺口时按"先订阅 + 再渲染"两步走：先在 `useGlobalEvents`（或 `acpBridge`）加通知处理 → 再在 `ChatPane` 或新组件渲染。**别改 OpenCodeUI 自带 UI 组件**——按现有模式新增 grok 特有组件。
