@@ -2,7 +2,7 @@
 // 依赖：useSessionContext（侧栏数据源）+ useBusySessions（busy 状态）+ useNotifications（铃铛）。
 // 轻量 mock：NewSessionDialog 用一个最简的 fake 替身，验证面板开关状态机即可。
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionHubPanel } from './SessionHubPanel'
 import type { ApiSession } from '../../api'
@@ -183,5 +183,65 @@ describe('SessionHubPanel', () => {
     fireEvent.click(screen.getByTitle('新建会话'))
     fireEvent.click(screen.getByText('fake-create'))
     expect(onNewSession).toHaveBeenCalled()
+  })
+
+  it('点击会话条目触发 onSelectSession', () => {
+    useSessionContextMock.mockReturnValue(sessionCtx([makeSession({ id: 's1' })]))
+    const onSelect = vi.fn()
+    renderPanel({ onSelectSession: onSelect })
+
+    // SessionListItem 的 onClick 走 row 的 onClick（不是 hover 操作按钮）
+    fireEvent.click(screen.getByText('会话 A'))
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 's1' }))
+  })
+
+  it('删除当前选中会话会触发 onNewSession（fallback 行为）', async () => {
+    deleteSessionMock.mockResolvedValue(true)
+    useSessionContextMock.mockReturnValue(sessionCtx([makeSession({ id: 'current' })]))
+    const onNewSession = vi.fn()
+    renderPanel({ selectedSessionId: 'current', onNewSession })
+
+    // 点 hover trash 按钮 → ConfirmDialog → 确认按钮
+    fireEvent.click(screen.getByTitle('删除会话'))
+    fireEvent.click(screen.getByText('删除'))
+    await act(async () => {})
+    expect(deleteSessionMock).toHaveBeenCalledWith('current')
+    expect(onNewSession).toHaveBeenCalled()
+  })
+
+  it('重命名会话走 updateSession + refresh', async () => {
+    updateSessionMock.mockResolvedValue({})
+    useSessionContextMock.mockReturnValue(sessionCtx([makeSession({ id: 'rn1', title: 'old' })]))
+    renderPanel()
+
+    // SessionListItem 重命名：点 pencil → input → Enter 提交
+    fireEvent.click(screen.getByTitle('重命名会话'))
+    const input = screen.getByDisplayValue('old')
+    fireEvent.change(input, { target: { value: 'new title' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await act(async () => {})
+    expect(updateSessionMock).toHaveBeenCalledWith('rn1', { title: 'new title' })
+  })
+
+  it('通知未读数显示为徽章数字', () => {
+    useSessionContextMock.mockReturnValue(sessionCtx([]))
+    useNotificationsMock.mockReturnValue([
+      { id: 'n1', type: 'error', title: 't', body: 'b', sessionId: 'x', timestamp: 1, read: false },
+      { id: 'n2', type: 'completed', title: 't', body: 'b', sessionId: 'y', timestamp: 2, read: true }, // 已读
+    ])
+    useUnreadNotificationCountMock.mockReturnValue(1)
+    renderPanel()
+
+    // 未读徽章应显示 "1"
+    expect(screen.getByText('1')).toBeInTheDocument()
+  })
+
+  it('空通知时显示「暂无通知」', () => {
+    useSessionContextMock.mockReturnValue(sessionCtx([]))
+    useNotificationsMock.mockReturnValue([])
+    renderPanel()
+
+    fireEvent.click(screen.getByTitle('通知'))
+    expect(screen.getByText('暂无通知')).toBeInTheDocument()
   })
 })

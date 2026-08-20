@@ -279,23 +279,22 @@ export function SessionHubPanel({
               ))}
             </div>
           )}
-        </div>
 
-        {/* Bell popover: 通知历史 */}
-        {bellOpen && (
-          <div className="absolute right-2 top-[86px] z-30 w-64 max-h-72 overflow-y-auto custom-scrollbar rounded-lg border border-border-200/60 glass-alt shadow-sm p-1 bg-bg-100">
-            {notifications.length === 0 ? (
-              <div className="px-3 py-4 text-center text-[length:var(--fs-sm)] text-text-400">暂无通知</div>
-            ) : (
-              notifications.map(n => (
-                <div key={n.id} className="px-2 py-1.5 border-b border-border-200/30 last:border-b-0">
-                  <div className="text-[length:var(--fs-xs)] text-text-200 truncate">{n.title}</div>
-                  <div className="text-[length:var(--fs-xxs)] text-text-400 truncate">{n.body}</div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
+          {bellOpen && (
+            <div className="absolute right-0 top-full mt-1 z-30 w-64 max-h-72 overflow-y-auto custom-scrollbar rounded-lg border border-border-200/60 glass-alt shadow-sm p-1 bg-bg-100">
+              {notifications.length === 0 ? (
+                <div className="px-3 py-4 text-center text-[length:var(--fs-sm)] text-text-400">暂无通知</div>
+              ) : (
+                notifications.map(n => (
+                  <div key={n.id} className="px-2 py-1.5 border-b border-border-200/30 last:border-b-0">
+                    <div className="text-[length:var(--fs-xs)] text-text-200 truncate">{n.title}</div>
+                    <div className="text-[length:var(--fs-xxs)] text-text-400 truncate">{n.body}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Session list */}
