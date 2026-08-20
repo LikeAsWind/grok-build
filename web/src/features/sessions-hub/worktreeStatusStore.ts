@@ -33,7 +33,9 @@ export const worktreeStatusStore = {
     set.add(listener)
     return () => {
       set.delete(listener)
-      if (set.size === 0) listeners.delete(key)
+      if (set.size === 0 && listeners.get(key) === set) {
+        listeners.delete(key)
+      }
     }
   },
 

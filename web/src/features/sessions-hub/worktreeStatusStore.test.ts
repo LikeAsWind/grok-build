@@ -52,4 +52,36 @@ describe('worktreeStatusStore', () => {
     worktreeStatusStore.onExtNotification('x.ai/other', {})
     expect(cb).not.toHaveBeenCalled()
   })
+
+  it('stale unsubscribe 不会误删同 key 新订阅者', () => {
+    const cbA = vi.fn()
+    const cbB = vi.fn()
+    const unsubA = subscribeWorktreeStatus('kR', cbA)
+    unsubA()  // 清空 'kR' 集合并删除 map 条目
+    subscribeWorktreeStatus('kR', cbB)  // 同 key 重新订阅
+    unsubA()  // 二次调用：set 已 replace，B 不受影响
+    // 现在推一条 created 通知给 'kR'，cbB 必须仍然收到
+    worktreeStatusStore.onExtNotification('x.ai/git/worktree/status', {
+      status: 'created',
+      sessionId: 'kR',
+      worktreePath: 'C:\\w',
+    })
+    expect(cbB).toHaveBeenCalledWith(expect.objectContaining({ kind: 'created', worktreePath: 'C:\\w' }))
+    expect(cbA).not.toHaveBeenCalled()
+  })
+
+  it('clearAll 后同 key 新订阅者不受 stale unsubscribe 影响', () => {
+    const cbA = vi.fn()
+    const cbB = vi.fn()
+    const unsubA = subscribeWorktreeStatus('kC', cbA)
+    worktreeStatusStore.clearAll()
+    subscribeWorktreeStatus('kC', cbB)
+    unsubA()  // stale 闭包引用旧 set
+    worktreeStatusStore.onExtNotification('x.ai/git/worktree/status', {
+      status: 'created',
+      sessionId: 'kC',
+      worktreePath: 'C:\\w',
+    })
+    expect(cbB).toHaveBeenCalled()
+  })
 })
