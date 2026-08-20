@@ -78,12 +78,15 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
     try {
       let sessionDir = selectedDir
       if (useWorktree && isGit) {
-        const worktreeKey = pagerWorktreeId()
-        const unsubscribe = subscribeWorktreeStatus(worktreeKey, progress => {
+        const worktreeId = pagerWorktreeId()
+        const unsubscribe = subscribeWorktreeStatus(worktreeId, progress => {
           setWorktreeProgress(progress)
         })
         try {
-          const created = await createIsolatedWorktree({ sourcePath: selectedDir })
+          const created = await createIsolatedWorktree({
+            sourcePath: selectedDir,
+            worktreeId,
+          })
           sessionDir = created.sessionCwd
         } catch (e) {
           setWorktreeProgress({

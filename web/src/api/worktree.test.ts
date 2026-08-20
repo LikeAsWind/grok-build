@@ -98,4 +98,21 @@ describe('worktree ACP API', () => {
     acpExtRequestMock.mockResolvedValue({ status: 'error' })
     await expect(createIsolatedWorktree({ sourcePath: 'C:\\repo' })).rejects.toThrow(/worktree.*失败/)
   })
+
+  it('createIsolatedWorktree 接受显式 worktreeId（用于订阅 key 与请求 newSessionId 共享）', async () => {
+    acpExtRequestMock.mockResolvedValue({
+      status: 'created',
+      newSessionId: 'pager-explicit-12345',
+      worktreePath: 'C:\\repo\\.claude\\worktrees\\w',
+    })
+    const result = await createIsolatedWorktree({
+      sourcePath: 'C:\\repo',
+      worktreeId: 'pager-explicit-12345',
+    })
+    expect(acpExtRequestMock).toHaveBeenCalledWith(
+      'x.ai/git/worktree/create_from_worktree_sync',
+      expect.objectContaining({ newSessionId: 'pager-explicit-12345' }),
+    )
+    expect(result.worktreeId).toBe('pager-explicit-12345')
+  })
 })

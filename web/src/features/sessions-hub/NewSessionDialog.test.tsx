@@ -87,6 +87,7 @@ describe('NewSessionDialog', () => {
   it('worktree 路径：先建 worktree 再用 sessionCwd 建会话', async () => {
     gitRootForMock.mockResolvedValue('C:\\repo')
     createIsolatedWorktreeMock.mockResolvedValue({
+      worktreeId: 'pager-abcdef123456',
       worktreePath: 'C:\\repo\\.claude\\worktrees\\w1',
       sessionCwd: 'C:\\repo\\.claude\\worktrees\\w1\\sub',
     })
@@ -97,8 +98,10 @@ describe('NewSessionDialog', () => {
     fireEvent.click(toggle)
     fireEvent.click(screen.getByRole('button', { name: /sessionsHub\.createSession/ }))
     await act(async () => {})
+    // 订阅 key 与请求 newSessionId 共享同一个 worktreeId
     expect(createIsolatedWorktreeMock).toHaveBeenCalledWith({
       sourcePath: 'C:\\repo',
+      worktreeId: 'pager-abcdef123456',
     })
     expect(createSessionMock).toHaveBeenCalledWith(undefined, 'C:\\repo\\.claude\\worktrees\\w1\\sub')
     expect(props.onCreated).toHaveBeenCalledWith({ id: 's2' })

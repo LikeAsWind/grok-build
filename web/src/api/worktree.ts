@@ -42,9 +42,18 @@ export interface CreateIsolatedWorktreeInput {
   label?: string
   /** git ref（branch/tag/sha），缺省 = HEAD（copyMode dirty） */
   gitRef?: string
+  /**
+   * 显式指定 pager worktree id（与后端 newSessionId 同格式）。
+   * 用于让调用方的 `worktreeStatusStore` 订阅 key 与请求的 `newSessionId`
+   * 共享同一个 id，这样后端的进度通知才能被前端订阅到。
+   * 不传则自动生成（此时订阅方拿不到进度通知——非交互式批量场景适用）。
+   */
+  worktreeId?: string
 }
 
 export interface CreateIsolatedWorktreeResult {
+  /** 实际使用的 pager worktree id（与请求 newSessionId 一致） */
+  worktreeId: string
   worktreePath: string
   /** 新会话的工作目录：worktree root 或（源在子目录时）对应子路径 */
   sessionCwd: string
@@ -57,9 +66,10 @@ export interface CreateIsolatedWorktreeResult {
 export async function createIsolatedWorktree(
   input: CreateIsolatedWorktreeInput,
 ): Promise<CreateIsolatedWorktreeResult> {
+  const worktreeId = input.worktreeId ?? pagerWorktreeId()
   const params: Record<string, unknown> = {
     sourceWorktreePath: input.sourcePath,
-    newSessionId: pagerWorktreeId(),
+    newSessionId: worktreeId,
     copyMode: input.gitRef ? 'clean' : 'dirty',
   }
   if (input.label) params.label = input.label
@@ -87,5 +97,5 @@ export async function createIsolatedWorktree(
       if (usesBackslash) sessionCwd = sessionCwd.replace(/\//g, '\\')
     }
   }
-  return { worktreePath, sessionCwd }
+  return { worktreeId, worktreePath, sessionCwd }
 }
