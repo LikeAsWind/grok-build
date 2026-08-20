@@ -3,9 +3,9 @@
 // ============================================
 
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react'
-import { getPath, type ApiPath } from '../api'
+import { type ApiPath } from '../api'
 import { useRouter } from '../hooks/useRouter'
-import { handleError, normalizeToForwardSlash, getDirectoryName, isSameDirectory, serverStorage } from '../utils'
+import { normalizeToForwardSlash, getDirectoryName, isSameDirectory, serverStorage } from '../utils'
 import { layoutStore, useLayoutStore } from '../store/layoutStore'
 import { serverStore } from '../store/serverStore'
 import { isTauri } from '../utils/tauri'
@@ -69,14 +69,11 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         setUrlDirectory(undefined)
       }
       setPathInfo(null)
-      getPath().then(setPathInfo).catch(handleError('get path info', 'api'))
+      // getPath() 依赖已被 stub 的 OpenCodeUI SDK，且 pathInfo 无实际使用者——跳过
     })
   }, [setUrlDirectory])
 
-  // 加载路径信息
-  useEffect(() => {
-    getPath().then(setPathInfo).catch(handleError('get path info', 'api'))
-  }, [])
+  // pathInfo 无实际使用者，不再加载（原 getPath() 依赖已废弃的 SDK）
 
   // 保存 savedDirectories 到 per-server storage
   useEffect(() => {
