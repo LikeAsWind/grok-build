@@ -3,7 +3,6 @@ import { DESKTOP_MACOS_TRAFFIC_LIGHTS_WIDTH, DESKTOP_TITLEBAR_HEIGHT, DESKTOP_TI
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
-  FolderOpenIcon,
   SettingsIcon,
   AppWindowIcon,
   MinusIcon,
@@ -156,10 +155,6 @@ export function DesktopTitlebar() {
   }, [])
 
   /* ---- 功能操作 ---- */
-  const handleOpenProject = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('titlebar:open-project'))
-  }, [])
-
   const handleOpenSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('titlebar:open-settings'))
   }, [])
@@ -206,17 +201,6 @@ export function DesktopTitlebar() {
           aria-label={t('desktopTitlebar.goForward')}
         >
           <ChevronRightIcon size={14} />
-        </button>
-
-        {/* 打开项目 */}
-        <button
-          type="button"
-          onClick={handleOpenProject}
-          className={titlebarButtonClass}
-          title={t('desktopTitlebar.openProject')}
-          aria-label={t('desktopTitlebar.openProject')}
-        >
-          <FolderOpenIcon size={14} />
         </button>
 
         {/* 设置 */}

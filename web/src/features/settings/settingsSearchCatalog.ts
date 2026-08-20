@@ -148,7 +148,6 @@ export const SETTINGS_SEARCH_DEFINITIONS: SettingsSearchDefinition[] = [
   ...definitions('keybindings', ['keybindings.title']),
   ...[
     'openSettings',
-    'openProject',
     'commandPalette',
     'toggleSidebar',
     'toggleRightPanel',

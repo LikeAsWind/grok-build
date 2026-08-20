@@ -153,7 +153,6 @@
   "desktopTitlebar": {
     "goBack": "后退",
     "goForward": "前进",
-    "openProject": "打开项目",
     "openSettings": "打开设置",
     "settingsUpdate": "有新版本可用，打开设置",
     "newWindow": "新建窗口",

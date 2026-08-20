@@ -1,8 +1,6 @@
 {
   "openSettings": "Open Settings",
   "openSettingsDesc": "Open settings dialog",
-  "openProject": "Open Project",
-  "openProjectDesc": "Open project selector",
   "commandPalette": "Command Palette",
   "commandPaletteDesc": "Open command palette",
   "openShortcutsSettings": "Open Shortcuts Settings",

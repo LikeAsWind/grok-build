@@ -8,7 +8,6 @@
 export type KeybindingAction =
   // General
   | 'openSettings'
-  | 'openProject'
   | 'commandPalette'
   | 'toggleSidebar'
   | 'toggleRightPanel'
@@ -85,15 +84,6 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: 'Open settings dialog',
     defaultKey: 'Alt+,',
     currentKey: 'Alt+,',
-    category: 'general',
-    scope: 'global',
-  },
-  {
-    action: 'openProject',
-    label: 'Open Project',
-    description: 'Open project selector',
-    defaultKey: 'Alt+O',
-    currentKey: 'Alt+O',
     category: 'general',
     scope: 'global',
   },

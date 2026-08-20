@@ -13,7 +13,6 @@ import { SettingsSection } from './components/SettingsUI'
 
 const ACTION_TRANSLATION_KEYS: Record<KeybindingAction, { label: string; description: string }> = {
   openSettings: { label: 'openSettings', description: 'openSettingsDesc' },
-  openProject: { label: 'openProject', description: 'openProjectDesc' },
   commandPalette: { label: 'commandPalette', description: 'commandPaletteDesc' },
   toggleSidebar: { label: 'toggleSidebar', description: 'toggleSidebarDesc' },
   toggleRightPanel: { label: 'toggleRightPanel', description: 'toggleRightPanelDesc' },
