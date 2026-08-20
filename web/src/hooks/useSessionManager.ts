@@ -18,7 +18,7 @@ import {
   unrevertSession,
   type ApiMessageWithParts,
 } from '../api'
-import { acpLoadSession, finishAcpReplay } from '../api/acpBridge'
+import { acpLoadSession, finishAcpReplay, resetAcpTurnState } from '../api/acpBridge'
 import { loadSynthMessages, restoreChildSessions } from '../features/message/synthNotifPersist'
 import { sessionErrorHandler } from '../utils'
 import { isSessionNotFoundError } from '../utils/sessionErrors'
@@ -114,6 +114,13 @@ export function markSessionFresh(sessionId: string) {
   freshSessionIds.add(sessionId)
 }
 
+/**
+ * 同 sid 在途的 ACP 回放。回放期间第二个 loadSession(重连回调、切走再切回等)
+ * 必须等它完成——绝不能因为 store 里已出现部分回放帧就走 snapshot 恒等路径,
+ * 把部分快照提前标成 loaded(表现为先见部分消息、再「闪」出全量)。
+ */
+const inFlightAcpLoads = new Map<string, Promise<void>>()
+
 export function useSessionManager({ sessionId, directory, onLoadComplete, onError, onSessionMissing }: UseSessionManagerOptions) {
   const loadSequenceRef = useRef<Map<string, number>>(new Map())
   /** 每个 session 当前已请求的消息 limit（cursor），loadMore 时递增 */
@@ -184,39 +191,50 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
 
       messageStore.setLoadState(sid, 'loading')
 
-      // 加载期间 acpPrompt 可能已往 messageStore 放了消息，跳过覆盖
-      const preLoadMessages = messageStore.getSessionState(sid)?.messages.length ?? 0
-
-      // ACP 历史回放
+      // ACP 历史回放:只要没有完整 loaded 基线就必须回放——store 里的部分
+      // 缓存(其他会话事件顺带写入的实时帧、上次被中断的加载、重连后的陈旧
+      // 数据)不能当作历史,否则 UI 只显示残缺内容且永远不会补全。
       const isFresh = freshSessionIds.has(sid)
       if (isFresh) {
         freshSessionIds.delete(sid)
-      } else if (!hasExistingMessages) {
-        // acpLoadSession 可能因 ACP 未连接或后端报错（如 cwd 目录编码不匹配
-        // 导致 Path not found）而 reject。必须兜住：否则 loadState 停在
-        // 'loading'，UI 无限转圈。失败则落到下方 snapshot 路径，由它的
-        // catch 统一 setLoadError / onError。
+      } else if (!hasLoadedBaseline) {
+        const inflight = inFlightAcpLoads.get(sid)
+        if (inflight) {
+          // 回放已在途:等它完成即可,loaded 由发起方标记
+          await inflight.catch(() => {})
+          onLoadComplete?.()
+          return
+        }
+        const replay = (async () => {
+          // 回放消息 id 是本地随机生成的,与残留消息无法幂等合并——先清掉
+          // 部分缓存和 turn 状态(残留的 replayUser/assistantId 会把回放
+          // 首帧文本追加到已删除的消息上导致丢失),再全量回放。
+          if (hasExistingMessages) {
+            resetAcpTurnState(sid)
+            messageStore.clearSession(sid)
+            messageStore.setLoadState(sid, 'loading')
+          }
+          // acpLoadSession 可能因 ACP 未连接或后端报错（如 cwd 目录编码不匹配
+          // 导致 Path not found）而 reject。必须兜住：否则 loadState 停在
+          // 'loading'，UI 无限转圈。失败则落到下方 snapshot 路径，由它的
+          // catch 统一 setLoadError / onError。
+          try {
+            await acpLoadSession(sid)
+          } catch (loadErr) {
+            console.warn('[LOAD] session/load 失败，改走 snapshot 兜底:', loadErr)
+          }
+          // 后端保证 LoadSessionResponse 在全部回放帧之后写出（replay 完成
+          // 通知 drain），WS 保序 + 前端同步分发意味着 resolve 时 store 已是
+          // 全量——这里不需要任何延时或 RAF 等待（RAF 在后台标签页会被浏览器
+          // 冻结,等它会让 loading 无限挂起）。
+          finishAcpReplay(sid)
+        })()
+        inFlightAcpLoads.set(sid, replay)
         try {
-          await acpLoadSession(sid)
-        } catch (loadErr) {
-          console.warn('[LOAD] session/load 失败，改走 snapshot 兜底:', loadErr)
+          await replay
+        } finally {
+          inFlightAcpLoads.delete(sid)
         }
-        // 等回放帧 settle。固定延时对大会话不够（残帧在 loaded 之后继续流入，
-        // 表现为先见到部分消息、再「闪」出完整记录），对小会话又白等——改为
-        // 静默检测：消息+part 总量连续两次采样（120ms 间隔）不变即视为回放
-        // 结束；有内容上限 3s，始终无内容 1.2s 退出走 snapshot 兜底。
-        const settleStart = Date.now()
-        let prevSize = -1
-        for (;;) {
-          const replayMsgs = messageStore.getSessionState(sid)?.messages ?? []
-          const size = replayMsgs.length + replayMsgs.reduce((n, m) => n + m.parts.length, 0)
-          if (size > 0 && size === prevSize) break
-          if (Date.now() - settleStart >= (size > 0 ? 3000 : 1200)) break
-          prevSize = size
-          await new Promise(resolve => setTimeout(resolve, 120))
-        }
-        // 回放事件已 settle，关闭回放窗口（此后 task_completed 恢复 idle-gated 缓冲）
-        finishAcpReplay(sid)
         const msgs = messageStore.getSessionState(sid)?.messages.length ?? 0
         if (msgs > 0) {
           // history 已通过 session/update 进入 store，直接标记 loaded，跳过后续 setMessages 覆盖
@@ -229,6 +247,10 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
           return
         }
       }
+
+      // 回放为空/失败或跳过回放时的 snapshot 兜底。
+      // 期间 acpPrompt 可能已往 messageStore 放了消息，跳过覆盖
+      const preLoadMessages = messageStore.getSessionState(sid)?.messages.length ?? 0
 
       try {
         // 并行加载 session 信息和消息（传递 directory）
