@@ -1144,16 +1144,16 @@ export function SidePanel({
             }`}
             style={{ opacity: showLabels ? 1 : 0 }}
           />
-          {/* grok: 打开目录浏览器模态框 */}
-          <button
-            type="button"
-            onClick={e => { e.stopPropagation(); setDirModalPath(currentDirectory || getServerCwd() || ''); setDirModalOpen(true) }}
-            className="ml-0.5 p-0.5 rounded text-text-400 hover:text-accent-main-100 hover:bg-accent-main-100/10 shrink-0"
-            title="浏览并选择目录"
-            style={{ opacity: showLabels ? 1 : 0 }}
-          >
-            <FolderIcon size={12} />
-          </button>
+        </button>
+        {/* grok: 打开目录浏览器模态框（独立按钮，避免嵌套） */}
+        <button
+          type="button"
+          onClick={() => { setDirModalPath(currentDirectory || getServerCwd() || ''); setDirModalOpen(true) }}
+          className="ml-1 p-0.5 rounded text-text-400 hover:text-accent-main-100 hover:bg-accent-main-100/10 shrink-0"
+          title="浏览并选择目录"
+          style={{ opacity: showLabels ? 1 : 0 }}
+        >
+          <FolderIcon size={12} />
         </button>
 
         {/* Projects Dropdown */}
