@@ -90,7 +90,7 @@ export function useFolderProjectDrop(
           }
         })
         .catch(err => {
-          console.warn('[useFolderProjectDrop] Failed to add dropped folders:', err)
+          console.warn('[useFolderProjectDrop] Failed to record dropped folders:', err)
         })
     })
 

@@ -26,6 +26,30 @@ import { useDirectory, useVcsInfo, requestGitWorkspaceCatalogRefresh } from '../
 import { getDirectoryName, isSameDirectory, normalizeToForwardSlash } from '../utils'
 import { ConfirmDialog } from './ui/ConfirmDialog'
 
+// worktree list 响应是 Vec<WorktreeRecord>（JSON 序列化），每条记录有 path 字段；
+// 容忍兼容老格式的纯字符串数组；空/异常响应降级为 []
+function extractWorktreePaths(resp: unknown): string[] {
+  if (!Array.isArray(resp)) return []
+  const out: string[] = []
+  for (const item of resp) {
+    if (typeof item === 'string' && item) {
+      out.push(item)
+    } else if (
+      item &&
+      typeof item === 'object' &&
+      'path' in item &&
+      typeof (item as { path: unknown }).path === 'string'
+    ) {
+      out.push((item as { path: string }).path)
+    }
+  }
+  return out
+}
+
+// Task 12 deletion pending: 后端新接口已就绪但 UI 集成未完成
+// （create / reset 缺失；plan 已说明）。Toggle 等 Task 12 决定连通后改 true。
+const WORKTREE_MUTATIONS_ENABLED = false
+
 // ============================================
 // WorktreePanel Component
 // ============================================
@@ -85,7 +109,9 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
         return
       }
 
-      const list = await acpExtRequest('x.ai/git/worktree/list', { repo: baseDirectory })
+      const list = await acpExtRequest('x.ai/git/worktree/list', {
+        repo: getDirectoryName(baseDirectory),
+      })
       if (requestId !== loadRequestIdRef.current) return
 
       setWorktrees(extractWorktreePaths(list))
@@ -144,19 +170,8 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
   const canManageWorktrees = !!rootDirectory && !loading
 
   // 解析 x.ai/git/worktree/list 响应为路径数组：服务端是 Vec<WorktreeRecord>，
-  // 每条记录有 path 字段。容忍字符串数组、对象数组、{ worktrees } / { paths } 包装。
-  const extractWorktreePaths = useCallback((resp: unknown): string[] => {
-    if (!Array.isArray(resp)) return []
-    const out: string[] = []
-    for (const item of resp) {
-      if (typeof item === 'string' && item) {
-        out.push(item)
-      } else if (item && typeof item === 'object' && 'path' in item && typeof (item as { path: unknown }).path === 'string') {
-        out.push((item as { path: string }).path)
-      }
-    }
-    return out
-  }, [])
+  // 每条记录有 path 字段。容忍兼容老格式的纯字符串数组；空/异常响应降级为 []
+  // （extractWorktreePaths 已上提至模块作用域）
 
   // 在 worktree 目录下开启新 session
   const handleOpenSession = useCallback(
@@ -171,18 +186,18 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
   )
 
   // 创建 worktree
-  // TODO: WorktreePanel migration gap —— create 是 sessions-hub 重构缺口之一
-  // （plan 已说明「Worktree 面板仍缺，先留」）。后端推荐路径是
-  // x.ai/git/worktree/create_from_worktree_sync，UI 集成待 Task 12 决定
-  // （移除按钮 / 重新设计 / 接通 create）。当前点击直接报错。
+  // Task 12 deletion pending: 后端新接口已就绪但 UI 集成未完成
+  // （create / reset 缺失；plan 已说明）。WORKTREE_MUTATIONS_ENABLED 期间
+  // 按钮 disabled，handler 仍保留以避免破坏调用链。
   const handleCreate = useCallback(
     async (name: string, autoOpen: boolean) => {
+      if (!WORKTREE_MUTATIONS_ENABLED) return
       if (!currentDirectory || !name.trim()) return
-      // autoOpen 是 create 的预留参数（Task 12 重新设计时使用），无效引用。
       void autoOpen
 
       setActionLoading('create')
       try {
+        // TODO: 等 Task 12 接通后，调用 create_from_worktree_sync（参见 api/worktree.ts）
         throw new Error('worktree 创建暂未迁移，见 Task 12')
       } catch (e) {
         setError(e instanceof Error ? e.message : t('worktreePanel.failedToCreate'))
@@ -226,10 +241,11 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
   )
 
   // 重置 worktree
-  // TODO: WorktreePanel migration gap —— 后端没有直接的 reset ext。
-  // 当前点击直接报错；Task 12 会决定移除按钮 / 重新设计。
+  // Task 12 deletion pending: 后端没有直接的 reset ext。
+  // WORKTREE_MUTATIONS_ENABLED 期间按钮 disabled，handler 仍保留以避免破坏调用链。
   const handleReset = useCallback(
     async (directory: string) => {
+      if (!WORKTREE_MUTATIONS_ENABLED) return
       if (!currentDirectory) return
 
       setActionLoading(`reset-${directory}`)
@@ -305,7 +321,7 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
         <button
           type="button"
           onClick={() => setShowCreateForm(true)}
-          disabled={!!actionLoading || !canManageWorktrees}
+          disabled={!!actionLoading || !canManageWorktrees || !WORKTREE_MUTATIONS_ENABLED}
           className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-400 hover:text-text-100 hover:bg-bg-200/50 transition-colors"
           title={t('worktreePanel.createWorktree')}
           aria-label={t('worktreePanel.createWorktree')}
@@ -355,7 +371,7 @@ export const WorktreePanel = memo(function WorktreePanel({ isResizing: _isResizi
             <span>{t('worktreePanel.noWorktrees')}</span>
             <button
               onClick={() => setShowCreateForm(true)}
-              disabled={!canManageWorktrees}
+              disabled={!canManageWorktrees || !WORKTREE_MUTATIONS_ENABLED}
               className="px-3 py-1.5 text-[length:var(--fs-xs)] bg-bg-200/50 hover:bg-bg-200 text-text-200 rounded-md transition-colors"
             >
               {t('worktreePanel.createWorktree')}
@@ -428,12 +444,12 @@ interface CreateWorktreeFormProps {
 function CreateWorktreeForm({ onSubmit, onCancel, isLoading }: CreateWorktreeFormProps) {
   const { t } = useTranslation(['components', 'common'])
   const [name, setName] = useState('')
-  const [autoOpen, setAutoOpen] = useState(true)
+  // Task 12 deletion pending: autoOpen 选项已统一由 WORKTREE_MUTATIONS_ENABLED 决定
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim()) {
-      onSubmit(name, autoOpen)
+      onSubmit(name, true)
     }
   }
 
@@ -449,16 +465,7 @@ function CreateWorktreeForm({ onSubmit, onCancel, isLoading }: CreateWorktreeFor
         autoFocus
         disabled={isLoading}
       />
-      <label className="flex items-center gap-1.5 mt-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={autoOpen}
-          onChange={e => setAutoOpen(e.target.checked)}
-          disabled={isLoading}
-          className="rounded border-border-200 text-accent-main-100 focus:ring-accent-main-100/30 w-3.5 h-3.5"
-        />
-        <span className="text-[length:var(--fs-xs)] text-text-300">{t('worktreePanel.openSessionAfter')}</span>
-      </label>
+      {/* Task 12 deletion pending: autoOpen 选项已隐藏（create 集成未完成） */}
       <div className="flex items-center justify-end gap-2 mt-2">
         <button
           type="button"
@@ -533,7 +540,8 @@ const WorktreeItem = memo(function WorktreeItem({
           </button>
           <button
             onClick={onReset}
-            className="p-1 rounded-md text-text-400 hover:text-warning-100 hover:bg-warning-100/10 transition-colors"
+            disabled={!WORKTREE_MUTATIONS_ENABLED}
+            className="p-1 rounded-md text-text-400 hover:text-warning-100 hover:bg-warning-100/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title={t('worktreePanel.resetWorktreeAction')}
           >
             <RetryIcon size={12} />

@@ -19,7 +19,6 @@ import {
   CloseIcon,
   ChevronDownIcon,
   ListFilterIcon,
-  FolderMinusIcon,
   CheckIcon,
   SpinnerIcon,
 } from '../../../components/Icons'
@@ -124,42 +123,39 @@ export function SidePanel({
   }, [])
   const {
     currentDirectory,
-    savedDirectories,
     setCurrentDirectory,
-    removeDirectory,
-    addDirectory,
-    reorderDirectories,
     recentProjects,
+    touchDirectory,
   } = useDirectory()
   // grok: 首次加载默认用后端启动目录
   const [dirInit, setDirInit] = useState(false)
   if (!dirInit && !currentDirectory) {
-    const sc = getServerCwd(); if (sc) { addDirectory(sc); setDirInit(true) }
+    const sc = getServerCwd(); if (sc) { touchDirectory(sc); setDirInit(true) }
   }
   // 目录浏览模态框
   const [dirModalOpen, setDirModalOpen] = useState(false)
   const [dirModalPath, setDirModalPath] = useState('')
   const handleDirSelect = (path: string) => {
     const c = path.trim().replace(/\\/g, '/')
-    if (c) { addDirectory(c); setCurrentDirectory(c) }
+    if (c) { touchDirectory(c); setCurrentDirectory(c) }
   }
 
   const catalogDirectories = useMemo(
     () =>
       Array.from(
         new Set(
-          savedDirectories
-            .map(directory => normalizeToForwardSlash(directory.path))
+          Object.keys(recentProjects)
+            .map(directory => normalizeToForwardSlash(directory))
             .concat(currentDirectory ? [normalizeToForwardSlash(currentDirectory)] : []),
         ),
       ),
-    [savedDirectories, currentDirectory],
+    [recentProjects, currentDirectory],
   )
   const { catalog: gitWorkspaceCatalog, isLoading: isGitWorkspaceCatalogLoading } =
     useGitWorkspaceCatalog(catalogDirectories)
   const { vcsInfo: currentDirectoryVcsInfo, isLoading: isCurrentDirectoryVcsLoading } = useVcsInfo(currentDirectory)
   const { sidebarFolderRecents, sidebarShowChildSessions } = useLayoutStore()
-  const [globalFolderIndex, setGlobalFolderIndex] = useState<number>(() => {
+  const [globalFolderIndex] = useState<number>(() => {
     const saved = localStorage.getItem('opencode-sidebar-global-folder-index')
     const parsed = saved ? Number.parseInt(saved, 10) : 0
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
@@ -169,10 +165,7 @@ export function SidePanel({
     [currentDirectory],
   )
   const [connectionState, setConnectionState] = useState<ConnectionInfo | null>(null)
-  const [projectDeleteConfirm, setProjectDeleteConfirm] = useState<{ isOpen: boolean; projectId: string | null }>({
-    isOpen: false,
-    projectId: null,
-  })
+  // Task 12 deletion pending: projectDeleteConfirm 已移除（removeDirectory API gone）
   const [projectsExpanded, setProjectsExpanded] = useState(false)
   const [sidebarTab, setSidebarTab] = useState<'recents' | 'active'>('recents')
   const [expandedRecentProjectIds, setExpandedRecentProjectIds] = useState<string[]>([])
@@ -191,7 +184,7 @@ export function SidePanel({
   const pendingFocusSearchRef = useRef(false)
   // 批量删除确认弹窗
   const [batchDeleteSessionConfirm, setBatchDeleteSessionConfirm] = useState(false)
-  const [batchRemoveProjectConfirm, setBatchRemoveProjectConfirm] = useState(false)
+  // Task 12 deletion pending: batchRemoveProjectConfirm 已移除（removeDirectory API gone）
   const [isBatchDeleting, setIsBatchDeleting] = useState(false)
 
   const getVisibleSelectionIds = useCallback((kind: 'session' | 'project') => {
@@ -571,14 +564,11 @@ export function SidePanel({
   )
 
   const buildProjectGroups = useCallback(
-    (directories: typeof savedDirectories): ProjectItem[] => {
-      const savedNameByPath = new Map(
-        directories.map(directory => [normalizeToForwardSlash(directory.path), directory.name]),
-      )
+    (directories: string[]): ProjectItem[] => {
       const groups = new Map<string, ProjectItem>()
 
       for (const directory of directories) {
-        const normalizedDirectory = normalizeToForwardSlash(directory.path)
+        const normalizedDirectory = normalizeToForwardSlash(directory)
         const meta = gitWorkspaceCatalog.get(normalizedDirectory)
         const { projectId, workspaceDirectories } = getProjectGroupIdentity(normalizedDirectory, meta)
         const existing = groups.get(projectId)
@@ -586,8 +576,8 @@ export function SidePanel({
         if (existing) {
           groups.set(projectId, {
             ...existing,
-            memberDirectories: [...(existing.memberDirectories ?? []), directory.path],
-            reorderPath: existing.reorderPath ?? directory.path,
+            memberDirectories: [...(existing.memberDirectories ?? []), directory],
+            reorderPath: existing.reorderPath ?? directory,
           })
           continue
         }
@@ -595,10 +585,10 @@ export function SidePanel({
         groups.set(projectId, {
           id: projectId,
           worktree: projectId,
-          name: savedNameByPath.get(projectId) ?? getDirectoryName(projectId),
+          name: getDirectoryName(projectId),
           canReorder: true,
-          memberDirectories: [directory.path],
-          reorderPath: directory.path,
+          memberDirectories: [directory],
+          reorderPath: directory,
           workspaceDirectories,
         })
       }
@@ -624,18 +614,16 @@ export function SidePanel({
   )
 
   const folderProjectGroups = useMemo<ProjectItem[]>(() => {
-    return buildProjectGroups(savedDirectories)
-  }, [buildProjectGroups, savedDirectories])
+    return buildProjectGroups(Object.keys(recentProjects))
+  }, [buildProjectGroups, recentProjects])
 
   const selectorProjectGroups = useMemo<ProjectItem[]>(() => {
-    const sortedDirectories = [...savedDirectories].sort((a, b) => {
-      const aTime = recentProjects[a.path] || a.addedAt
-      const bTime = recentProjects[b.path] || b.addedAt
-      return bTime - aTime
+    const sortedDirectories = Object.keys(recentProjects).sort((a, b) => {
+      return (recentProjects[b] || 0) - (recentProjects[a] || 0)
     })
 
     return buildProjectGroups(sortedDirectories)
-  }, [buildProjectGroups, recentProjects, savedDirectories])
+  }, [buildProjectGroups, recentProjects])
 
   const globalProject = useMemo<ProjectItem>(
     () => ({
@@ -750,10 +738,6 @@ export function SidePanel({
     })
   }, [currentProject, currentProjectWorkspaceDirectories, shouldRenderWorkspaceTreeOnly])
 
-  const allDisplayedProjects = useMemo(() => {
-    return [...folderProjects, ...currentProjectTreeProjects]
-  }, [folderProjects, currentProjectTreeProjects])
-
   const handleSelectFolderProject = useCallback(
     (project: ProjectItem) => {
       if (!project.worktree) {
@@ -765,14 +749,6 @@ export function SidePanel({
       setCurrentDirectory(project.worktree)
     },
     [currentDirectory, setCurrentDirectory],
-  )
-
-  const getProjectDirectoriesToRemove = useCallback(
-    (projectId: string) => {
-      const project = allDisplayedProjects.find(item => isSameDirectory(item.id, projectId))
-      return project?.memberDirectories?.length ? project.memberDirectories : [projectId]
-    },
-    [allDisplayedProjects],
   )
 
   const handleSelectProject = useCallback(
@@ -787,82 +763,32 @@ export function SidePanel({
     [setCurrentDirectory],
   )
 
-  const handleRemoveProject = useCallback(
-    (projectId: string) => {
-      getProjectDirectoriesToRemove(projectId).forEach(directory => removeDirectory(directory))
-    },
-    [getProjectDirectoriesToRemove, removeDirectory],
-  )
-
-  const handleReorderProjectGroup = useCallback(
-    (draggedId: string, targetId: string) => {
-      const draggedIdx = folderProjects.findIndex(project => project.id === draggedId)
-      const targetIdx = folderProjects.findIndex(project => project.id === targetId)
-      if (draggedIdx === -1 || targetIdx === -1 || draggedIdx === targetIdx) return
-
-      const draggedIsGlobal = folderProjects[draggedIdx].id === 'global'
-      const targetIsGlobal = folderProjects[targetIdx].id === 'global'
-
-      if (draggedIsGlobal) {
-        // 全局移到 target 位置：globalFolderIndex 直接等于 targetIdx
-        if (targetIdx !== globalFolderIndex) {
-          setGlobalFolderIndex(targetIdx)
-          localStorage.setItem('opencode-sidebar-global-folder-index', String(targetIdx))
-        }
-        return
-      }
-
-      if (targetIsGlobal) {
-        // 普通目录拖到全局位置 = 交换：全局到普通目录原位，普通目录移到全局旁
-        const adjacentIdx = draggedIdx < targetIdx ? targetIdx - 1 : targetIdx + 1
-        if (draggedIdx !== adjacentIdx) {
-          const draggedReorderPath = folderProjects[draggedIdx].reorderPath
-          const adjacentReorderPath = folderProjects[adjacentIdx].reorderPath
-          if (draggedReorderPath && adjacentReorderPath) {
-            reorderDirectories(draggedReorderPath, adjacentReorderPath)
-          }
-        }
-        if (draggedIdx !== globalFolderIndex) {
-          setGlobalFolderIndex(draggedIdx)
-          localStorage.setItem('opencode-sidebar-global-folder-index', String(draggedIdx))
-        }
-        return
-      }
-
-      const draggedReorderPath = folderProjects[draggedIdx].reorderPath
-      const targetReorderPath = folderProjects[targetIdx].reorderPath
-      if (!draggedReorderPath || !targetReorderPath) return
-      reorderDirectories(draggedReorderPath, targetReorderPath)
-    },
-    [folderProjects, reorderDirectories, globalFolderIndex],
-  )
-
   const handleSelect = useCallback(
     (session: ApiSession) => {
-      // Global 模式下，点击 session 自动切换到该 session 的工作目录并添加到项目列表
+      // Global 模式下，点击 session 自动切换到该 session 的工作目录并记录最近使用
       if (!currentDirectory && session.directory) {
-        addDirectory(session.directory)
+        touchDirectory(session.directory)
       }
       onSelectSession(session)
       if (window.innerWidth < 768 && onCloseMobile) {
         onCloseMobile()
       }
     },
-    [currentDirectory, addDirectory, onSelectSession, onCloseMobile],
+    [currentDirectory, touchDirectory, onSelectSession, onCloseMobile],
   )
 
-  // Active tab 专用：跨目录的 session 需要确保目录在项目列表中
+  // Active tab 专用：跨目录的 session 需要确保目录在最近使用列表中
   const handleSelectActive = useCallback(
     (session: ApiSession) => {
       if (session.directory) {
-        addDirectory(session.directory)
+        touchDirectory(session.directory)
       }
       onSelectSession(session)
       if (window.innerWidth < 768 && onCloseMobile) {
         onCloseMobile()
       }
     },
-    [addDirectory, onSelectSession, onCloseMobile],
+    [touchDirectory, onSelectSession, onCloseMobile],
   )
 
   const renderActiveSessionNode = useCallback(
@@ -940,6 +866,15 @@ export function SidePanel({
     [currentDirectory, onNewSession, refresh, selectedSessionId],
   )
 
+  // Task 12 deletion pending: reorderDirectories 已从 DirectoryContext 移除，
+  // 暂时保留入口但禁用；最终由 Task 12 决定删除此函数。
+  const handleReorderProjectGroup = useCallback(
+    (_draggedId: string, _targetId: string) => {
+      // no-op: reorderDirectories API 已移除
+    },
+    [],
+  )
+
   // ---- 批量删除 session ----
   const handleBatchDeleteSessions = useCallback(async () => {
     if (selectedSessionIds.size === 0) return
@@ -977,16 +912,7 @@ export function SidePanel({
     }
   }, [selectedSessionIds, selectedSessionId, sessionLookup, currentDirectory, refresh, onNewSession])
 
-  // ---- 批量移除项目 ----
-  const handleBatchRemoveProjects = useCallback(() => {
-    if (selectedProjectIds.size === 0) return
-    for (const projectId of selectedProjectIds) {
-      getProjectDirectoriesToRemove(projectId).forEach(directory => removeDirectory(directory))
-    }
-    setSelectedProjectIds(new Set())
-    projectSelectionAnchorIdRef.current = null
-    setBatchRemoveProjectConfirm(false)
-  }, [getProjectDirectoriesToRemove, selectedProjectIds, removeDirectory])
+  // Task 12 deletion pending: 批量移除项目逻辑已移除（removeDirectory API gone）
 
   const commonFolderRecentListProps = {
     currentDirectory,
@@ -1222,20 +1148,8 @@ export function SidePanel({
                         </div>
                       </div>
                     </button>
-                    {!isGlobal && (
-                      <button
-                        type="button"
-                        onClick={e => {
-                          e.stopPropagation()
-                          setProjectDeleteConfirm({ isOpen: true, projectId: project.id })
-                        }}
-                        aria-label={t('sidebar.removeProject')}
-                        className="p-1 rounded text-text-400 hover:text-danger-100 hover:bg-danger-100/10 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100 transition-all"
-                        title={t('common:remove')}
-                      >
-                        <TrashIcon size={12} />
-                      </button>
-                    )}
+                    {/* Task 12 deletion pending: removeDirectory 已从 DirectoryContext 移除，
+                        对应 trash 按钮已删除 */}
                   </div>
                 )
               })}
@@ -1341,15 +1255,9 @@ export function SidePanel({
                     </button>
                   )}
                   {selectedProjectIds.size > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setBatchRemoveProjectConfirm(true)}
-                      className="p-1.5 rounded-md text-text-500 hover:text-warning-100 hover:bg-warning-100/10 active:bg-warning-100/15 transition-colors duration-150"
-                      title={t('sidebar.removeProjectsWithCount', { count: selectedProjectIds.size })}
-                      aria-label={t('sidebar.removeProjectsWithCount', { count: selectedProjectIds.size })}
-                    >
-                      <FolderMinusIcon size={14} />
-                    </button>
+                    /* Task 12 deletion pending: removeDirectory 已从 DirectoryContext 移除，
+                       对应批量移除项目按钮已删除 */
+                    <></>
                   )}
                   <button
                     type="button"
@@ -1436,7 +1344,7 @@ export function SidePanel({
                 <FolderRecentList
                   projects={currentProjectTreeProjects}
                   {...commonFolderRecentListProps}
-                  onReorderProject={reorderDirectories}
+                  onReorderProject={handleReorderProjectGroup}
                   pinnedSessions={resolvedPinnedSessions}
                   unavailablePinnedEntries={unavailablePinnedEntries}
                 />
@@ -1547,20 +1455,8 @@ export function SidePanel({
       />
 
       {/* Confirm Dialog */}
-      <ConfirmDialog
-        isOpen={projectDeleteConfirm.isOpen}
-        onClose={() => setProjectDeleteConfirm({ isOpen: false, projectId: null })}
-        onConfirm={() => {
-          if (projectDeleteConfirm.projectId) {
-            handleRemoveProject(projectDeleteConfirm.projectId)
-          }
-          setProjectDeleteConfirm({ isOpen: false, projectId: null })
-        }}
-        title={t('sidebar.removeProject')}
-        description={t('sidebar.removeProjectConfirm')}
-        confirmText={t('common:remove')}
-        variant="danger"
-      />
+      {/* Task 12 deletion pending: removeDirectory 已从 DirectoryContext 移除，
+          对应项目移除确认弹窗已删除 */}
 
       {/* 批量删除会话确认弹窗 */}
       <ConfirmDialog
@@ -1583,16 +1479,8 @@ export function SidePanel({
         isLoading={isBatchDeleting}
       />
 
-      {/* 批量移除项目确认弹窗 */}
-      <ConfirmDialog
-        isOpen={batchRemoveProjectConfirm}
-        onClose={() => setBatchRemoveProjectConfirm(false)}
-        onConfirm={handleBatchRemoveProjects}
-        title={t('sidebar.batchRemoveProjects', { count: selectedProjectIds.size })}
-        description={t('sidebar.batchRemoveProjectsConfirm', { count: selectedProjectIds.size })}
-        confirmText={t('common:remove')}
-        variant="warning"
-      />
+      {/* Task 12 deletion pending: removeDirectory 已从 DirectoryContext 移除，
+          对应批量移除项目确认弹窗已删除 */}
 
       {/* 目录浏览器模态框 */}
       <DirBrowserModal

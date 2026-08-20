@@ -1,8 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getCurrentProject, listWorktrees } from '../api'
+import { getCurrentProject } from '../api'
+import { acpExtRequest } from '../api/acpBridge'
 import { subscribeToEvents } from '../api/events'
 import { serverStore } from '../store/serverStore'
-import { normalizeToForwardSlash } from '../utils'
+import { getDirectoryName, normalizeToForwardSlash } from '../utils'
+
+// worktree list 响应是 Vec<WorktreeRecord>（JSON 序列化），每条记录有 path 字段；
+// 容忍兼容老格式的纯字符串数组；空/异常响应降级为 []
+function extractWorktreePaths(resp: unknown): string[] {
+  if (!Array.isArray(resp)) return []
+  const out: string[] = []
+  for (const item of resp) {
+    if (typeof item === 'string' && item) {
+      out.push(item)
+    } else if (
+      item &&
+      typeof item === 'object' &&
+      'path' in item &&
+      typeof (item as { path: unknown }).path === 'string'
+    ) {
+      out.push((item as { path: string }).path)
+    }
+  }
+  return out
+}
 
 export interface GitWorkspaceMeta {
   isGit: boolean
@@ -106,10 +127,11 @@ export function useGitWorkspaceCatalog(directories: string[]) {
       const rootDirectoryList = Array.from(rootDirectories)
 
       const workspaceResults = await Promise.allSettled(
-        rootDirectoryList.map(async rootDirectory => ({
-          rootDirectory,
-          worktrees: await listWorktrees(rootDirectory),
-        })),
+        rootDirectoryList.map(async rootDirectory => {
+          const repo = getDirectoryName(rootDirectory)
+          const resp = await acpExtRequest('x.ai/git/worktree/list', { repo })
+          return { rootDirectory, worktrees: extractWorktreePaths(resp) }
+        }),
       )
 
       if (!mountedRef.current || version !== versionRef.current) return

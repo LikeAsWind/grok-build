@@ -10,15 +10,20 @@ function createDeferred<T>() {
   return { promise, resolve }
 }
 
-const getCurrentProjectMock = vi.fn()
-const listWorktreesMock = vi.fn()
-const subscribeToEventsMock = vi.fn()
-const onServerChangeMock = vi.fn()
+const { getCurrentProjectMock, acpExtRequestMock, subscribeToEventsMock, onServerChangeMock } = vi.hoisted(() => ({
+  getCurrentProjectMock: vi.fn(),
+  acpExtRequestMock: vi.fn(),
+  subscribeToEventsMock: vi.fn(),
+  onServerChangeMock: vi.fn(),
+}))
 let latestServerChange: (() => void) | undefined
 
 vi.mock('../api', () => ({
   getCurrentProject: (...args: unknown[]) => getCurrentProjectMock(...args),
-  listWorktrees: (...args: unknown[]) => listWorktreesMock(...args),
+}))
+
+vi.mock('../api/acpBridge', () => ({
+  acpExtRequest: (...args: unknown[]) => acpExtRequestMock(...args),
 }))
 
 vi.mock('../api/events', () => ({
@@ -34,7 +39,7 @@ vi.mock('../store/serverStore', () => ({
 describe('useGitWorkspaceCatalog', () => {
   beforeEach(() => {
     getCurrentProjectMock.mockReset()
-    listWorktreesMock.mockReset()
+    acpExtRequestMock.mockReset()
     subscribeToEventsMock.mockReset()
     onServerChangeMock.mockReset()
     latestServerChange = undefined
@@ -44,7 +49,7 @@ describe('useGitWorkspaceCatalog', () => {
       latestServerChange = listener as () => void
       return vi.fn()
     })
-    listWorktreesMock.mockResolvedValue(['C:/repo', 'C:/repo-worktree'])
+    acpExtRequestMock.mockResolvedValue(['C:/repo', 'C:/repo-worktree'])
   })
 
   it('refetches workspace metadata on server endpoint changes while stale requests are in flight', async () => {
