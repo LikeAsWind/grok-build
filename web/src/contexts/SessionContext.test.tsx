@@ -80,7 +80,6 @@ vi.mock('../store/serverStore', () => ({
 vi.mock('../utils', () => ({
   sessionErrorHandler: (...args: unknown[]) => sessionErrorHandlerMock(...args),
   normalizeToForwardSlash: (value?: string) => value,
-  isSameDirectory: (left?: string, right?: string) => left === right,
   autoDetectPathStyle: (...args: unknown[]) => autoDetectPathStyleMock(...args),
 }))
 
@@ -96,6 +95,21 @@ function SessionContextProbe() {
   }, [context])
 
   return null
+}
+
+function makeSession(id: string, directory = '/workspace/demo') {
+  return {
+    id,
+    slug: id,
+    projectID: 'project-1',
+    directory,
+    title: `Session ${id}`,
+    version: '1',
+    time: {
+      created: 1,
+      updated: 2,
+    },
+  }
 }
 
 describe('SessionProvider', () => {
@@ -291,5 +305,118 @@ describe('SessionProvider', () => {
     })
 
     expect(latestContext?.sessions.map(session => session.id)).toEqual(['fresh'])
+  })
+
+  it('keeps sessions from other directories in the list (global session list)', async () => {
+    getSessionsMock.mockResolvedValue([makeSession('session-demo'), makeSession('session-other', '/somewhere/else')])
+
+    render(
+      <SessionProvider>
+        <SessionContextProbe />
+      </SessionProvider>,
+    )
+
+    await act(async () => {
+      vi.runAllTimers()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // 列表不再按当前目录过滤
+    expect(latestContext?.sessions.map(session => session.id)).toEqual(['session-demo', 'session-other'])
+    expect(getSessionsMock).toHaveBeenCalledWith(expect.not.objectContaining({ directory: expect.anything() }))
+
+    // SSE：其他目录新建的 session 也进列表
+    act(() => {
+      latestEventCallbacks.onSessionCreated?.(makeSession('session-new', '/another/dir'))
+    })
+
+    expect(latestContext?.sessions.map(session => session.id)).toEqual([
+      'session-new',
+      'session-demo',
+      'session-other',
+    ])
+
+    // SSE：其他目录的 session 更新时置顶，而不是被移除
+    act(() => {
+      latestEventCallbacks.onSessionUpdated?.(makeSession('session-other', '/somewhere/else'))
+    })
+
+    expect(latestContext?.sessions.map(session => session.id)).toEqual([
+      'session-other',
+      'session-new',
+      'session-demo',
+    ])
+  })
+
+  it('creates sessions in the current directory by default', async () => {
+    getSessionsMock.mockResolvedValue([])
+    createSessionMock.mockResolvedValue(makeSession('created'))
+
+    render(
+      <SessionProvider>
+        <SessionContextProbe />
+      </SessionProvider>,
+    )
+
+    await act(async () => {
+      vi.runAllTimers()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await latestContext!.createSession('hello')
+    })
+
+    expect(createSessionMock).toHaveBeenCalledWith({ title: 'hello', directory: '/workspace/demo' })
+  })
+
+  it('creates sessions in an explicitly passed directory', async () => {
+    getSessionsMock.mockResolvedValue([])
+    createSessionMock.mockResolvedValue(makeSession('created'))
+
+    render(
+      <SessionProvider>
+        <SessionContextProbe />
+      </SessionProvider>,
+    )
+
+    await act(async () => {
+      vi.runAllTimers()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await latestContext!.createSession(undefined, '/explicit/dir')
+    })
+
+    expect(createSessionMock).toHaveBeenCalledWith({ title: undefined, directory: '/explicit/dir' })
+  })
+
+  it('deletes sessions without scoping to a directory', async () => {
+    getSessionsMock.mockResolvedValue([makeSession('session-1')])
+    deleteSessionMock.mockResolvedValue(true)
+
+    render(
+      <SessionProvider>
+        <SessionContextProbe />
+      </SessionProvider>,
+    )
+
+    await act(async () => {
+      vi.runAllTimers()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(latestContext?.sessions.map(session => session.id)).toEqual(['session-1'])
+
+    await act(async () => {
+      await latestContext!.deleteSession('session-1')
+    })
+
+    expect(deleteSessionMock).toHaveBeenCalledWith('session-1')
+    expect(clearSessionRuntimeStateMock).toHaveBeenCalledWith('session-1')
+    expect(latestContext?.sessions).toEqual([])
   })
 })

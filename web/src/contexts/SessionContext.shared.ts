@@ -10,7 +10,7 @@ export interface SessionContextValue {
   setSearch: (term: string) => void
   refresh: () => Promise<void>
   loadMore: () => Promise<void>
-  createSession: (title?: string) => Promise<ApiSession>
+  createSession: (title?: string, directory?: string) => Promise<ApiSession>
   deleteSession: (id: string) => Promise<void>
 }
 

@@ -12,7 +12,7 @@ import { markSessionFresh } from '../hooks/useSessionManager'
 import { serverStore } from '../store/serverStore'
 import { pinnedSessionsStore } from '../store/pinnedSessionsStore'
 import { useDirectory } from './useDirectory'
-import { sessionErrorHandler, normalizeToForwardSlash, isSameDirectory, autoDetectPathStyle } from '../utils'
+import { sessionErrorHandler, normalizeToForwardSlash, autoDetectPathStyle } from '../utils'
 import { clearSessionRuntimeState } from '../utils/sessionLifecycle'
 import { SessionContext, type SessionContextValue } from './SessionContext.shared'
 
@@ -47,9 +47,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     searchRef.current = search
   }, [search])
 
-  // 核心获取逻辑
-  // 注意：directory 传给 getSessions 时使用正斜杠格式
-  // http 层的 fetchWithBothSlashesAndMerge 会处理两种斜杠格式的兼容
+  // 核心获取逻辑（全局会话列表，不按目录过滤）
   const fetchSessions = useCallback(
     async (params: SessionListParams & { append?: boolean; retryAttempt?: number } = {}) => {
       const { append = false, retryAttempt = 0, ...queryParams } = params
@@ -63,13 +61,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        // 使用正斜杠格式传给 API（http 层会处理兼容）
-        const targetDir = normalizeToForwardSlash(currentDirectory) || undefined
-
         const data = await getSessions({
           roots: true,
           limit: currentLimitRef.current,
-          directory: targetDir,
           search: search || undefined,
           ...queryParams,
         })
@@ -119,21 +113,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [currentDirectory, search],
+    [search],
   )
 
   // 保持 fetchSessions ref 同步（用于 SSE onReconnected 回调）
   fetchSessionsRef.current = fetchSessions
 
-  const matchesCurrentDirectory = useCallback((session: ApiSession) => {
-    return !currentDirectoryRef.current || isSameDirectory(currentDirectoryRef.current, session.directory)
-  }, [])
-
-  // 监听 directory 和 search 变化
+  // 监听 search 变化
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
 
-    // 切换目录或搜索时重置 limit
+    // 搜索变化时重置 limit
     currentLimitRef.current = 30
 
     searchTimerRef.current = window.setTimeout(
@@ -147,7 +137,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
     }
-  }, [fetchSessions, search, currentDirectory])
+  }, [fetchSessions, search])
 
   // 订阅 SSE 事件，实时更新 session 列表
   useEffect(() => {
@@ -155,8 +145,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       onSessionCreated: session => {
         // 忽略子 session（有 parentID 的是子 agent 创建的）
         if (session.parentID) return
-
-        if (!matchesCurrentDirectory(session)) return
 
         // 搜索态下交给服务端重新给出结果，避免本地过滤和服务端逻辑不一致
         if (searchRef.current) {
@@ -173,20 +161,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (session.parentID) return
 
         if (searchRef.current) {
-          if (matchesCurrentDirectory(session)) {
-            fetchSessionsRef.current()
-          } else {
-            setSessions(prev => prev.filter(s => s.id !== session.id))
-          }
+          fetchSessionsRef.current()
           return
         }
 
         setSessions(prev => {
           const index = prev.findIndex(s => s.id === session.id)
-
-          if (!matchesCurrentDirectory(session)) {
-            return index === -1 ? prev : prev.filter(s => s.id !== session.id)
-          }
 
           if (index === -1) {
             return [session, ...prev]
@@ -216,7 +196,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     })
 
     return unsubscribe
-  }, [matchesCurrentDirectory])
+  }, [])
 
   useEffect(() => {
     return serverStore.onServerChange(() => {
@@ -245,31 +225,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [hasMore, sessions, fetchSessions])
 
-  const createSession = useCallback(
-    async (title?: string) => {
-      // 使用正斜杠格式传给后端
-      const targetDir = normalizeToForwardSlash(currentDirectory) || undefined
+  const createSession = useCallback(async (title?: string, directory?: string) => {
+    // 未显式指定目录时，默认使用当前目录（正斜杠格式传给后端）
+    const targetDir = directory ?? (normalizeToForwardSlash(currentDirectoryRef.current) || undefined)
 
-      const newSession = await apiCreateSession({
-        title,
-        directory: targetDir,
-      })
-      markSessionFresh(newSession.id)
-      return newSession
-    },
-    [currentDirectory],
-  )
+    const newSession = await apiCreateSession({
+      title,
+      directory: targetDir,
+    })
+    markSessionFresh(newSession.id)
+    return newSession
+  }, [])
 
-  const deleteSession = useCallback(
-    async (id: string) => {
-      const targetDir = normalizeToForwardSlash(currentDirectory) || undefined
-      await apiDeleteSession(id, targetDir)
-      pinnedSessionsStore.unpin(id)
-      clearSessionRuntimeState(id)
-      setSessions(prev => prev.filter(s => s.id !== id))
-    },
-    [currentDirectory],
-  )
+  const deleteSession = useCallback(async (id: string) => {
+    await apiDeleteSession(id)
+    pinnedSessionsStore.unpin(id)
+    clearSessionRuntimeState(id)
+    setSessions(prev => prev.filter(s => s.id !== id))
+  }, [])
 
   // 稳定化 Provider value，避免每次渲染创建新对象导致子组件不必要重渲染
   const value = useMemo<SessionContextValue>(
