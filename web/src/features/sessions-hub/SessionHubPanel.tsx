@@ -1,16 +1,12 @@
 // 侧栏主面板：全局会话列表 + 状态筛选 + 按项目分组 + 通知铃铛。
 // 对齐 Claude Code 桌面端：单一列表，会话自带目录与状态，不再按目录过滤。
 
-import { useCallback, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SearchIcon, CloseIcon, BellIcon, NewChatIcon, SidebarIcon, CheckIcon } from '../../components/Icons'
 import { useSessionContext } from '../../contexts/useSessionContext'
-import { useBusySessions, useBusyCount } from '../../store/activeSessionStore'
-import {
-  notificationStore,
-  useNotifications,
-  useUnreadNotificationCount,
-} from '../../store/notificationStore'
+import { useBusySessions } from '../../store/activeSessionStore'
+import { useNotifications, useUnreadNotificationCount } from '../../store/notificationStore'
 import { updateSession, deleteSession as apiDeleteSession, type ApiSession } from '../../api'
 import { getServerCwd } from '../../api/acpBridge'
 import { getDirectoryName, normalizeToForwardSlash, uiErrorHandler } from '../../utils'
@@ -84,23 +80,14 @@ export function SessionHubPanel({
   const { t } = useTranslation(['chat', 'common'])
   const { sessions, isLoading, search, setSearch, refresh } = useSessionContext()
   const busySessions = useBusySessions()
-  // 订阅未读数变化（铃铛上的小红点）
-  useUnreadNotificationCount()
-  const busyCount = useBusyCount()
   const notifications = useNotifications()
+  const unreadCount = useUnreadNotificationCount()
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [filterOpen, setFilterOpen] = useState(false)
   const [groupByProject, setGroupByProject] = useState(false)
   const [bellOpen, setBellOpen] = useState(false)
   const [newDialogOpen, setNewDialogOpen] = useState(false)
-
-  // 通知 store 订阅驱动铃铛未读数；用快照里的 filter 拿真实值
-  const unreadCount = useSyncExternalStore(
-    notificationStore.subscribe,
-    () => notificationStore.getSnapshot().notifications.filter(n => !n.read).length,
-    () => 0,
-  )
 
   const busyIds = useMemo(() => new Set(busySessions.map(b => b.sessionId)), [busySessions])
   const statuses = useMemo(
@@ -352,9 +339,6 @@ export function SessionHubPanel({
           onNewSession()
         }}
       />
-
-      {/* Reference busyCount so the value is observed (used by future indicator). */}
-      <span hidden data-testid="busy-count">{busyCount}</span>
     </div>
   )
 }
