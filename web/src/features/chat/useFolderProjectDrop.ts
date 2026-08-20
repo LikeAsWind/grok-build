@@ -39,12 +39,12 @@ function isTauriInProjectDropZone(pane: HTMLElement, position: TauriDropPosition
  */
 export function useFolderProjectDrop(
   paneRootRef: RefObject<HTMLElement | null>,
-  addDirectory: (path: string) => void,
+  touchDirectory: (path: string) => void,
 ): boolean {
   const [isActive, setIsActive] = useState(false)
   const pathsRef = useRef<string[] | null>(null)
-  const addDirectoryRef = useRef(addDirectory)
-  addDirectoryRef.current = addDirectory
+  const touchDirectoryRef = useRef(touchDirectory)
+  touchDirectoryRef.current = touchDirectory
   const lastTauriDropAtRef = useRef(0)
 
   useEffect(() => {
@@ -86,7 +86,7 @@ export function useFolderProjectDrop(
         .then(items => {
           if (!alive) return
           for (const item of items) {
-            if (item.type === 'folder') addDirectoryRef.current(item.path)
+            if (item.type === 'folder') touchDirectoryRef.current(item.path)
           }
         })
         .catch(err => {
@@ -125,7 +125,7 @@ export function useFolderProjectDrop(
       // 浏览器一般没有本地绝对路径；有 path 字段时（部分 WebView）才尝试添加
       for (const file of Array.from(e.dataTransfer?.files ?? [])) {
         const path = (file as File & { path?: string }).path
-        if (typeof path === 'string' && path) addDirectoryRef.current(path)
+        if (typeof path === 'string' && path) touchDirectoryRef.current(path)
       }
     }
 

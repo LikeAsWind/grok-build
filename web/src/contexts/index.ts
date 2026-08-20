@@ -1,6 +1,6 @@
 export { DirectoryProvider } from './DirectoryContext'
-export { useDirectory, useCurrentDirectory, useSavedDirectories, usePathInfo, useSidebarExpanded } from './useDirectory'
-export type { DirectoryContextValue, SavedDirectory } from './DirectoryContext.shared'
+export { useDirectory, useCurrentDirectory, usePathInfo, useSidebarExpanded } from './useDirectory'
+export type { DirectoryContextValue } from './DirectoryContext.shared'
 export { SessionProvider } from './SessionContext'
 export { useSessionContext } from './useSessionContext'
 export type { SessionContextValue } from './SessionContext.shared'

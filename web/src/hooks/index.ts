@@ -45,7 +45,6 @@ export {
   DirectoryProvider,
   useDirectory,
   useCurrentDirectory,
-  useSavedDirectories,
   usePathInfo,
   useSidebarExpanded,
   SessionProvider,
