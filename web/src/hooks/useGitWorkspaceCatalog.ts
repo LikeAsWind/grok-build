@@ -89,7 +89,8 @@ export function useGitWorkspaceCatalog(directories: string[]) {
 
         const { project } = result.value
 
-        if (project.vcs === 'git' && project.worktree) {
+        // getCurrentProject() 依赖已被 stub 的 SDK，可能返回不完整对象——安全检查
+        if (project && project.vcs === 'git' && project.worktree) {
           const rootDirectory = normalizeToForwardSlash(project.worktree)
           rootDirectories.add(rootDirectory)
           directoryToRoot.set(directory, rootDirectory)
