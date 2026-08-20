@@ -2,10 +2,11 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NewSessionDialog } from './NewSessionDialog'
 
-const { useDirectoryMock, gitRootForMock, createIsolatedWorktreeMock, createSessionMock } = vi.hoisted(() => ({
+const { useDirectoryMock, gitRootForMock, createIsolatedWorktreeMock, pagerWorktreeIdMock, createSessionMock } = vi.hoisted(() => ({
   useDirectoryMock: vi.fn(),
   gitRootForMock: vi.fn(),
   createIsolatedWorktreeMock: vi.fn(),
+  pagerWorktreeIdMock: vi.fn(() => 'pager-abcdef123456'),
   createSessionMock: vi.fn(),
 }))
 
@@ -16,6 +17,7 @@ vi.mock('../../contexts/useDirectory', () => ({
 vi.mock('../../api/worktree', () => ({
   gitRootFor: (...args: unknown[]) => gitRootForMock(...args),
   createIsolatedWorktree: (...args: unknown[]) => createIsolatedWorktreeMock(...args),
+  pagerWorktreeId: () => pagerWorktreeIdMock(),
 }))
 
 vi.mock('../../contexts/useSessionContext', () => ({
@@ -45,6 +47,8 @@ describe('NewSessionDialog', () => {
     gitRootForMock.mockResolvedValue(null)
     createIsolatedWorktreeMock.mockReset()
     createSessionMock.mockReset()
+    pagerWorktreeIdMock.mockReset()
+    pagerWorktreeIdMock.mockReturnValue('pager-abcdef123456')
   })
 
   afterEach(() => {
@@ -100,5 +104,34 @@ describe('NewSessionDialog', () => {
     useDirectoryMock.mockReturnValue({ recentProjects: {}, touchDirectory: vi.fn() })
     renderDialog({ initialDirectory: '' })
     expect(screen.getByRole('button', { name: /创建/ })).toBeDisabled()
+  })
+
+  it('worktree 创建失败时不触发 onCreated、按钮重新可用、显示错误', async () => {
+    gitRootForMock.mockResolvedValue('C:\\repo')
+    createIsolatedWorktreeMock.mockRejectedValue(new Error('not a git repo'))
+    const props = renderDialog()
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(screen.getByRole('button', { name: /创建/ }))
+    await act(async () => {})
+    expect(createSessionMock).not.toHaveBeenCalled()
+    expect(props.onCreated).not.toHaveBeenCalled()
+    const createBtn = screen.getByRole('button', { name: /创建/ })
+    expect(createBtn).not.toBeDisabled()
+    expect(screen.getByText('not a git repo')).toBeInTheDocument()
+  })
+
+  it('选中目录变化时重新检测 git（避免 stale isGit）', async () => {
+    gitRootForMock.mockImplementation(async (cwd: string) => {
+      if (cwd === 'C:\\repo') return 'C:\\repo'
+      return null
+    })
+    renderDialog()
+    await act(async () => {})
+    expect(screen.getByText(/隔离 worktree/)).toBeInTheDocument()
+    // 切到非 git 目录
+    fireEvent.click(screen.getByText('D:\\other'))
+    await act(async () => {})
+    expect(screen.queryByText(/隔离 worktree/)).not.toBeInTheDocument()
   })
 })

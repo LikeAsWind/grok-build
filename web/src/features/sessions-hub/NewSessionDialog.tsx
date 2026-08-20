@@ -7,7 +7,7 @@ import { Dialog } from '../../components/ui/Dialog'
 import { SpinnerIcon } from '../../components/Icons'
 import { useDirectory } from '../../contexts/useDirectory'
 import { useSessionContext } from '../../contexts/useSessionContext'
-import { gitRootFor, createIsolatedWorktree } from '../../api/worktree'
+import { gitRootFor, createIsolatedWorktree, pagerWorktreeId } from '../../api/worktree'
 import { subscribeWorktreeStatus, type WorktreeProgress } from './worktreeStatusStore'
 import { DirBrowserModal } from '../chat/sidebar/DirBrowserModal'
 import { DirectorySelector } from './DirectorySelector'
@@ -30,7 +30,7 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
   const [creating, setCreating] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
 
-  // 打开 / 目录变化时重置状态并检测 git
+  // 打开 / 初始目录变化时重置状态并检测 git
   useEffect(() => {
     if (!isOpen) return
     setSelectedDir(initialDirectory)
@@ -44,7 +44,30 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
     } else {
       setIsGit(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialDirectory])
+
+  // 选中目录变化时若仍是初始目录则复用上面 effect 的结果；否则重新检测 git
+  useEffect(() => {
+    if (!isOpen) return
+    if (selectedDir === initialDirectory) return
+    if (!selectedDir) {
+      setIsGit(false)
+      return
+    }
+    let cancelled = false
+    setIsGit(null)
+    void gitRootFor(selectedDir)
+      .then(root => {
+        if (!cancelled) setIsGit(Boolean(root))
+      })
+      .catch(() => {
+        if (!cancelled) setIsGit(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, selectedDir, initialDirectory])
 
   const handleCreate = async () => {
     if (!selectedDir || creating) return
@@ -53,13 +76,19 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
     try {
       let sessionDir = selectedDir
       if (useWorktree && isGit) {
-        const worktreeKey = `pager-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+        const worktreeKey = pagerWorktreeId()
         const unsubscribe = subscribeWorktreeStatus(worktreeKey, progress => {
           setWorktreeProgress(progress)
         })
         try {
           const created = await createIsolatedWorktree({ sourcePath: selectedDir })
           sessionDir = created.sessionCwd
+        } catch (e) {
+          setWorktreeProgress({
+            kind: 'error',
+            message: e instanceof Error ? e.message : String(e),
+          })
+          return
         } finally {
           unsubscribe()
         }
@@ -110,6 +139,12 @@ export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated 
             <div className="flex items-center gap-2 text-[length:var(--fs-sm)] text-text-300">
               <SpinnerIcon size={14} className="animate-spin" />
               <span>{worktreeProgress.message ?? '正在创建 worktree…'}</span>
+            </div>
+          )}
+
+          {worktreeProgress?.kind === 'error' && (
+            <div className="text-[length:var(--fs-sm)] text-danger-100">
+              {worktreeProgress.message ?? 'worktree 创建失败'}
             </div>
           )}
 

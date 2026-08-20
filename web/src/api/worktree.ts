@@ -28,7 +28,11 @@ export async function gitRootFor(cwd: string): Promise<string | null> {
   return null
 }
 
-function worktreeIdFor(): string {
+/**
+ * pager worktree id 格式：与后端 x.ai/git/worktree/* handler 一致（newSessionId 用同一格式）。
+ * 暴露给前端订阅方，便于 createIsolatedWorktree 返回前/进度事件到达前就挂上订阅。
+ */
+export function pagerWorktreeId(): string {
   return `pager-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
 }
 
@@ -55,7 +59,7 @@ export async function createIsolatedWorktree(
 ): Promise<CreateIsolatedWorktreeResult> {
   const params: Record<string, unknown> = {
     sourceWorktreePath: input.sourcePath,
-    newSessionId: worktreeIdFor(),
+    newSessionId: pagerWorktreeId(),
     copyMode: input.gitRef ? 'clean' : 'dirty',
   }
   if (input.label) params.label = input.label
