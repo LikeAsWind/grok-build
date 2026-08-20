@@ -81,10 +81,11 @@ export default defineConfig({
         ws: true,
       },
 
-      // 开发环境代理 - 将 /api 前缀的请求转发到 OpenCode 后端
+      // 开发环境代理 - 将 /api 前缀的请求转发到 grok web 后端
       // 注意：Tauri 模式下前端直接请求后端（通过 plugin-http），不走此代理
+      // 前端用 /api/* 作为 base，rewrite 去掉前缀后转发到后端的实际路径（如 /sessions）
       '/api': {
-        target: 'http://127.0.0.1:4096',
+        target: process.env.GROK_BACKEND || 'http://127.0.0.1:2420',
         changeOrigin: true,
         ws: true,
         rewrite: path => path.replace(/^\/api/, ''),
