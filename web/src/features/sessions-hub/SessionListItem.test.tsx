@@ -110,4 +110,31 @@ describe('SessionListItem', () => {
     fireEvent.click(screen.getByText('confirm'))
     expect(onDelete).toHaveBeenCalledWith('s1')
   })
+
+  it('indent=true 时有 data-indent 标记；默认（未传）时没有', () => {
+    const { container, rerender } = render(
+      <SessionListItem
+        session={makeSession()}
+        isSelected={false}
+        uiStatus={{ kind: 'idle' }}
+        onSelect={() => {}}
+        onRename={() => Promise.resolve()}
+        onDelete={() => Promise.resolve()}
+      />,
+    )
+    expect(container.querySelector('[data-indent="false"]')).not.toBeNull()
+
+    rerender(
+      <SessionListItem
+        session={makeSession()}
+        isSelected={false}
+        uiStatus={{ kind: 'idle' }}
+        onSelect={() => {}}
+        onRename={() => Promise.resolve()}
+        onDelete={() => Promise.resolve()}
+        indent
+      />,
+    )
+    expect(container.querySelector('[data-indent="true"]')).not.toBeNull()
+  })
 })

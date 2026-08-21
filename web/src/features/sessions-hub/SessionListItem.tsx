@@ -23,6 +23,8 @@ export interface SessionListItemProps {
   onSelect: (session: ApiSession) => void
   onRename: (sessionId: string, title: string) => Promise<void>
   onDelete: (sessionId: string) => Promise<void>
+  /** 子会话嵌套展示：加左侧缩进 + 细左边框，不做展开/折叠或连接线 */
+  indent?: boolean
 }
 
 function formatRelativeTime(t: (key: string, opts?: { count: number }) => string, ts: number, now: number): string {
@@ -35,7 +37,15 @@ function formatRelativeTime(t: (key: string, opts?: { count: number }) => string
   return t('sessionsHub.daysAgo', { count: days })
 }
 
-export function SessionListItem({ session, isSelected, uiStatus, onSelect, onRename, onDelete }: SessionListItemProps) {
+export function SessionListItem({
+  session,
+  isSelected,
+  uiStatus,
+  onSelect,
+  onRename,
+  onDelete,
+  indent = false,
+}: SessionListItemProps) {
   const { t } = useTranslation('chat')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(session.title ?? '')
@@ -60,10 +70,11 @@ export function SessionListItem({ session, isSelected, uiStatus, onSelect, onRen
     <>
       <div
         data-selected={isSelected}
+        data-indent={indent}
         onClick={() => onSelect(session)}
         className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
           isSelected ? 'bg-bg-200/80' : 'hover:bg-bg-200/50'
-        }`}
+        } ${indent ? 'ml-4 border-l border-border-200/40 pl-2' : ''}`}
       >
         <span
           aria-label={uiStatus.kind}

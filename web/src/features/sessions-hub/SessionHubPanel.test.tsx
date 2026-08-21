@@ -18,6 +18,11 @@ const {
   useUnreadNotificationCountMock,
   updateSessionMock,
   deleteSessionMock,
+  restoreAllChildSessionsMock,
+  getSessionInfoMock,
+  childSessionSubscribeMock,
+  childSessionGetVersionMock,
+  useLayoutStoreMock,
 } = vi.hoisted(() => ({
   useSessionContextMock: vi.fn(),
   useBusySessionsMock: vi.fn(),
@@ -25,6 +30,11 @@ const {
   useUnreadNotificationCountMock: vi.fn(() => 0),
   updateSessionMock: vi.fn().mockResolvedValue(undefined),
   deleteSessionMock: vi.fn().mockResolvedValue(undefined),
+  restoreAllChildSessionsMock: vi.fn(),
+  getSessionInfoMock: vi.fn(),
+  childSessionSubscribeMock: vi.fn((_cb: () => void) => () => {}),
+  childSessionGetVersionMock: vi.fn(() => 0),
+  useLayoutStoreMock: vi.fn(),
 }))
 
 vi.mock('../../contexts/useSessionContext', () => ({
@@ -44,6 +54,22 @@ vi.mock('../../store/notificationStore', () => ({
   },
   useNotifications: () => useNotificationsMock(),
   useUnreadNotificationCount: () => useUnreadNotificationCountMock(),
+}))
+
+vi.mock('../../store/childSessionStore', () => ({
+  childSessionStore: {
+    getSessionInfo: (id: string) => getSessionInfoMock(id),
+    subscribe: (cb: () => void) => childSessionSubscribeMock(cb),
+    getVersion: () => childSessionGetVersionMock(),
+  },
+}))
+
+vi.mock('../../store/layoutStore', () => ({
+  useLayoutStore: () => useLayoutStoreMock(),
+}))
+
+vi.mock('../message/synthNotifPersist', () => ({
+  restoreAllChildSessions: () => restoreAllChildSessionsMock(),
 }))
 
 vi.mock('../../api', () => ({
@@ -126,6 +152,15 @@ describe('SessionHubPanel', () => {
     updateSessionMock.mockResolvedValue(undefined)
     deleteSessionMock.mockReset()
     deleteSessionMock.mockResolvedValue(undefined)
+    restoreAllChildSessionsMock.mockReset()
+    getSessionInfoMock.mockReset()
+    getSessionInfoMock.mockReturnValue(undefined)
+    childSessionSubscribeMock.mockReset()
+    childSessionSubscribeMock.mockReturnValue(() => {})
+    childSessionGetVersionMock.mockReset()
+    childSessionGetVersionMock.mockReturnValue(0)
+    useLayoutStoreMock.mockReset()
+    useLayoutStoreMock.mockReturnValue({ sidebarShowChildSessions: false })
   })
 
   it('渲染全局会话列表（含不同目录的会话）', () => {
@@ -248,4 +283,71 @@ describe('SessionHubPanel', () => {
     fireEvent.click(screen.getByTitle('sessionsHub.notifications'))
     expect(screen.getByText('sessionsHub.noNotifications')).toBeInTheDocument()
   })
+
+  it('挂载时调用 restoreAllChildSessions 预热子会话映射', () => {
+    useSessionContextMock.mockReturnValue(sessionCtx([]))
+    renderPanel()
+    expect(restoreAllChildSessionsMock).toHaveBeenCalled()
+  })
+
+  it('子会话嵌套显示在父会话下，标题为空时 fallback 到 childSessionStore 记录的描述', () => {
+    useLayoutStoreMock.mockReturnValue({ sidebarShowChildSessions: true })
+    getSessionInfoMock.mockImplementation((id: string) =>
+      id === 'child-1'
+        ? { id: 'child-1', parentID: 'parent-1', title: '子任务描述', status: 'running', createdAt: 1 }
+        : undefined,
+    )
+    useSessionContextMock.mockReturnValue(
+      sessionCtx([
+        makeSession({ id: 'parent-1', title: '父会话' }),
+        // roster 还没回写子会话标题（后端异步），title 为空
+        makeSession({ id: 'child-1', title: '' }),
+      ]),
+    )
+    renderPanel()
+
+    expect(screen.getByText('父会话')).toBeInTheDocument()
+    expect(screen.getByText('子任务描述')).toBeInTheDocument()
+    expect(screen.queryByText('sessionsHub.untitled')).not.toBeInTheDocument()
+  })
+
+  it('开关关闭时，非忙碌且未选中的子会话被隐藏', () => {
+    useLayoutStoreMock.mockReturnValue({ sidebarShowChildSessions: false })
+    getSessionInfoMock.mockImplementation((id: string) =>
+      id === 'child-1'
+        ? { id: 'child-1', parentID: 'parent-1', title: '子会话标题', status: 'idle', createdAt: 1 }
+        : undefined,
+    )
+    useSessionContextMock.mockReturnValue(
+      sessionCtx([
+        makeSession({ id: 'parent-1', title: '父会话' }),
+        makeSession({ id: 'child-1', title: '子会话标题' }),
+      ]),
+    )
+    renderPanel({ selectedSessionId: null })
+
+    expect(screen.getByText('父会话')).toBeInTheDocument()
+    expect(screen.queryByText('子会话标题')).not.toBeInTheDocument()
+  })
+
+  it('开关打开时，所有已知子会话都显示（不论忙碌或选中状态）', () => {
+    useLayoutStoreMock.mockReturnValue({ sidebarShowChildSessions: true })
+    getSessionInfoMock.mockImplementation((id: string) => {
+      if (id === 'child-a') return { id: 'child-a', parentID: 'parent-1', title: 'A', status: 'idle', createdAt: 1 }
+      if (id === 'child-b') return { id: 'child-b', parentID: 'parent-1', title: 'B', status: 'idle', createdAt: 2 }
+      return undefined
+    })
+    useSessionContextMock.mockReturnValue(
+      sessionCtx([
+        makeSession({ id: 'parent-1', title: '父会话' }),
+        makeSession({ id: 'child-a', title: '子会话 A' }),
+        makeSession({ id: 'child-b', title: '子会话 B' }),
+      ]),
+    )
+    renderPanel({ selectedSessionId: null })
+
+    expect(screen.getByText('子会话 A')).toBeInTheDocument()
+    expect(screen.getByText('子会话 B')).toBeInTheDocument()
+  })
 })
+

@@ -1,19 +1,23 @@
 // 侧栏主面板：全局会话列表 + 状态筛选 + 按项目分组 + 通知铃铛。
 // 对齐 Claude Code 桌面端：单一列表，会话自带目录与状态，不再按目录过滤。
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SearchIcon, CloseIcon, BellIcon, NewChatIcon, SidebarIcon, CheckIcon } from '../../components/Icons'
 import { useSessionContext } from '../../contexts/useSessionContext'
 import { useBusySessions } from '../../store/activeSessionStore'
 import { useNotifications, useUnreadNotificationCount } from '../../store/notificationStore'
+import { childSessionStore } from '../../store/childSessionStore'
+import { useLayoutStore } from '../../store/layoutStore'
 import { updateSession, deleteSession as apiDeleteSession, type ApiSession } from '../../api'
 import { getServerCwd } from '../../api/acpBridge'
 import { getDirectoryName, normalizeToForwardSlash, uiErrorHandler } from '../../utils'
 import { SidebarFooter } from '../chat/sidebar/SidebarFooter'
+import { restoreAllChildSessions } from '../message/synthNotifPersist'
 import { SessionListItem } from './SessionListItem'
 import { NewSessionDialog } from './NewSessionDialog'
 import { deriveSessionUiStatus, type SessionUiStatus } from './status'
+import { buildSessionTree, resolveChildTitle } from './sessionTree'
 
 export interface SessionHubPanelProps {
   onNewSession: () => void
@@ -90,6 +94,24 @@ export function SessionHubPanel({
   const busySessions = useBusySessions()
   const notifications = useNotifications()
   const unreadCount = useUnreadNotificationCount()
+  const { sidebarShowChildSessions } = useLayoutStore()
+
+  // 启动预热：从持久化通知一次性重建全部子会话映射（幂等）。不预热的话首屏
+  // （尚未打开任何会话）没有父子关系与标题数据——子会话会先平级显示「未命名会话」。
+  useEffect(() => {
+    restoreAllChildSessions()
+  }, [])
+
+  const childSessionVersion = useSyncExternalStore(
+    childSessionStore.subscribe.bind(childSessionStore),
+    childSessionStore.getVersion,
+    childSessionStore.getVersion,
+  )
+  const getParentId = useCallback(
+    (id: string) => childSessionStore.getSessionInfo(id)?.parentID,
+    // childSessionVersion：subagent_spawned/markIdle/markError 到达时重算
+    [childSessionVersion],
+  )
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [filterOpen, setFilterOpen] = useState(false)
@@ -115,7 +137,19 @@ export function SessionHubPanel({
     return list
   }, [sessions, search, statusFilter, statuses])
 
-  const groups = useMemo(() => groupByDirectory(filtered), [filtered])
+  const { topLevel, childrenByParent } = useMemo(
+    () =>
+      buildSessionTree(filtered, {
+        showAllChildren: sidebarShowChildSessions,
+        selectedSessionId,
+        busySessionIds: busyIds,
+        getParentId,
+      }),
+    [filtered, sidebarShowChildSessions, selectedSessionId, busyIds, getParentId],
+  )
+
+  // 分组只按顶层会话的目录来分，子会话跟着父走，不管子会话自己的 directory 字段是什么
+  const groups = useMemo(() => groupByDirectory(topLevel), [topLevel])
 
   const handleRename = useCallback(
     async (sessionId: string, title: string) => {
@@ -139,7 +173,7 @@ export function SessionHubPanel({
     [selectedSessionId, onNewSession],
   )
 
-  const renderItem = (session: ApiSession) => (
+  const renderItem = (session: ApiSession, indent = false) => (
     <SessionListItem
       key={session.id}
       session={session}
@@ -148,8 +182,22 @@ export function SessionHubPanel({
       onSelect={onSelectSession}
       onRename={handleRename}
       onDelete={handleDelete}
+      indent={indent}
     />
   )
+
+  // 顶层会话紧跟着渲染它的子会话（单层嵌套，见 sessionTree.ts）；有子会话时用同样
+  // 的 space-y-0.5 包一层，保持行间距和无子会话时一致
+  const renderSessionWithChildren = (session: ApiSession) => {
+    const children = childrenByParent.get(session.id)
+    if (!children?.length) return renderItem(session)
+    return (
+      <div key={session.id} className="space-y-0.5">
+        {renderItem(session)}
+        {children.map(child => renderItem(resolveChildTitle(child, childSessionStore.getSessionInfo(child.id)), true))}
+      </div>
+    )
+  }
 
   const showLabels = isExpanded
 
@@ -322,11 +370,11 @@ export function SessionHubPanel({
                 <span className="truncate">{group.directory === '(none)' ? t('sessionsHub.noDirectory') : getDirectoryName(group.directory)}</span>
                 <span className="text-text-500">· {t('sessionsHub.groupHeaderCount', { count: group.sessions.length })}</span>
               </div>
-              <div className="space-y-0.5">{group.sessions.map(renderItem)}</div>
+              <div className="space-y-0.5">{group.sessions.map(renderSessionWithChildren)}</div>
             </div>
           ))
         ) : (
-          <div className="mt-1 space-y-0.5">{filtered.map(renderItem)}</div>
+          <div className="mt-1 space-y-0.5">{topLevel.map(renderSessionWithChildren)}</div>
         )}
       </div>
 
