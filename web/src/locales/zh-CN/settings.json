@@ -83,8 +83,6 @@
     "clearFrontendRulesConfirm": "切换到“后端始终”会删除全部前端临时放行规则，是否继续？",
     "approvePendingOnFullAuto": "追补已等待权限",
     "approvePendingOnFullAutoDesc": "开启后，底部自动放行切到本次会话或全部会话时，会把已经等待的权限也用 once 放行",
-    "queueFollowupMessages": "后续消息排队",
-    "queueFollowupMessagesDesc": "当前会话还在忙时，把新消息先放进队列，等这一轮结束后自动发送",
     "sidebarRecents": "侧边栏最近记录",
     "sidebarRecentsDesc": "最近对话的可选文件夹视图",
     "folderStyleRecents": "文件夹式最近记录",
