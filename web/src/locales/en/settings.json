@@ -144,7 +144,7 @@
   },
   "agent": {
     "behavior": "Agent Behavior",
-    "behaviorDesc": "Permission approval and queued message behavior",
+    "behaviorDesc": "Permission approval behavior",
     "toolInteraction": "Tool Interaction",
     "toolInteractionDesc": "How tool requests and tool output behave inside conversations"
   },

@@ -144,7 +144,7 @@
   },
   "agent": {
     "behavior": "Agent 行为",
-    "behaviorDesc": "权限放行和消息排队行为",
+    "behaviorDesc": "权限放行行为",
     "toolInteraction": "工具交互",
     "toolInteractionDesc": "控制工具请求和工具输出在对话中的交互方式"
   },
