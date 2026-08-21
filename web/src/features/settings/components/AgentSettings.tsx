@@ -32,7 +32,9 @@ export function AgentSettings() {
     setInlineToolRequests(next)
     setDescriptiveToolSteps(next)
     setCompactInlinePermission(next)
-    // 不再强制覆盖 toolCardStyle —— 用户显式选择的工具输出风格保持不变
+    // themeStore.setImmersiveMode 内部会把 toolCardStyle 强制设为 compact/classic，
+    // 这里同步本地 state，否则分段控件要等设置面板重新挂载才会显示新值
+    setToolCardStyle(next ? 'compact' : 'classic')
   }
 
   const toggleApprovePending = () => {
