@@ -5,6 +5,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionHubPanel } from './SessionHubPanel'
+import { sessionHubViewStore } from '../../store/sessionHubViewStore'
 import type { ApiSession } from '../../api'
 
 vi.mock('react-i18next', () => ({
@@ -17,24 +18,36 @@ const {
   useNotificationsMock,
   useUnreadNotificationCountMock,
   updateSessionMock,
-  deleteSessionMock,
   restoreAllChildSessionsMock,
   getSessionInfoMock,
   childSessionSubscribeMock,
   childSessionGetVersionMock,
   useLayoutStoreMock,
+  useVcsInfoMock,
+  useDirectoryMock,
 } = vi.hoisted(() => ({
   useSessionContextMock: vi.fn(),
   useBusySessionsMock: vi.fn(),
   useNotificationsMock: vi.fn(),
   useUnreadNotificationCountMock: vi.fn(() => 0),
   updateSessionMock: vi.fn().mockResolvedValue(undefined),
-  deleteSessionMock: vi.fn().mockResolvedValue(undefined),
   restoreAllChildSessionsMock: vi.fn(),
   getSessionInfoMock: vi.fn(),
   childSessionSubscribeMock: vi.fn((_cb: () => void) => () => {}),
   childSessionGetVersionMock: vi.fn(() => 0),
   useLayoutStoreMock: vi.fn(),
+  useVcsInfoMock: vi.fn(() => ({ vcsInfo: null, isLoading: false, error: null, refresh: vi.fn() })),
+  useDirectoryMock: vi.fn(() => ({ currentDirectory: undefined, recentProjects: {}, touchDirectory: vi.fn() })),
+}))
+
+// ProjectGroupHeader（文件夹视图分组头）依赖 useVcsInfo（真实会发起网络请求获取分支信息）
+// 和 useDirectory（需要 DirectoryProvider，测试没有套这层 Provider）——都 mock 掉。
+vi.mock('../../hooks/useVcsInfo', () => ({
+  useVcsInfo: () => useVcsInfoMock(),
+}))
+
+vi.mock('../../contexts/useDirectory', () => ({
+  useDirectory: () => useDirectoryMock(),
 }))
 
 vi.mock('../../contexts/useSessionContext', () => ({
@@ -74,7 +87,6 @@ vi.mock('../message/synthNotifPersist', () => ({
 
 vi.mock('../../api', () => ({
   updateSession: (...args: unknown[]) => updateSessionMock(...args),
-  deleteSession: (...args: unknown[]) => deleteSessionMock(...args),
 }))
 
 vi.mock('../../api/acpBridge', () => ({
@@ -150,8 +162,6 @@ describe('SessionHubPanel', () => {
     useUnreadNotificationCountMock.mockReturnValue(0)
     updateSessionMock.mockReset()
     updateSessionMock.mockResolvedValue(undefined)
-    deleteSessionMock.mockReset()
-    deleteSessionMock.mockResolvedValue(undefined)
     restoreAllChildSessionsMock.mockReset()
     getSessionInfoMock.mockReset()
     getSessionInfoMock.mockReturnValue(undefined)
@@ -161,6 +171,13 @@ describe('SessionHubPanel', () => {
     childSessionGetVersionMock.mockReturnValue(0)
     useLayoutStoreMock.mockReset()
     useLayoutStoreMock.mockReturnValue({ sidebarShowChildSessions: false })
+    useVcsInfoMock.mockReset()
+    useVcsInfoMock.mockReturnValue({ vcsInfo: null, isLoading: false, error: null, refresh: vi.fn() })
+    useDirectoryMock.mockReset()
+    useDirectoryMock.mockReturnValue({ currentDirectory: undefined, recentProjects: {}, touchDirectory: vi.fn() })
+    // sessionHubViewStore 是模块级单例，viewMode 会持久化到 localStorage 并跨测试保留——
+    // 每个测试前重置回默认的 list 视图，避免测试间互相污染。
+    sessionHubViewStore.setViewMode('list')
   })
 
   it('渲染全局会话列表（含不同目录的会话）', () => {
@@ -196,7 +213,7 @@ describe('SessionHubPanel', () => {
     expect(screen.getByText('会话 B')).toBeInTheDocument()
   })
 
-  it('按项目分组：同目录折叠到分组头', () => {
+  it('切换到文件夹视图：同目录会话折叠到分组头（项目名 + 会话数）', () => {
     useSessionContextMock.mockReturnValue(
       sessionCtx([
         makeSession({ id: 's1', directory: 'C:\\repo' }),
@@ -205,13 +222,13 @@ describe('SessionHubPanel', () => {
     )
     const { container } = renderPanel()
 
-    // 点击 topbar 之外的「分组」切换按钮开启分组
-    fireEvent.click(screen.getByText('sessionsHub.groupByProject'))
-    // getDirectoryName('C:\\repo') = 'repo'；分组头应该显示「repo · 2」
-    // groupHeaderCount mock 返回 "sessionsHub.groupHeaderCount:2"，外加硬编码 "· "
-    // 文本被拆到两个 span 中，用 textContent 校验父容器
-    const groupHead = container.querySelector('[class*="uppercase"]')
-    expect(groupHead?.textContent).toBe('repo· sessionsHub.groupHeaderCount:2')
+    // 点击视图切换按钮，从列表视图切到文件夹视图
+    fireEvent.click(screen.getByTitle('sessionsHub.viewFolder'))
+    // getDirectoryName('C:\\repo') = 'repo'；ProjectGroupHeader（aria-expanded 按钮）
+    // 渲染项目名 + 会话数（groupHeaderCount mock 返回 "sessionsHub.groupHeaderCount:2"）
+    const groupHead = container.querySelector('button[aria-expanded]')
+    expect(groupHead?.textContent).toContain('repo')
+    expect(groupHead?.textContent).toContain('sessionsHub.groupHeaderCount:2')
   })
 
   it('点新建打开对话框，fake-create 后触发 onNewSession', () => {
@@ -234,9 +251,9 @@ describe('SessionHubPanel', () => {
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 's1' }))
   })
 
-  it('删除当前选中会话会触发 onNewSession（fallback 行为）', async () => {
-    deleteSessionMock.mockResolvedValue(true)
-    useSessionContextMock.mockReturnValue(sessionCtx([makeSession({ id: 'current' })]))
+  it('删除当前选中会话走 SessionContext.deleteSession 并触发 onNewSession（fallback 行为）', async () => {
+    const ctx = sessionCtx([makeSession({ id: 'current' })])
+    useSessionContextMock.mockReturnValue(ctx)
     const onNewSession = vi.fn()
     renderPanel({ selectedSessionId: 'current', onNewSession })
 
@@ -244,7 +261,9 @@ describe('SessionHubPanel', () => {
     fireEvent.click(screen.getByTitle('sessionsHub.deleteSession'))
     fireEvent.click(screen.getByText('sessionsHub.delete'))
     await act(async () => {})
-    expect(deleteSessionMock).toHaveBeenCalledWith('current')
+    // 必须走 context 的 deleteSession（本地过滤 sessions state），不能直接调裸的 api.deleteSession——
+    // 否则删除后列表不会刷新，UI 看起来像"点击没反应"（回归测试保护这个具体的 bug）。
+    expect(ctx.deleteSession).toHaveBeenCalledWith('current')
     expect(onNewSession).toHaveBeenCalled()
   })
 

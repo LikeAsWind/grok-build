@@ -3,19 +3,22 @@
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SearchIcon, CloseIcon, BellIcon, NewChatIcon, SidebarIcon, CheckIcon } from '../../components/Icons'
+import { SearchIcon, CloseIcon, BellIcon, NewChatIcon, SidebarIcon } from '../../components/Icons'
 import { useSessionContext } from '../../contexts/useSessionContext'
 import { useBusySessions } from '../../store/activeSessionStore'
 import { useNotifications, useUnreadNotificationCount } from '../../store/notificationStore'
 import { childSessionStore } from '../../store/childSessionStore'
 import { useLayoutStore } from '../../store/layoutStore'
-import { updateSession, deleteSession as apiDeleteSession, type ApiSession } from '../../api'
+import { sessionHubViewStore } from '../../store/sessionHubViewStore'
+import { updateSession, type ApiSession } from '../../api'
 import { getServerCwd } from '../../api/acpBridge'
-import { getDirectoryName, normalizeToForwardSlash, uiErrorHandler } from '../../utils'
+import { uiErrorHandler } from '../../utils'
 import { SidebarFooter } from '../chat/sidebar/SidebarFooter'
 import { restoreAllChildSessions } from '../message/synthNotifPersist'
 import { SessionListItem } from './SessionListItem'
 import { NewSessionDialog } from './NewSessionDialog'
+import { SessionHubFolderView } from './SessionHubFolderView'
+import { ViewToggleButton } from './ViewToggleButton'
 import { deriveSessionUiStatus, type SessionUiStatus } from './status'
 import { buildSessionTree, resolveChildTitle } from './sessionTree'
 
@@ -70,17 +73,6 @@ function deriveAllStatuses(
   return map
 }
 
-function groupByDirectory(sessions: ApiSession[]): Array<{ directory: string; sessions: ApiSession[] }> {
-  const groups = new Map<string, ApiSession[]>()
-  for (const s of sessions) {
-    const key = s.directory ? normalizeToForwardSlash(s.directory) : '(none)'
-    const list = groups.get(key)
-    if (list) list.push(s)
-    else groups.set(key, [s])
-  }
-  return Array.from(groups.entries()).map(([directory, list]) => ({ directory, sessions: list }))
-}
-
 export function SessionHubPanel({
   onNewSession,
   onSelectSession,
@@ -90,7 +82,7 @@ export function SessionHubPanel({
   onOpenSettings,
 }: SessionHubPanelProps) {
   const { t } = useTranslation(['chat', 'common'])
-  const { sessions, isLoading, search, setSearch, refresh } = useSessionContext()
+  const { sessions, isLoading, search, setSearch, refresh, deleteSession } = useSessionContext()
   const busySessions = useBusySessions()
   const notifications = useNotifications()
   const unreadCount = useUnreadNotificationCount()
@@ -115,9 +107,9 @@ export function SessionHubPanel({
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [filterOpen, setFilterOpen] = useState(false)
-  const [groupByProject, setGroupByProject] = useState(false)
   const [bellOpen, setBellOpen] = useState(false)
   const [newDialogOpen, setNewDialogOpen] = useState(false)
+  const viewSnapshot = useSyncExternalStore(sessionHubViewStore.subscribe, sessionHubViewStore.getSnapshot)
 
   const busyIds = useMemo(() => new Set(busySessions.map(b => b.sessionId)), [busySessions])
   const statuses = useMemo(
@@ -148,8 +140,20 @@ export function SessionHubPanel({
     [filtered, sidebarShowChildSessions, selectedSessionId, busyIds, getParentId],
   )
 
-  // 分组只按顶层会话的目录来分，子会话跟着父走，不管子会话自己的 directory 字段是什么
-  const groups = useMemo(() => groupByDirectory(topLevel), [topLevel])
+  // 子会话刚 spawn 时 roster 里的 title 经常是空的，统一在这里用
+  // childSessionStore 兜底一次，列表视图（renderSessionWithChildren）和文件夹视图
+  // （SessionHubFolderView）共用这份结果，不必各自重复调用 resolveChildTitle。
+  const resolvedChildrenByParent = useMemo(() => {
+    const map = new Map<string, ApiSession[]>()
+    childrenByParent.forEach((children, parentId) => {
+      map.set(
+        parentId,
+        children.map(child => resolveChildTitle(child, childSessionStore.getSessionInfo(child.id))),
+      )
+    })
+    return map
+    // childSessionVersion：subagent_spawned/markIdle/markError 到达时重算标题兜底
+  }, [childrenByParent, childSessionVersion])
 
   const handleRename = useCallback(
     async (sessionId: string, title: string) => {
@@ -165,12 +169,16 @@ export function SessionHubPanel({
 
   const handleDelete = useCallback(
     async (sessionId: string) => {
-      await apiDeleteSession(sessionId)
-      if (selectedSessionId === sessionId) {
-        onNewSession()
+      try {
+        await deleteSession(sessionId)
+        if (selectedSessionId === sessionId) {
+          onNewSession()
+        }
+      } catch (e) {
+        uiErrorHandler('delete session', e)
       }
     },
-    [selectedSessionId, onNewSession],
+    [deleteSession, selectedSessionId, onNewSession],
   )
 
   const renderItem = (session: ApiSession, indent = false) => (
@@ -187,14 +195,16 @@ export function SessionHubPanel({
   )
 
   // 顶层会话紧跟着渲染它的子会话（单层嵌套，见 sessionTree.ts）；有子会话时用同样
-  // 的 space-y-0.5 包一层，保持行间距和无子会话时一致
+  // 的 space-y-0.5 包一层，保持行间距和无子会话时一致。用 resolvedChildrenByParent
+  // （已统一做过标题兜底）而不是原始 childrenByParent，避免和文件夹视图各自重复
+  // 调用 resolveChildTitle。
   const renderSessionWithChildren = (session: ApiSession) => {
-    const children = childrenByParent.get(session.id)
+    const children = resolvedChildrenByParent.get(session.id)
     if (!children?.length) return renderItem(session)
     return (
       <div key={session.id} className="space-y-0.5">
         {renderItem(session)}
-        {children.map(child => renderItem(resolveChildTitle(child, childSessionStore.getSessionInfo(child.id)), true))}
+        {children.map(child => renderItem(child, true))}
       </div>
     )
   }
@@ -293,17 +303,7 @@ export function SessionHubPanel({
               ? `${t('sessionsHub.filter')}${t('sessionsHub.filterSeparator')}${t(`sessionsHub.${filterLabelKey(statusFilter)}`)}`
               : t('sessionsHub.filter')}
           </button>
-          <button
-            type="button"
-            onClick={() => setGroupByProject(!groupByProject)}
-            className={`h-7 px-2 rounded-md text-[length:var(--fs-xs)] transition-colors flex items-center gap-1 ${
-              groupByProject ? 'text-accent-main-100' : 'text-text-400 hover:text-text-200'
-            }`}
-            title={t('sessionsHub.groupByProject')}
-          >
-            <CheckIcon size={12} className={groupByProject ? '' : 'opacity-0'} />
-            {t('sessionsHub.groupByProject')}
-          </button>
+          <ViewToggleButton />
           <button
             type="button"
             onClick={() => setBellOpen(!bellOpen)}
@@ -363,16 +363,16 @@ export function SessionHubPanel({
           <div className="flex flex-col items-center justify-center py-12 text-text-400 opacity-60">
             <p className="text-[length:var(--fs-sm)]">{search ? t('sessionsHub.noMatches') : t('sessionsHub.noSessionsYet')}</p>
           </div>
-        ) : groupByProject ? (
-          groups.map(group => (
-            <div key={group.directory} className="mt-2">
-              <div className="flex items-center gap-1.5 px-2 py-1 text-[length:var(--fs-xs)] font-medium text-text-400 uppercase tracking-wider">
-                <span className="truncate">{group.directory === '(none)' ? t('sessionsHub.noDirectory') : getDirectoryName(group.directory)}</span>
-                <span className="text-text-500">· {t('sessionsHub.groupHeaderCount', { count: group.sessions.length })}</span>
-              </div>
-              <div className="space-y-0.5">{group.sessions.map(renderSessionWithChildren)}</div>
-            </div>
-          ))
+        ) : viewSnapshot.viewMode === 'folder' ? (
+          <SessionHubFolderView
+            topLevel={topLevel}
+            childrenByParent={resolvedChildrenByParent}
+            selectedSessionId={selectedSessionId}
+            uiStatusMap={statuses}
+            onSelect={onSelectSession}
+            onRename={handleRename}
+            onDelete={handleDelete}
+          />
         ) : (
           <div className="mt-1 space-y-0.5">{topLevel.map(renderSessionWithChildren)}</div>
         )}
