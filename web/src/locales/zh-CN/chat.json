@@ -257,6 +257,7 @@
     "delete": "删除",
     "deleteConfirmBody": "删除后不可恢复，确定删除这个会话吗？",
     "loading": "加载中…",
-    "noDirectory": "无目录"
+    "noDirectory": "无目录",
+    "diffStatsStale": "数据可能过时"
   }
 }

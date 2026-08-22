@@ -137,4 +137,64 @@ describe('SessionListItem', () => {
     )
     expect(container.querySelector('[data-indent="true"]')).not.toBeNull()
   })
+
+  describe('diff stats', () => {
+    it('显示实时统计（isLive: true），无 stale 提示', () => {
+      const { container } = render(
+        <SessionListItem
+          session={makeSession()}
+          isSelected={false}
+          uiStatus={{ kind: 'idle' }}
+          onSelect={() => {}}
+          onRename={() => Promise.resolve()}
+          onDelete={() => Promise.resolve()}
+          diffStats={{ additions: 10, deletions: 5, files: 2, isLive: true }}
+        />,
+      )
+      expect(screen.getByText('+10')).toBeInTheDocument()
+      expect(screen.getByText('-5')).toBeInTheDocument()
+      expect(screen.getByText('2f')).toBeInTheDocument()
+      expect(container.querySelector('[title="sessionsHub.diffStatsStale"]')).toBeNull()
+      // isLive: true 时用绿/红上色，不能退化成 stale 的灰色
+      expect(container.querySelector('.text-green-500')).not.toBeNull()
+      expect(container.querySelector('.text-red-500')).not.toBeNull()
+    })
+
+    it('显示落盘快照并用灰色提示（isLive: false）', () => {
+      const { container } = render(
+        <SessionListItem
+          session={makeSession()}
+          isSelected={false}
+          uiStatus={{ kind: 'idle' }}
+          onSelect={() => {}}
+          onRename={() => Promise.resolve()}
+          onDelete={() => Promise.resolve()}
+          diffStats={{ additions: 10, deletions: 5, files: 2, isLive: false }}
+        />,
+      )
+      expect(screen.getByText('+10')).toBeInTheDocument()
+      expect(screen.getByText('-5')).toBeInTheDocument()
+      expect(screen.getByText('2f')).toBeInTheDocument()
+      expect(container.querySelector('[title="sessionsHub.diffStatsStale"]')).not.toBeNull()
+      // isLive: false 时 additions/deletions 也退化成灰色，不能仍然是绿/红
+      expect(container.querySelector('.text-green-500')).toBeNull()
+      expect(container.querySelector('.text-red-500')).toBeNull()
+    })
+
+    it('无统计数据时不显示 diff 行', () => {
+      render(
+        <SessionListItem
+          session={makeSession()}
+          isSelected={false}
+          uiStatus={{ kind: 'idle' }}
+          onSelect={() => {}}
+          onRename={() => Promise.resolve()}
+          onDelete={() => Promise.resolve()}
+          diffStats={null}
+        />,
+      )
+      expect(screen.queryByText(/^\+/)).toBeNull()
+      expect(screen.queryByText(/f$/)).toBeNull()
+    })
+  })
 })

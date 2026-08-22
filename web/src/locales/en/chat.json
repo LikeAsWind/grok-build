@@ -257,6 +257,7 @@
     "delete": "Delete",
     "deleteConfirmBody": "This will permanently delete the session. Continue?",
     "loading": "Loading…",
-    "noDirectory": "No directory"
+    "noDirectory": "No directory",
+    "diffStatsStale": "Data may be outdated"
   }
 }

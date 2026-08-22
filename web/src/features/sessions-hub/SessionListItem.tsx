@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog'
 import { getDirectoryName } from '../../utils'
 import type { ApiSession } from '../../api'
 import type { SessionUiStatus } from './status'
+import type { SessionDiffStats } from './useResidentSessionDiffStats'
 
 const STATUS_DOT: Record<SessionUiStatus['kind'], string> = {
   working: 'bg-blue-500',
@@ -25,6 +26,8 @@ export interface SessionListItemProps {
   onDelete: (sessionId: string) => Promise<void>
   /** 子会话嵌套展示：加左侧缩进 + 细左边框，不做展开/折叠或连接线 */
   indent?: boolean
+  /** diff 统计（+增/-删/改动文件数）。null/undefined 时不渲染这一行 */
+  diffStats?: SessionDiffStats | null
 }
 
 function formatRelativeTime(t: (key: string, opts?: { count: number }) => string, ts: number, now: number): string {
@@ -45,6 +48,7 @@ export function SessionListItem({
   onRename,
   onDelete,
   indent = false,
+  diffStats = null,
 }: SessionListItemProps) {
   const { t } = useTranslation('chat')
   const [editing, setEditing] = useState(false)
@@ -109,6 +113,24 @@ export function SessionListItem({
               <span className="truncate max-w-[40%] font-mono opacity-80">{directoryName}</span>
             )}
           </div>
+          {diffStats && (
+            // 数据存在就显示，哪怕三个数字都是 0（比如刚建的会话）——
+            // 全 0 时隐藏需要额外判断且设计文档未明确要求，保持"有数据就展示"更简单可预测。
+            <div
+              className={`flex items-center gap-1.5 text-[length:var(--fs-xxs)] font-mono ${
+                diffStats.isLive ? '' : 'opacity-60'
+              }`}
+              title={diffStats.isLive ? undefined : t('sessionsHub.diffStatsStale')}
+            >
+              <span className={diffStats.isLive ? 'text-green-500' : 'text-text-400'}>
+                +{diffStats.additions}
+              </span>
+              <span className={diffStats.isLive ? 'text-red-500' : 'text-text-400'}>
+                -{diffStats.deletions}
+              </span>
+              <span className="text-text-400">{diffStats.files}f</span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
