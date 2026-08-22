@@ -49,6 +49,7 @@ xai-acp-lib / agent-client-protocol v0.10.x
 - `themeStore.ts` — 主题（与 `ui.theme` 热重载联动）
 - `layoutStore.ts` — 持久化侧栏宽度 / 面板可见性
 - `followupQueueStore.ts` — streaming 期间的 follow-up 队列
+- `sessionHubViewStore.ts` — 会话侧栏列表/文件夹视图模式 + 文件夹展开状态，localStorage 持久化，`useSyncExternalStore` 稳定 snapshot
 - `messageStore.ts`（未改）— 消费 `events.ts` 注入的 OpenCodeUI 事件
 
 **React glue — `web/src/contexts/` + `web/src/hooks/`**
@@ -62,11 +63,15 @@ xai-acp-lib / agent-client-protocol v0.10.x
 - `chat/` — `ChatPane`、`Header`（模型+模式+ACP 连接状态+服务器切换）、`InputBox`、`InputToolbar`（`@` 提及 / `/` 命令 / follow-up 队列徽章）、`sidebar/SidebarFooter`、`sidebar/ContextDetailsDialog`、`sidebar/DirBrowserModal`（`browseDirectory` 工作目录选择）
 - `sessions-hub/` — 新侧栏主面板（替换旧 `chat/sidebar/SidePanel` 与 `chat/ProjectDialog`）：
   - `status.ts` — 会话状态徽章派生纯函数（priority: busy → pending → 通知）
+  - `sessionTree.ts` — 父子会话单层嵌套（`buildSessionTree`）+ 子会话标题兜底（`resolveChildTitle`）
   - `worktreeStatusStore.ts` — `x.ai/git/worktree/status` 进度订阅
   - `DirectorySelector.tsx` — 最近目录列表 + 手动路径输入
   - `NewSessionDialog.tsx` — 新建对话框：目录选择 + worktree 开关 + 创建编排
-  - `SessionListItem.tsx` — 单条会话条目：状态徽章 + 重命名 + 删除
-  - `SessionHubPanel.tsx` — 新侧栏主面板：全局会话 + 筛选 + 分组 + 通知铃铛
+  - `SessionListItem.tsx` — 单条会话条目：状态徽章 + 重命名 + 删除 + diff 统计行（`+N -N Nf`，`isLive:false` 灰化提示落盘快照）
+  - `SessionHubPanel.tsx` — 新侧栏主面板：全局会话 + 筛选 + 通知铃铛 + 列表/文件夹视图切换（`ViewToggleButton` + `sessionHubViewStore`）
+  - `SessionHubFolderView.tsx` / `ProjectGroup.tsx` / `ProjectGroupHeader.tsx` — 文件夹视图：按目录分组（复用 `SessionHubPanel` 已过滤+嵌套好的 `topLevel`/`childrenByParent`），组头显示分支名（`useVcsInfo`）+ 汇总状态圆点 + 会话数，展开状态持久化
+  - `useResidentSessionDiffStats.ts` — 对 resident 会话并行查询 `x.ai/hunk-tracker/get-summary`，失败/非 resident 回退落盘快照（`session.additions/deletions/files`）
+  - `ViewToggleButton.tsx` — 列表 ⇄ 文件夹视图切换按钮
 - `settings/` — `SettingsDialog`（双 tab：表单 / TOML 源码）+ `components/`：
   - `GrokConfigSettings.tsx` — 左 rail 列 `grokConfigSchema` 的分区，右 pane 渲染 `ConfigSectionCard`
   - `ConfigFieldControl.tsx` — 数据驱动：开关/输入/下拉、密钥掩码、模型引用下拉、规则对、键值对、Anthropic / OpenAI / Ollama 预设
@@ -86,7 +91,7 @@ xai-acp-lib / agent-client-protocol v0.10.x
 | # | 内容 | 状态 |
 |---|---|---|
 | 1 | 核心聊天回路（发消息 → 流式回复） | ✅ |
-| 2 | 会话管理（list / create / delete / fork / 历史回放） | ✅ 全局列表 + 状态徽章 + 新建对话框 |
+| 2 | 会话管理（list / create / delete / fork / 历史回放） | ✅ 全局列表 + 状态徽章 + 新建对话框 + 列表/文件夹双视图（分支名+状态圆点+diff统计） |
 | 3a | 权限弹窗 | ✅ |
 | 3b | AskUserQuestion 弹窗 | ✅ |
 | 3c | Plan Approval（`x.ai/exit_plan_mode`） | ✅ `PlanApprovalModal` + `planApprovalStore`，尊重 `[ui] yolo` 配置（yolo=true 自动批准） |
@@ -164,11 +169,11 @@ Dev 模式（Vite + 后端分离）：`cd web && npm run dev` —— 通过 `vit
 ```bash
 cd web
 npm run typecheck   # tsc -b，必须无错
-npm run test:run    # vitest —— 92 文件 / 595 用例 / 5 skip
+npm run test:run    # vitest —— 107 文件 / 770 用例 / 3 skip
 npm run build       # vite 生产构建
 ```
 
-后端：`cargo build --features "xai-grok-pager-bin/web-ui"`。
+后端：`cargo build --features "xai-grok-pager-bin/web-ui"`。跑起来的 debug 二进制（`target/debug/xai-grok-pager.exe`）同样需要 `editbin /STACK:8388608` 打栈补丁，否则某些深栈路径（如 auth 重试测试、`grok web` 启动）会在 Windows 上栈溢出——这不是本次改动引入的问题，是已知的既有环境限制。
 
 ### 在本仓库工作
 
