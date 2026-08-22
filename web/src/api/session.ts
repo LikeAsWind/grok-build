@@ -38,6 +38,11 @@ interface RosterEntry {
   title?: string | null
   cwd: string
   lastChangeUnixMs?: number
+  additions?: number
+  deletions?: number
+  files?: number
+  /** true = 进程内仍有 resident actor 驱动该会话（不论 busy/idle）；false = 仅存在于磁盘 */
+  resident?: boolean
 }
 
 // ============================================
@@ -81,6 +86,10 @@ function mapRosterToSession(entry: RosterEntry): ApiSession {
     title: entry.title ?? '',
     version: '',
     time: { created: ts, updated: ts },
+    additions: entry.additions,
+    deletions: entry.deletions,
+    files: entry.files,
+    resident: entry.resident,
   } as unknown as ApiSession
 }
 
