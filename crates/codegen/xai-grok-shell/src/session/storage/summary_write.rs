@@ -58,6 +58,16 @@ pub(crate) struct GitHeadPatch {
     pub branch: Option<String>,
 }
 
+/// Hunk-tracker diff stats captured at session close / idle unload.
+/// Last-writer-wins on all three fields together (they are read from the
+/// tracker in one snapshot, so they never apply partially).
+#[derive(Debug, Clone)]
+pub(crate) struct DiffStatsPatch {
+    pub additions: usize,
+    pub deletions: usize,
+    pub files: usize,
+}
+
 /// Telemetry trace bookkeeping. `next_trace_turn` is monotonic; `request_id`
 /// is applied only when this turn wins, so a stale lower-turn write cannot
 /// leave a high `next_trace_turn` paired with an older `request_id` (these
@@ -101,6 +111,9 @@ pub(crate) struct SummaryPatch {
     /// applies (last-writer-wins); `Some(None)` clears it (conversation
     /// rewind removed the described work).
     pub last_turn_summary: Option<Option<(String, String)>>,
+    /// Hunk-tracker diff stats snapshot, captured once at session close /
+    /// idle unload (see `finish_session_exit_feedback`).
+    pub diff_stats: Option<DiffStatsPatch>,
 }
 
 impl Summary {
@@ -170,6 +183,11 @@ impl Summary {
             let (text, prompt_id) = last_turn_summary.clone().unzip();
             self.last_turn_summary = text;
             self.last_turn_summary_prompt_id = prompt_id;
+        }
+        if let Some(diff_stats) = &patch.diff_stats {
+            self.additions = Some(diff_stats.additions);
+            self.deletions = Some(diff_stats.deletions);
+            self.files = Some(diff_stats.files);
         }
         let mut absent_title_applied = false;
         if patch.reset_title_to_auto {
@@ -649,5 +667,51 @@ mod tests {
             );
             assert_ne!(summary.display_title(), "Manual Title");
         }
+    }
+
+    /// `update_diff_stats` (queued by `capture_diff_stats_on_exit` at session
+    /// close / idle unload) writes all three fields together.
+    #[tokio::test]
+    async fn update_diff_stats_writes_all_three_fields() {
+        let dir = TempDir::new().unwrap();
+        let (adapter, info, summary_path) = new_session(&dir).await;
+
+        adapter.update_diff_stats(&info, 42, 7, 3).await.unwrap();
+
+        let summary = read_summary(&summary_path).unwrap();
+        assert_eq!(summary.additions, Some(42));
+        assert_eq!(summary.deletions, Some(7));
+        assert_eq!(summary.files, Some(3));
+    }
+
+    /// A later snapshot overwrites the previous one wholesale (last-writer-
+    /// wins on the group, not per-field) — the tracker is queried once and the
+    /// three counts always come from the same snapshot.
+    #[tokio::test]
+    async fn update_diff_stats_overwrites_previous_snapshot() {
+        let dir = TempDir::new().unwrap();
+        let (adapter, info, summary_path) = new_session(&dir).await;
+
+        adapter.update_diff_stats(&info, 10, 5, 2).await.unwrap();
+        adapter.update_diff_stats(&info, 20, 1, 4).await.unwrap();
+
+        let summary = read_summary(&summary_path).unwrap();
+        assert_eq!(summary.additions, Some(20));
+        assert_eq!(summary.deletions, Some(1));
+        assert_eq!(summary.files, Some(4));
+    }
+
+    /// A session that never had diff stats captured (e.g. crashed before
+    /// shutdown, or predates this feature) keeps `None`, not `0` — the
+    /// frontend must be able to distinguish "no data" from "zero changes".
+    #[tokio::test]
+    async fn summary_without_diff_stats_defaults_to_none() {
+        let dir = TempDir::new().unwrap();
+        let (_adapter, _info, summary_path) = new_session(&dir).await;
+
+        let summary = read_summary(&summary_path).unwrap();
+        assert_eq!(summary.additions, None);
+        assert_eq!(summary.deletions, None);
+        assert_eq!(summary.files, None);
     }
 }

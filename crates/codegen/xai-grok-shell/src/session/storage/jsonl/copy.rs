@@ -538,6 +538,11 @@ fn fork_summary(
         } else {
             source.last_turn_summary_prompt_id
         },
+        // The fork is a fresh session with its own hunk-tracker; it has not
+        // made any edits yet, so it starts with no diff stats of its own.
+        additions: None,
+        deletions: None,
+        files: None,
     }
 }
 

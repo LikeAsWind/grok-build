@@ -424,6 +424,13 @@ pub enum PersistenceMsg {
         commit: Option<String>,
         branch: Option<String>,
     },
+    /// Persist a hunk-tracker diff-stats snapshot (additions/deletions/files)
+    /// captured once at session close / idle unload.
+    DiffStats {
+        additions: usize,
+        deletions: usize,
+        files: usize,
+    },
     /// Persist a compaction checkpoint file to `compaction_checkpoints/{id}.json`.
     CompactionCheckpoint(crate::extensions::notification::CompactionCheckpointFile),
     /// Persist a compaction request+response artifact to
@@ -1010,6 +1017,15 @@ pub struct Summary {
     /// resume.
     #[serde(default, skip_serializing_if = "is_false")]
     pub title_is_manual: bool,
+    /// 会话期间代码增加的行数（hunk-tracker accepted + pending）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<usize>,
+    /// 会话期间代码删除的行数（hunk-tracker accepted + pending）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<usize>,
+    /// 会话期间修改的文件数（hunk-tracker files_modified）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<usize>,
     /// Human-readable label for the worktree directory (e.g. "nuke-v-tables").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_label: Option<String>,
@@ -1096,6 +1112,9 @@ impl Summary {
             reasoning_effort: None,
             last_turn_summary: None,
             last_turn_summary_prompt_id: None,
+            additions: None,
+            deletions: None,
+            files: None,
         })
     }
 
@@ -1414,6 +1433,61 @@ mod generated_title_tests {
         let json = serde_json::to_string(&summary).unwrap();
         assert!(!json.contains("generated_title"));
         assert!(!json.contains("worktree_label"));
+    }
+
+    #[test]
+    fn summary_deserializes_without_diff_stats_backward_compat() {
+        // 旧会话（本功能上线前创建）的 summary.json 不含 additions/deletions/files。
+        let json = r#"{
+            "info": { "id": "old-session", "cwd": "/tmp" },
+            "session_summary": "first prompt text",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "num_messages": 5,
+            "num_chat_messages": 3,
+            "current_model_id": "test-model"
+        }"#;
+        let summary: Summary = serde_json::from_str(json).unwrap();
+        assert_eq!(summary.additions, None);
+        assert_eq!(summary.deletions, None);
+        assert_eq!(summary.files, None);
+    }
+
+    #[test]
+    fn summary_skips_none_diff_stats_in_json() {
+        let summary = Summary::new(
+            &Info {
+                id: acp::SessionId::new("test"),
+                cwd: "/tmp".into(),
+            },
+            default_model_id(),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(!json.contains("additions"));
+        assert!(!json.contains("deletions"));
+        assert!(!json.contains("files"));
+    }
+
+    #[test]
+    fn summary_roundtrips_diff_stats_when_present() {
+        let mut summary = Summary::new(
+            &Info {
+                id: acp::SessionId::new("test"),
+                cwd: "/tmp".into(),
+            },
+            default_model_id(),
+        )
+        .unwrap();
+        summary.additions = Some(12);
+        summary.deletions = Some(4);
+        summary.files = Some(3);
+
+        let json = serde_json::to_string(&summary).unwrap();
+        let deserialized: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.additions, Some(12));
+        assert_eq!(deserialized.deletions, Some(4));
+        assert_eq!(deserialized.files, Some(3));
     }
 
     #[test]
@@ -2431,6 +2505,19 @@ impl SessionPersistence {
                         .await
                     {
                         tracing::warn!(?e, "failed to persist git HEAD");
+                    }
+                }
+                PersistenceMsg::DiffStats {
+                    additions,
+                    deletions,
+                    files,
+                } => {
+                    if let Err(e) = self
+                        .storage
+                        .update_diff_stats(&self.info, additions, deletions, files)
+                        .await
+                    {
+                        tracing::warn!(?e, "failed to persist diff stats");
                     }
                 }
                 PersistenceMsg::CompactionCheckpoint(checkpoint) => {

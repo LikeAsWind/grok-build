@@ -57,6 +57,27 @@ async fn fire_session_end_hooks(session: &SessionActor, reason: &str) {
     }
     session.dispatch_session_end_stop(reason).await;
 }
+/// Snapshot the session's hunk-tracker stats and queue them for persistence
+/// into `summary.json` (best-effort — fire-and-forget on the persistence
+/// channel, like `PersistGitHead`). Called once per shutdown, covering both
+/// `session/close` (`hard_stop_resident`) and idle unload
+/// (`request_session_shutdown`), which both funnel into this `Shutdown` arm.
+/// A crash between the snapshot and the write is an accepted loss (see
+/// `docs/superpowers/specs/2026-08-21-folder-view-diff-stats-design.md`).
+async fn capture_diff_stats_on_exit(session: &SessionActor) {
+    let summary = session.tool_context.hunk_tracker_handle.get_session_summary().await;
+    let additions = summary.stats.accepted_lines_added + summary.pending_lines_added;
+    let deletions = summary.stats.accepted_lines_removed + summary.pending_lines_removed;
+    let files = summary.files_modified;
+    let _ = session
+        .notifications
+        .persistence_tx
+        .send(PersistenceMsg::DiffStats {
+            additions,
+            deletions,
+            files,
+        });
+}
 /// Cancel the feedback sync loop, drain/sync under exit budgets, persist
 /// background-task state, and drop scratch. Owns the single final signal sync
 /// via [`FeedbackManager::shutdown`] — the sync loop cancel arm does not sync.
@@ -451,6 +472,7 @@ pub(super) async fn run_session(
                         // final signal sync + upload drain still run (cancel
                         // alone no longer force-syncs — shutdown owns that).
                         shutdown_workflows(&session).await;
+                        capture_diff_stats_on_exit(&session).await;
                         finish_session_exit_feedback(&session).await;
                         return;
                     };
@@ -558,6 +580,7 @@ pub(super) async fn run_session(
                             }
                         }
                         shutdown_workflows(&session).await;
+                        capture_diff_stats_on_exit(&session).await;
                         finish_session_exit_feedback(&session).await;
                         return;
                     };
@@ -2158,6 +2181,7 @@ pub(super) async fn run_session(
                             session
                                 .run_session_end_memory_pipeline("session summary saved")
                                 .await;
+                            capture_diff_stats_on_exit(&session).await;
                             finish_session_exit_feedback(&session).await;
                             return;
                         }

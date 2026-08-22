@@ -78,6 +78,15 @@ pub struct RosterEntry {
     /// Best-effort last-change timestamp (unix millis). Used for sort order.
     pub last_change_unix_ms: i64,
     pub origin: RosterOrigin,
+    /// 会话期间代码增加的行数（来自 Summary）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<usize>,
+    /// 会话期间代码删除的行数（来自 Summary）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<usize>,
+    /// 会话期间修改的文件数（来自 Summary）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<usize>,
 }
 
 /// Response payload for `x.ai/sessions/list`.
@@ -131,6 +140,10 @@ pub(crate) fn merge_roster(
         if entry.activity != RosterActivity::Working {
             entry.last_change_unix_ms = summary.last_change_unix_ms();
         }
+        // 回填 diff 统计字段
+        entry.additions = summary.additions;
+        entry.deletions = summary.deletions;
+        entry.files = summary.files;
     }
 
     // Remaining summaries have no resident row: emit them as dormant.
@@ -148,6 +161,9 @@ pub(crate) fn merge_roster(
         resident: false,
         last_change_unix_ms: summary.last_change_unix_ms(),
         origin: RosterOrigin::Local,
+        additions: summary.additions,
+        deletions: summary.deletions,
+        files: summary.files,
     }));
 
     // Most-recently-changed first.
@@ -183,6 +199,9 @@ mod merge_roster_tests {
             cwd: format!("/live/{id}"),
             is_worktree: false,
             model_id: Some("grok-4".into()),
+            additions: None,
+            deletions: None,
+            files: None,
             reasoning_effort: None,
             yolo: false,
             activity,
@@ -256,6 +275,48 @@ mod merge_roster_tests {
         let dormant = out.iter().find(|e| e.session_id == "new").unwrap();
         assert_eq!(dormant.activity, RosterActivity::Dormant);
         assert!(!dormant.resident);
+    }
+
+    #[test]
+    fn diff_stats_are_backfilled_from_summary_for_resident_and_dormant() {
+        let mut resident_summary = summary("live", Some("Live one"), 4_000);
+        resident_summary.additions = Some(10);
+        resident_summary.deletions = Some(3);
+        resident_summary.files = Some(2);
+
+        let mut dormant_summary = summary("old", Some("Dormant one"), 1_000);
+        dormant_summary.additions = Some(50);
+        dormant_summary.deletions = Some(20);
+        dormant_summary.files = Some(5);
+
+        let out = merge_roster(
+            vec![resident("live", RosterActivity::Idle, 5_000)],
+            vec![resident_summary, dormant_summary],
+        );
+
+        let live = out.iter().find(|e| e.session_id == "live").unwrap();
+        assert_eq!(live.additions, Some(10));
+        assert_eq!(live.deletions, Some(3));
+        assert_eq!(live.files, Some(2));
+
+        let old = out.iter().find(|e| e.session_id == "old").unwrap();
+        assert_eq!(old.additions, Some(50));
+        assert_eq!(old.deletions, Some(20));
+        assert_eq!(old.files, Some(5));
+    }
+
+    #[test]
+    fn diff_stats_default_to_none_when_summary_has_no_capture() {
+        // Old sessions predating this feature, or sessions that crashed
+        // before shutdown captured a snapshot, have `None` on disk — the
+        // roster must not invent a `0`.
+        let out = merge_roster(
+            vec![resident("live", RosterActivity::Idle, 5_000)],
+            vec![summary("live", Some("Live one"), 4_000)],
+        );
+        assert_eq!(out[0].additions, None);
+        assert_eq!(out[0].deletions, None);
+        assert_eq!(out[0].files, None);
     }
 
     #[test]

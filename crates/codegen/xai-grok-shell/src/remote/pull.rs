@@ -178,6 +178,10 @@ pub(crate) mod hydrate {
             reasoning_effort: None,
             last_turn_summary: None,
             last_turn_summary_prompt_id: None,
+            // Remote pull has no hunk-tracker history to hydrate from.
+            additions: None,
+            deletions: None,
+            files: None,
         };
 
         let json = serde_json::to_string_pretty(&summary)?;

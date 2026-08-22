@@ -336,6 +336,10 @@ impl MvpAgent {
             resident: true,
             last_change_unix_ms: chrono::Utc::now().timestamp_millis(),
             origin: crate::agent::roster::RosterOrigin::Local,
+            // Backfilled from disk `Summary` by `merge_roster` when present.
+            additions: None,
+            deletions: None,
+            files: None,
         })
     }
     /// Snapshot all resident sessions as roster entries (synchronous; no disk).

@@ -1127,6 +1127,26 @@ impl StorageAdapter for JsonlStorageAdapter {
         )
         .await
     }
+    async fn update_diff_stats(
+        &self,
+        info: &Info,
+        additions: usize,
+        deletions: usize,
+        files: usize,
+    ) -> io::Result<()> {
+        self.apply_summary_patch(
+            info,
+            super::summary_write::SummaryPatch {
+                diff_stats: Some(super::summary_write::DiffStatsPatch {
+                    additions,
+                    deletions,
+                    files,
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+    }
     async fn update_next_trace_turn(
         &self,
         info: &Info,

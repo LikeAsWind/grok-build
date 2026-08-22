@@ -1093,6 +1093,16 @@ pub trait StorageAdapter: Send + Sync {
         branch: Option<String>,
     ) -> io::Result<()>;
 
+    /// Persist a hunk-tracker diff-stats snapshot (additions/deletions/files),
+    /// captured once at session close / idle unload.
+    async fn update_diff_stats(
+        &self,
+        info: &Info,
+        additions: usize,
+        deletions: usize,
+        files: usize,
+    ) -> io::Result<()>;
+
     /// Update the monotonic telemetry trace turn counter ("next turn" value).
     async fn update_next_trace_turn(
         &self,
