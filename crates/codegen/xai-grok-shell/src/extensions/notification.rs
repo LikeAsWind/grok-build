@@ -2366,6 +2366,38 @@ mod tests {
         }
     }
 
+    // ── AutoCompactCompleted (pins the snake_case field names the web
+    // bridge reads off the wire — a past camelCase/snake_case mismatch here
+    // silently made the UI show "0 tokens" for every manual /compact) ──
+
+    #[test]
+    fn auto_compact_completed_serializes_snake_case_tag_and_fields() {
+        let update = SessionUpdate::AutoCompactCompleted {
+            tokens_before: Some(164_200),
+            tokens_after: 42_100,
+            elapsed_ms: Some(3200),
+            summary_preview: None,
+        };
+        let json = serde_json::to_value(&update).unwrap();
+        assert_eq!(json["sessionUpdate"], "auto_compact_completed");
+        assert_eq!(json["tokens_before"], 164_200);
+        assert_eq!(json["tokens_after"], 42_100);
+        assert_eq!(json["elapsed_ms"], 3200);
+    }
+
+    #[test]
+    fn auto_compact_completed_optional_fields_skipped_when_none() {
+        let update = SessionUpdate::AutoCompactCompleted {
+            tokens_before: None,
+            tokens_after: 42_100,
+            elapsed_ms: None,
+            summary_preview: None,
+        };
+        let json = serde_json::to_value(&update).unwrap();
+        assert!(json.get("tokens_before").is_none());
+        assert!(json.get("elapsed_ms").is_none());
+    }
+
     #[test]
     fn project_result_hides_costs_when_partial_or_incomplete() {
         let mut model_usage = indexmap::IndexMap::new();

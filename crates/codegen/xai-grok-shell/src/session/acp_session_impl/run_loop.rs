@@ -1048,7 +1048,11 @@ pub(super) async fn run_session(
                         SessionCommand::CompactSession { user_context, respond_to } => {
                             let s = session.clone();
                             tokio::task::spawn_local(async move {
-                                let compact_session = s.run_compact(user_context).await;
+                                // Detached task, no tracked turn — the only
+                                // way the client learns cancellation
+                                // happened, so force the notification even
+                                // though this is a manual trigger.
+                                let compact_session = s.run_compact(user_context, true).await;
                                 let _ = respond_to.send(compact_session);
                             });
                         }

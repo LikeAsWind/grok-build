@@ -63,6 +63,18 @@ fn fingerprint_prefix(items: &[ConversationItem]) -> u64 {
     }
     h.finish()
 }
+/// Percentage of `context_window` occupied by `total_tokens`, rounded to the
+/// nearest whole point. Used by `run_compact` (manual `/compact`) to fill
+/// `AutoCompactStarted.percentage` — the same "how full is the context right
+/// now" math `run_compact_only` already does inline for the auto-compact path.
+fn context_usage_percentage(total_tokens: u64, context_window: u64) -> u8 {
+    if context_window == 0 {
+        0
+    } else {
+        ((total_tokens as f64 / context_window as f64) * 100.0).round() as u8
+    }
+}
+
 /// Outcome of a background prefire pass-1 run, recorded on the
 /// `session.prefire_pass1` span as `compaction_prefire_outcome`.
 /// [`PrefireOutcome::as_str`] values are stable telemetry keys
@@ -154,6 +166,28 @@ mod two_pass_prefire_helper_tests {
     fn prefire_lead_percent_defaults_to_10() {
         unsafe { std::env::remove_var("GROK_PREFIRE_LEAD_PERCENT") };
         assert_eq!(prefire_lead_percent(), 10);
+    }
+}
+#[cfg(test)]
+mod context_usage_percentage_tests {
+    use super::context_usage_percentage;
+    #[test]
+    fn rounds_to_nearest_whole_point() {
+        // 82.4% rounds down, 82.6% rounds up — pins the .round() (not truncation).
+        assert_eq!(context_usage_percentage(824, 1000), 82);
+        assert_eq!(context_usage_percentage(826, 1000), 83);
+    }
+    #[test]
+    fn zero_tokens_is_zero_percent() {
+        assert_eq!(context_usage_percentage(0, 200_000), 0);
+    }
+    #[test]
+    fn zero_context_window_does_not_divide_by_zero() {
+        assert_eq!(context_usage_percentage(1000, 0), 0);
+    }
+    #[test]
+    fn full_window_is_100_percent() {
+        assert_eq!(context_usage_percentage(200_000, 200_000), 100);
     }
 }
 impl SessionActor {
@@ -599,10 +633,19 @@ impl SessionActor {
             error = tracing::field::Empty,
         )
     )]
+    /// `notify_on_cancel`: send `AutoCompactCancelled` on cancellation even
+    /// though this is a manual trigger (normally only `trigger == Auto`
+    /// does). The TUI's `/compact` runs inside a tracked turn, so a cancel
+    /// already hard-aborts the task and reports `TurnCompleted{Cancelled}` —
+    /// pass `false` there. The Web `x.ai/compact_conversation` ext-request
+    /// path runs as a detached task with no tracked turn and no other way to
+    /// learn the outcome — pass `true` there.
     pub(crate) async fn run_compact(
         self: &Arc<Self>,
         user_context: Option<String>,
+        notify_on_cancel: bool,
     ) -> Result<(), acp::Error> {
+        use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
         let (_cancel, _cancel_scope) = self.compaction.cancel.enter();
         self.record_compaction_variant();
         let total_tokens = self.chat_state_handle.get_total_tokens().await;
@@ -612,6 +655,14 @@ impl SessionActor {
             .as_ref()
             .map(|c| c.context_window.get())
             .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        self.send_xai_notification(XaiSessionUpdate::AutoCompactStarted {
+            tokens_used: total_tokens,
+            context_window,
+            percentage: context_usage_percentage(total_tokens, context_window),
+            reason: "Manual compaction requested".to_string(),
+        })
+        .await;
+        let compact_start = std::time::Instant::now();
         self.maybe_pre_compaction_flush(total_tokens, context_window, "pre_compaction")
             .await;
         if let Err(e) = self
@@ -619,6 +670,7 @@ impl SessionActor {
                 user_context,
                 None,
                 xai_grok_telemetry::events::CompactionTrigger::Manual,
+                notify_on_cancel,
             )
             .await
         {
@@ -627,7 +679,7 @@ impl SessionActor {
             span.record("error", e.to_string().as_str());
             return Err(e);
         }
-        use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
+        let elapsed_ms = compact_start.elapsed().as_millis() as i64;
         let tokens_after = self.chat_state_handle.get_total_tokens().await;
         let span = tracing::Span::current();
         span.record("post_tokens", tokens_after as i64);
@@ -635,7 +687,7 @@ impl SessionActor {
         self.send_xai_notification(XaiSessionUpdate::AutoCompactCompleted {
             tokens_before: Some(total_tokens),
             tokens_after,
-            elapsed_ms: None,
+            elapsed_ms: Some(elapsed_ms),
             summary_preview: None,
         })
         .await;
@@ -898,11 +950,14 @@ impl SessionActor {
             compaction_prefix_released = tracing::field::Empty,
         )
     )]
+    /// `notify_on_cancel`: see [`Self::run_compact`] doc comment — forces
+    /// `AutoCompactCancelled` on cancel even when `trigger` is `Manual`.
     async fn run_compact_inner(
         &self,
         user_context: Option<String>,
         auto_continue: Option<crate::extensions::notification::AutoContinueInfo>,
         trigger: xai_grok_telemetry::events::CompactionTrigger,
+        notify_on_cancel: bool,
     ) -> Result<(), acp::Error> {
         let (cancel, _cancel_scope) = self.compaction.cancel.enter();
         let tokens_before = self.chat_state_handle.get_total_tokens().await;
@@ -1155,7 +1210,9 @@ impl SessionActor {
                             crate::session::helpers::session_compact::COMPACT_CANCELLED_MSG,
                         )
                     {
-                        return self.emit_compact_cancelled(auto_trigger).await;
+                        return self
+                            .emit_compact_cancelled(auto_trigger || notify_on_cancel)
+                            .await;
                     }
                     if context_overflow {
                         let next_stage = match input_stage {
@@ -1661,7 +1718,9 @@ impl SessionActor {
                 _ => None,
             });
         if cancel.is_cancelled() {
-            return self.emit_compact_cancelled(auto_trigger).await;
+            return self
+                .emit_compact_cancelled(auto_trigger || notify_on_cancel)
+                .await;
         }
         self.persist_compaction_segment(&segment_messages, &generate_session_compact);
         self.chat_state_handle
@@ -2058,6 +2117,7 @@ impl SessionActor {
                 None,
                 None,
                 xai_grok_telemetry::events::CompactionTrigger::Auto,
+                false,
             )
             .await;
         let elapsed_ms = compact_start.elapsed().as_millis() as i64;
@@ -3238,7 +3298,7 @@ mod inline_auto_compact_flow_tests {
                     ConversationItem::system("sys"),
                     ConversationItem::user("hello"),
                 ]);
-                let result = actor.run_compact(None).await;
+                let result = actor.run_compact(None, false).await;
                 assert!(result.is_err(), "mock 400 must fail the compaction");
                 assert_eq!(
                     actor.compaction.auto_compact_suppressed.load(Relaxed),
@@ -3257,6 +3317,94 @@ mod inline_auto_compact_flow_tests {
                     actor.compaction.auto_compact_suppressed.load(Relaxed),
                     SUPPRESS_NONE,
                     "the same deterministic failure on the AUTO path must suppress"
+                );
+            })
+            .await;
+    }
+    /// The Web UI's `/compact` runs as a detached task (no tracked turn) —
+    /// unlike the TUI's slash-command path, it has no other way to learn a
+    /// cancellation happened, so it passes `notify_on_cancel: true`. Pre-cancel
+    /// via a held outer `enter()` scope (mirrors `pre_cancelled_token_skips_fut`
+    /// in `session_compact.rs`): `run_compact`'s own `enter()` sees a holder
+    /// already active and reuses this same, already-cancelled token — no
+    /// network call is ever attempted, so no mock inference server is needed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn manual_compact_cancel_notifies_when_caller_has_no_turn_fallback() {
+        use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
+        use crate::session::storage::SessionUpdate;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+                let (persistence_tx, mut persistence_rx) = mpsc::unbounded_channel();
+                let actor = Arc::new(
+                    create_test_actor(0, 200_000, 85, gateway_tx, persistence_tx).await,
+                );
+                actor.chat_state_handle.replace_conversation(vec![
+                    ConversationItem::system("sys"),
+                    ConversationItem::user("hello"),
+                ]);
+                let (token, _outer_scope) = actor.compaction.cancel.enter();
+                token.cancel();
+
+                let result = actor.run_compact(None, true).await;
+                assert!(result.is_err(), "a cancelled compact must fail");
+
+                let mut saw_cancelled = false;
+                while let Ok(msg) = persistence_rx.try_recv() {
+                    if let PersistenceMsg::Update(SessionUpdate::Xai(notif)) = msg
+                        && matches!(notif.update, XaiSessionUpdate::AutoCompactCancelled { .. })
+                    {
+                        saw_cancelled = true;
+                    }
+                }
+                assert!(
+                    saw_cancelled,
+                    "Web ext-request path (notify_on_cancel=true) must notify the client \
+                     of a manual-compact cancellation — it has no tracked turn to report it otherwise"
+                );
+            })
+            .await;
+    }
+    /// The TUI's `/compact` runs inside a tracked turn — a cancel already
+    /// hard-aborts the task and reports `TurnCompleted{Cancelled}`, so it
+    /// passes `notify_on_cancel: false` and must NOT also get a redundant
+    /// `AutoCompactCancelled` push (the TUI renders that unconditionally as
+    /// its own scrollback line — sending it here would duplicate the message).
+    #[tokio::test(flavor = "current_thread")]
+    async fn manual_compact_cancel_stays_silent_for_tracked_turn_caller() {
+        use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
+        use crate::session::storage::SessionUpdate;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+                let (persistence_tx, mut persistence_rx) = mpsc::unbounded_channel();
+                let actor = Arc::new(
+                    create_test_actor(0, 200_000, 85, gateway_tx, persistence_tx).await,
+                );
+                actor.chat_state_handle.replace_conversation(vec![
+                    ConversationItem::system("sys"),
+                    ConversationItem::user("hello"),
+                ]);
+                let (token, _outer_scope) = actor.compaction.cancel.enter();
+                token.cancel();
+
+                let result = actor.run_compact(None, false).await;
+                assert!(result.is_err(), "a cancelled compact must fail");
+
+                let mut saw_cancelled = false;
+                while let Ok(msg) = persistence_rx.try_recv() {
+                    if let PersistenceMsg::Update(SessionUpdate::Xai(notif)) = msg
+                        && matches!(notif.update, XaiSessionUpdate::AutoCompactCancelled { .. })
+                    {
+                        saw_cancelled = true;
+                    }
+                }
+                assert!(
+                    !saw_cancelled,
+                    "TUI path (notify_on_cancel=false) must not get a redundant \
+                     AutoCompactCancelled — its tracked-turn cancel path already covers this"
                 );
             })
             .await;
@@ -3298,7 +3446,7 @@ mod inline_auto_compact_flow_tests {
                     before > threshold_tokens,
                     "seed must exceed threshold: {before} <= {threshold_tokens}"
                 );
-                let result = actor.run_compact(None).await;
+                let result = actor.run_compact(None, false).await;
                 assert!(result.is_ok(), "compaction should succeed: {result:?}");
                 assert!(
                     actor.compaction.prefix_released.load(Relaxed),
@@ -3318,7 +3466,7 @@ mod inline_auto_compact_flow_tests {
                     SUPPRESS_NONE,
                     "a shrunk conversation must not suppress AUTO"
                 );
-                let result = actor.run_compact(None).await;
+                let result = actor.run_compact(None, false).await;
                 assert!(
                     result.is_ok(),
                     "second compaction should succeed: {result:?}"
@@ -3373,7 +3521,7 @@ mod inline_auto_compact_flow_tests {
                     before > threshold_tokens,
                     "seed must exceed threshold: {before}"
                 );
-                let result = actor.run_compact(None).await;
+                let result = actor.run_compact(None, false).await;
                 assert!(result.is_ok(), "compaction should succeed: {result:?}");
                 assert!(
                     actor.compaction.prefix_released.load(Relaxed),

@@ -14,7 +14,7 @@ impl SessionActor {
         });
         match action {
             BuiltinAction::Compact { user_context } => {
-                self.run_compact(user_context).await?;
+                self.run_compact(user_context, false).await?;
                 ok_end_turn(0, None)
             }
             BuiltinAction::SetYolo { enabled } => {
