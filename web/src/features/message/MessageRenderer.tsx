@@ -28,6 +28,7 @@ import {
   TaskCompletionPartView,
   MessageErrorView,
 } from './parts'
+import { InfoLine, type InfoLineItem } from './parts/InfoLine'
 import { extractToolData } from './tools'
 import { isQueuedMessage } from './queuedMessage'
 import { isTaskNotificationMessage, isWakeReplyMessage } from './taskNotification'
@@ -909,6 +910,25 @@ const AssistantMessageView = memo(function AssistantMessageView({
     stepFinishDisplay.completedAt &&
     completed != null
 
+  // 没有 step-finish part 时的兜底 footer（如 /compact 摘要回复：没有正常
+  // 回合的 response_completed，天生凑不出 model/token/cost）——复用
+  // InfoLine 而不是自己另起一套 <div><span>，保证字号/间距跟 StepFinishPartView
+  // 和 CompactionPartView 一致。
+  const fallbackFooterItems: InfoLineItem[] = []
+  if (showTurnDurationFooter) {
+    fallbackFooterItems.push({
+      key: 'turnDuration',
+      content: t('stepFinish.totalDuration', { duration: formatDuration(turnDuration!) }),
+    })
+  }
+  if (showCompletedAtFooter) {
+    fallbackFooterItems.push({
+      key: 'completedAt',
+      content: formatCompletedAt(completed!, completedAtFormat),
+      title: formatDetailedDateTime(completed!),
+    })
+  }
+
   if (!isStreaming && parts.length === 0) {
     // process/final 空内容时不占位
     if (processContentScope === 'process' || processContentScope === 'final') return null
@@ -1016,14 +1036,7 @@ const AssistantMessageView = memo(function AssistantMessageView({
       )}
 
       {processContentScope !== 'process' && processContentScope !== 'inline' && (showTurnDurationFooter || showCompletedAtFooter) && (
-        <div className="flex items-center gap-3 py-0.5 text-[length:var(--fs-xxs)] text-text-500">
-          {showTurnDurationFooter && (
-            <span>{t('stepFinish.totalDuration', { duration: formatDuration(turnDuration!) })}</span>
-          )}
-          {showCompletedAtFooter && (
-            <span title={formatDetailedDateTime(completed!)}>{formatCompletedAt(completed!, completedAtFormat)}</span>
-          )}
-        </div>
+        <InfoLine items={fallbackFooterItems} />
       )}
 
       {showMessageActions && hasCopyableText && (

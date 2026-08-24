@@ -1015,15 +1015,62 @@ describe('Web 对话交互全量可用性', () => {
     expect(msgs.some(m => m.info.id.startsWith('msg_tasknotif_subagent:sag-bg-2'))).toBe(true)
   })
 
-  it('compaction 开始/完成内联为系统消息', async () => {
+  it('auto_compact_started 产生 running 态的结构化 compaction part', () => {
     update({ sessionUpdate: 'auto_compact_started', percentage: 92 })
-    // part id 含 Date.now()，同一毫秒会撞 id；真实 compaction 间隔为秒级
-    await new Promise(r => setTimeout(r, 2))
-    update({ sessionUpdate: 'auto_compact_completed', tokensAfter: 5000 })
 
-    const texts = parts().filter(p => p.type === 'text') as Array<Part & { text: string }>
-    expect(texts.some(p => p.text.includes('Compacting') && p.text.includes('92'))).toBe(true)
-    expect(texts.some(p => p.text.includes('compacted') && p.text.includes('5000'))).toBe(true)
+    const compactions = parts().filter(p => p.type === 'compaction') as Array<
+      Part & { status: string; percentage?: number }
+    >
+    expect(compactions).toHaveLength(1)
+    expect(compactions[0].status).toBe('running')
+    expect(compactions[0].percentage).toBe(92)
+  })
+
+  it('auto_compact_completed 用同一个 part id 把 running 态更新为 completed（不新增 part）', () => {
+    update({ sessionUpdate: 'auto_compact_started', percentage: 92 })
+    // wire 上是 snake_case：tokens_before/tokens_after/elapsed_ms
+    update({
+      sessionUpdate: 'auto_compact_completed',
+      tokens_before: 164200,
+      tokens_after: 42100,
+      elapsed_ms: 3200,
+    })
+
+    const compactions = parts().filter(p => p.type === 'compaction') as Array<
+      Part & { id: string; status: string; tokensBefore?: number; tokensAfter?: number; elapsedMs?: number }
+    >
+    // 同一个 part id 原地更新，不是新增一条
+    expect(compactions).toHaveLength(1)
+    expect(compactions[0].status).toBe('completed')
+    expect(compactions[0].tokensBefore).toBe(164200)
+    expect(compactions[0].tokensAfter).toBe(42100)
+    expect(compactions[0].elapsedMs).toBe(3200)
+  })
+
+  it('auto_compact_completed 若之前没有 started（无 running 态兜底），仍产生一条 completed part', () => {
+    update({ sessionUpdate: 'auto_compact_completed', tokens_before: 100, tokens_after: 50, elapsed_ms: 1000 })
+
+    const compactions = parts().filter(p => p.type === 'compaction') as Array<Part & { status: string }>
+    expect(compactions).toHaveLength(1)
+    expect(compactions[0].status).toBe('completed')
+  })
+
+  it('auto_compact_failed 把 running 态收尾为 failed，不留一条永远转圈的卡片', () => {
+    update({ sessionUpdate: 'auto_compact_started', percentage: 88 })
+    update({ sessionUpdate: 'auto_compact_failed', error: 'boom' })
+
+    const compactions = parts().filter(p => p.type === 'compaction') as Array<Part & { status: string }>
+    expect(compactions).toHaveLength(1)
+    expect(compactions[0].status).toBe('failed')
+  })
+
+  it('auto_compact_cancelled 把 running 态收尾为 cancelled', () => {
+    update({ sessionUpdate: 'auto_compact_started', percentage: 88 })
+    update({ sessionUpdate: 'auto_compact_cancelled' })
+
+    const compactions = parts().filter(p => p.type === 'compaction') as Array<Part & { status: string }>
+    expect(compactions).toHaveLength(1)
+    expect(compactions[0].status).toBe('cancelled')
   })
 
   // ── 7. 重试终态错误 → 错误卡片 + session.error ──────────────

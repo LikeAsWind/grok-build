@@ -1536,26 +1536,50 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
     case 'subagent_progress':
       break
     // ── Compaction 通知 ────────────────────────────────────────────
+    // 手动 /compact 和自动 auto-compact 共用这四个通知类型，走同一个固定
+    // part id（不带时间戳）：started 先挂一个 running 态的 compaction part，
+    // completed/failed/cancelled 用同一个 id 原地更新，UI 上表现为一条分隔线
+    // 从"正在压缩"平滑过渡到终态，而不是先后出现两条互不相关的消息。
     case 'auto_compact_started': {
       const ac = update as Record<string, unknown>
       const pct = typeof ac.percentage === 'number' ? ac.percentage : 0
       const id = ensureAssistant(sessionId, turn)
       breakActiveParts(turn)
-      emitPartUpdated(sessionId, id, { id: `${id}:compact:${Date.now()}`, type: 'text', text: `🔄 Compacting context (${pct}% used)...` })
+      emitPartUpdated(sessionId, id, { id: `${id}:compaction`, type: 'compaction', status: 'running', percentage: pct })
       break
     }
     case 'auto_compact_completed': {
       const acc = update as Record<string, unknown>
-      const after = typeof acc.tokensAfter === 'number' ? acc.tokensAfter : 0
+      // wire 字段是 snake_case（SessionUpdate 枚举整体 rename_all = "snake_case"
+      // 只转 variant 名，struct variant 内部字段名原样透传）——历史上这里错读成
+      // camelCase 的 tokensAfter，永远读不到值，UI 一直显示 0 tokens。
+      const after = typeof acc.tokens_after === 'number' ? acc.tokens_after : 0
+      const before = typeof acc.tokens_before === 'number' ? acc.tokens_before : undefined
+      const elapsedMs = typeof acc.elapsed_ms === 'number' ? acc.elapsed_ms : undefined
       const id = ensureAssistant(sessionId, turn)
       breakActiveParts(turn)
-      emitPartUpdated(sessionId, id, { id: `${id}:compact:${Date.now()}`, type: 'text', text: `✅ Context compacted (${after} tokens)` })
+      emitPartUpdated(sessionId, id, {
+        id: `${id}:compaction`,
+        type: 'compaction',
+        status: 'completed',
+        tokensBefore: before,
+        tokensAfter: after,
+        elapsedMs,
+      })
       break
     }
-    case 'auto_compact_failed':
-    case 'auto_compact_cancelled':
-      // log-only for now
+    case 'auto_compact_failed': {
+      const id = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      emitPartUpdated(sessionId, id, { id: `${id}:compaction`, type: 'compaction', status: 'failed' })
       break
+    }
+    case 'auto_compact_cancelled': {
+      const id = ensureAssistant(sessionId, turn)
+      breakActiveParts(turn)
+      emitPartUpdated(sessionId, id, { id: `${id}:compaction`, type: 'compaction', status: 'cancelled' })
+      break
+    }
     default:
       break
   }

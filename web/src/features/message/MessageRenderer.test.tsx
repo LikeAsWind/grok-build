@@ -174,6 +174,7 @@ describe('MessageRenderer assistant fork', () => {
         messageID: 'user-1',
         type: 'compaction',
         auto: true,
+        status: 'completed',
       },
     ]
 

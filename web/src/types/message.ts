@@ -282,6 +282,14 @@ export interface RetryPart extends PartBase {
 export interface CompactionPart extends PartBase {
   type: 'compaction'
   auto?: boolean
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  /** 压缩前后 token 数（completed 时才有意义） */
+  tokensBefore?: number
+  tokensAfter?: number
+  /** 耗时（毫秒），completed 时才有意义 */
+  elapsedMs?: number
+  /** running 态：当前上下文占用百分比 */
+  percentage?: number
 }
 
 /** 后台任务完成通知（grok 扩展：task_completed 独立系统消息的唯一 part） */

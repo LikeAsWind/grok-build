@@ -126,6 +126,9 @@
     "retryable": "Retryable",
     "statusCode": "Status: {{code}}",
     "contextCompacted": "History compacted",
+    "compactingProgress": "Compacting context ({{percentage}}% used)...",
+    "compactFailed": "Compaction failed",
+    "compactCancelled": "Compaction cancelled",
     "autoPrefix": "auto-",
     "filesChanged": "{{count}} file changed",
     "filesChanged_other": "{{count}} files changed"
@@ -163,7 +166,8 @@
     "cacheRead": "Cache read: {{read}}",
     "cacheWrite": "Cache write: {{write}}",
     "cached": "{{count}} cached",
-    "totalDuration": "{{duration}} total"
+    "totalDuration": "{{duration}} total",
+    "savedPercent": "saved {{percent}}%"
   },
   "errors": {
     "authError": "Authentication Error",

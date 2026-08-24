@@ -100,6 +100,9 @@
     "retryable": "可重试",
     "statusCode": "状态码：{{code}}",
     "contextCompacted": "历史已压缩",
+    "compactingProgress": "正在压缩上下文（{{percentage}}% 已用）...",
+    "compactFailed": "压缩失败",
+    "compactCancelled": "压缩已取消",
     "autoPrefix": "自动",
     "filesChanged": "{{count}} 个文件变更",
     "filesChanged_other": "{{count}} 个文件变更"
@@ -135,7 +138,8 @@
     "cacheRead": "Cache read: {{read}}",
     "cacheWrite": "Cache write: {{write}}",
     "cached": "{{count}} cached",
-    "totalDuration": "{{duration}} total"
+    "totalDuration": "{{duration}} total",
+    "savedPercent": "节省 {{percent}}%"
   },
   "errors": {
     "authError": "认证错误",

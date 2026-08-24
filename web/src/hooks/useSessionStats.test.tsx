@@ -87,7 +87,7 @@ describe('useSessionStats', () => {
           agent: 'build',
           model: { providerID: 'p', modelID: 'm' },
         },
-        parts: [{ type: 'compaction', id: 'p3', sessionID: 's1', messageID: 'user-2', auto: false }],
+        parts: [{ type: 'compaction', id: 'p3', sessionID: 's1', messageID: 'user-2', auto: false, status: 'completed' }],
       },
       {
         info: {

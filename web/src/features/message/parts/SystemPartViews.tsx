@@ -1,10 +1,12 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RetryIcon, PatchIcon, ChevronDownIcon, FileIcon } from '../../../components/Icons'
+import { RetryIcon, PatchIcon, ChevronDownIcon, FileIcon, SpinnerIcon } from '../../../components/Icons'
 import { useDisclosureScrollLock } from '../../../hooks'
 import type { RetryPart, CompactionPart, PatchPart } from '../../../types/message'
 import { useUiDisclosureState } from '../../../utils/uiDisclosureState'
 import { chevronClass, MessageExpandPanel, useMessageExpandRender } from '../messageExpand'
+import { formatNumber, formatDuration } from '../../../utils/formatUtils'
+import { InfoLine, type InfoLineItem } from './InfoLine'
 
 // ============================================
 // Retry Part View - 显示重试状态
@@ -74,13 +76,46 @@ interface CompactionPartViewProps {
 
 export const CompactionPartView = memo(function CompactionPartView({ part }: CompactionPartViewProps) {
   const { t } = useTranslation('message')
-  void part
+
+  // 标题（分隔线中间那句短标签）保持简短；token 数 / 节省百分比 / 耗时这些
+  // 数值型信息复用 InfoLine——跟 StepFinishPartView 是同一个渲染组件，不是
+  // 各自重写一份 flex 布局，保证两处的用量信息样式必然一致。
+  let title: string
+  const items: InfoLineItem[] = []
+  if (part.status === 'running') {
+    title = t('system.compactingProgress', { percentage: part.percentage ?? 0 })
+  } else if (part.status === 'failed') {
+    title = t('system.compactFailed')
+  } else if (part.status === 'cancelled') {
+    title = t('system.compactCancelled')
+  } else {
+    title = t('system.contextCompacted')
+    const after = part.tokensAfter
+    const before = part.tokensBefore != null && part.tokensBefore > 0 ? part.tokensBefore : undefined
+    if (after != null) {
+      items.push({
+        key: 'tokens',
+        content: `${before != null ? `${formatNumber(before)} → ${formatNumber(after)}` : formatNumber(after)} ${t('tokens')}`,
+      })
+      if (before != null) {
+        const percentSaved = Math.round(((before - after) / before) * 100)
+        items.push({ key: 'savedPercent', content: t('stepFinish.savedPercent', { percent: percentSaved }) })
+      }
+      if (part.elapsedMs != null) {
+        items.push({ key: 'duration', content: formatDuration(part.elapsedMs) })
+      }
+    }
+  }
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-[length:var(--fs-sm)] text-text-500">
-      <span className="flex-1 h-px bg-border-200/70" />
-      <span className="shrink-0 text-[length:var(--fs-xs)] leading-none text-text-400">{t('system.contextCompacted')}</span>
-      <span className="flex-1 h-px bg-border-200/70" />
+    <div className="flex flex-col gap-0.5 px-3 py-1.5">
+      <div className="flex items-center gap-2 text-[length:var(--fs-sm)] text-text-500">
+        <span className="flex-1 h-px bg-border-200/70" />
+        {part.status === 'running' && <SpinnerIcon className="animate-spin shrink-0" size={12} />}
+        <span className="shrink-0 text-[length:var(--fs-xs)] leading-none text-text-400">{title}</span>
+        <span className="flex-1 h-px bg-border-200/70" />
+      </div>
+      <InfoLine items={items} className="justify-center" />
     </div>
   )
 })

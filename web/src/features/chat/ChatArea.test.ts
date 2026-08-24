@@ -97,6 +97,16 @@ function createTextPart(id: string, messageID: string, text: string): Part {
   }
 }
 
+function createCompactionPart(): Part {
+  return {
+    id: 'compaction-part-1',
+    sessionID: 'session-1',
+    messageID: 'msg_a_compact',
+    type: 'compaction',
+    status: 'completed',
+  }
+}
+
 describe('buildVisibleMessageEntries', () => {
   it('keeps source ids for merged assistant tool messages', () => {
     const first = createAssistantMessage('assistant-1', [createToolPart('tool-1', 'assistant-1')])
@@ -434,6 +444,23 @@ describe('buildTurnDurationMap', () => {
     expect(durationMap.get('assistant-3')).toBe(600)
     expect(durationMap.has('assistant-1')).toBe(false)
   })
+
+  it('a standalone /compact notification message does not steal the real reply\'s turn duration', () => {
+    // 手动 /compact 不走 session/prompt，ensureAssistant 会在真实回复之后
+    // 另开一条只含 compaction part 的独立消息——它不是回复，不能抢占
+    // assistant-1（真实回复）的耗时归属。
+    const messages = [
+      createUserMessage('user-1', 1000),
+      createAssistantMessage('assistant-1', [], 1001, 1200),
+      createAssistantMessage('msg_a_compact', [createCompactionPart()], 1300, 1500),
+    ]
+
+    const visibleMessages = messages.slice(1)
+    const durationMap = buildTurnDurationMap(messages, visibleMessages)
+
+    expect(durationMap.get('assistant-1')).toBe(200)
+    expect(durationMap.has('msg_a_compact')).toBe(false)
+  })
 })
 
 describe('buildTurnLatestAssistantIdSet', () => {
@@ -464,6 +491,19 @@ describe('buildTurnLatestAssistantIdSet', () => {
     // 上一条回答保住操作条/完成时间；唤醒回复也有自己的
     expect(latest.has('assistant-1')).toBe(true)
     expect(latest.has('msg_wake_t1')).toBe(true)
+  })
+
+  it('a standalone /compact notification message does not steal the real reply\'s latest slot', () => {
+    const messages = [
+      createUserMessage('user-1', 1000),
+      createAssistantMessage('assistant-1', [], 1001, 1200),
+      createAssistantMessage('msg_a_compact', [createCompactionPart()], 1300, 1500),
+    ]
+    const latest = buildTurnLatestAssistantIdSet(messages)
+
+    // 真实回复保住 latest（操作条/完成时间不被压缩通知覆盖）
+    expect(latest.has('assistant-1')).toBe(true)
+    expect(latest.has('msg_a_compact')).toBe(false)
   })
 })
 

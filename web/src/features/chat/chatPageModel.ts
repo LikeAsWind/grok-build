@@ -1,5 +1,6 @@
 import type { Message } from '../../types/message'
 import { isTaskNotificationMessage, isWakeReplyMessage } from '../message/taskNotification'
+import { isCompactionOnlyMessage } from '../message/compactionMessage'
 
 export const PAGE_MESSAGE_COUNT = 20
 export const PAGE_EXTREME_RENDER_WEIGHT = 700
@@ -692,6 +693,11 @@ export function buildTurnDurationMap(messages: Message[], visibleMessages: Messa
     // 任务完成通知卡片不参与 turn 耗时归属（纯通知，无模型回复）
     if (isTaskNotificationMessage(message)) continue
 
+    // 独立的 compaction 通知消息（手动 /compact 不走 session/prompt，
+    // ensureAssistant 会另开一条新消息）不是真实回复，不能抢占真正回复的
+    // 耗时归属——否则上一条回答的 turnDuration 会被 compact 完成的时刻覆盖掉。
+    if (isCompactionOnlyMessage(message)) continue
+
     // 唤醒回复自成回合：以自身 created 为起点计算耗时
     if (isWakeReplyMessage(message)) {
       commitTurn()
@@ -747,7 +753,9 @@ export function buildTurnLatestAssistantIdSet(visibleMessages: Message[]): Set<s
         latestIds.add(message.info.id)
         continue
       }
-      if (!isTaskNotificationMessage(message)) {
+      // 独立的 compaction 通知消息不是真实回复，不能抢占本回合最后一条
+      // 真实回复的 latest 归属（否则 latestOnly 模式下真正的回复会被隐藏）。
+      if (!isTaskNotificationMessage(message) && !isCompactionOnlyMessage(message)) {
         currentLatestAssistantId = message.info.id
       }
     }
@@ -924,9 +932,9 @@ export function buildProcessTimeline(
       continue
     }
     if (message.info.role !== 'assistant') continue
-    if (isTaskNotificationMessage(message) || isWakeReplyMessage(message)) {
-      // 后台任务通知/唤醒回复：独立平铺项——关闭当前 turn 壳自成一段。
-      // 不隔离的话，live 唤醒轮会被吸进上一个用户回合的 assistants 袋：
+    if (isTaskNotificationMessage(message) || isWakeReplyMessage(message) || isCompactionOnlyMessage(message)) {
+      // 后台任务通知/唤醒回复/compaction 通知：独立平铺项——关闭当前 turn 壳自成一段。
+      // 不隔离的话，这类消息会被吸进上一个用户回合的 assistants 袋：
       // streaming 中把已结算的壳重新激活（Worked 闪回 Working），
       // 上一条回答的操作条/完成时间被冲掉，直到刷新才恢复。
       if (current) {

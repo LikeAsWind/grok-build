@@ -9,6 +9,7 @@ import {
   formatCompletedAt,
   formatDetailedDateTime,
 } from '../../../utils/formatUtils'
+import { InfoLine, type InfoLineItem } from './InfoLine'
 
 interface StepFinishPartViewProps {
   part: StepFinishPart
@@ -38,45 +39,44 @@ export const StepFinishPartView = memo(function StepFinishPartView({
   const totalTokens = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
   const cacheHit = tokens.cache.read
 
-  // 所有项都关闭时不渲染
-  const hasAny =
-    (show.agent && !!agent) ||
-    (show.model && !!modelLabel) ||
-    (show.tokens && totalTokens > 0) ||
-    (show.cache && cacheHit > 0) ||
-    (show.cost && cost > 0) ||
-    (show.duration && duration != null && duration > 0) ||
-    (show.turnDuration && turnDuration != null && turnDuration > 0) ||
-    (show.completedAt && completedAt != null)
-  if (!hasAny) return null
+  const items: InfoLineItem[] = []
+  if (show.agent && agent) {
+    items.push({ key: 'agent', content: agent, className: 'capitalize' })
+  }
+  if (show.model && modelLabel) {
+    items.push({ key: 'model', content: modelLabel })
+  }
+  if (show.tokens && totalTokens > 0) {
+    items.push({
+      key: 'tokens',
+      content: `${formatNumber(totalTokens)} ${t('tokens')}`,
+      title: `${t('stepFinish.inputTokens', { input: tokens.input })}, ${t('stepFinish.outputTokens', { output: tokens.output })}, ${t('stepFinish.reasoningTokens', { reasoning: tokens.reasoning })}, ${t('stepFinish.cacheRead', { read: tokens.cache.read })}, ${t('stepFinish.cacheWrite', { write: tokens.cache.write })}`,
+    })
+  }
+  if (show.cache && cacheHit > 0) {
+    items.push({
+      key: 'cache',
+      content: `(${t('stepFinish.cached', { count: formatNumber(cacheHit) })})`,
+      title: `${t('stepFinish.cacheRead', { read: tokens.cache.read })}, ${t('stepFinish.cacheWrite', { write: tokens.cache.write })}`,
+      className: 'text-text-600',
+    })
+  }
+  if (show.cost && cost > 0) {
+    items.push({ key: 'cost', content: formatCost(cost) })
+  }
+  if (show.duration && duration != null && duration > 0) {
+    items.push({ key: 'duration', content: formatDuration(duration) })
+  }
+  if (show.turnDuration && turnDuration != null && turnDuration > 0) {
+    items.push({ key: 'turnDuration', content: t('stepFinish.totalDuration', { duration: formatDuration(turnDuration) }) })
+  }
+  if (show.completedAt && completedAt != null) {
+    items.push({
+      key: 'completedAt',
+      content: formatCompletedAt(completedAt, completedAtFormat),
+      title: formatDetailedDateTime(completedAt),
+    })
+  }
 
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-0.5 text-[length:var(--fs-xxs)] leading-4 text-text-500">
-      {show.agent && agent && <span className="capitalize">{agent}</span>}
-      {show.model && modelLabel && <span>{modelLabel}</span>}
-      {show.tokens && totalTokens > 0 && (
-        <span
-          title={`${t('stepFinish.inputTokens', { input: tokens.input })}, ${t('stepFinish.outputTokens', { output: tokens.output })}, ${t('stepFinish.reasoningTokens', { reasoning: tokens.reasoning })}, ${t('stepFinish.cacheRead', { read: tokens.cache.read })}, ${t('stepFinish.cacheWrite', { write: tokens.cache.write })}`}
-        >
-          {formatNumber(totalTokens)} {t('tokens')}
-        </span>
-      )}
-      {show.cache && cacheHit > 0 && (
-        <span
-          className="text-text-600"
-          title={`${t('stepFinish.cacheRead', { read: tokens.cache.read })}, ${t('stepFinish.cacheWrite', { write: tokens.cache.write })}`}
-        >
-          ({t('stepFinish.cached', { count: formatNumber(cacheHit) })})
-        </span>
-      )}
-      {show.cost && cost > 0 && <span>{formatCost(cost)}</span>}
-      {show.duration && duration != null && duration > 0 && <span>{formatDuration(duration)}</span>}
-      {show.turnDuration && turnDuration != null && turnDuration > 0 && (
-        <span>{t('stepFinish.totalDuration', { duration: formatDuration(turnDuration) })}</span>
-      )}
-      {show.completedAt && completedAt != null && (
-        <span title={formatDetailedDateTime(completedAt)}>{formatCompletedAt(completedAt, completedAtFormat)}</span>
-      )}
-    </div>
-  )
+  return <InfoLine items={items} />
 })
