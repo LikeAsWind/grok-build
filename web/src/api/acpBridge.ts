@@ -1288,6 +1288,40 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       // finalizeTurn 复位 assistantId/wakeTaskId：后端驱动的 turn（前端无
       // promptInFlight，不走 acpPrompt 收尾）结束后不复位的话，后续空闲期的
       // task_completed 会被误判 busy 而滞留缓冲。随后 flush 缓冲的完成通知。
+      //
+      // usage 回填 message.info.tokens/cost：finalizeTurn 会清空
+      // turn.assistantId，这里先存一份。turn_completed 的 usage 是"这个回合
+      // 总共消耗多少"（PromptUsage，可能覆盖多轮工具调用），跟 response_completed
+      // 的"单次 model 调用消耗多少"是不同粒度——sessionStatsCompute.ts 的左下角
+      // 用量进度条读的是 info.tokens，在这条线路接上之前它一直是 ensureAssistant
+      // 写的空值，导致进度条整段退化成按消息字符数 /4 估算，跟 step-finish 显示的
+      // 真实 token 数对不上。
+      const assistantIdForUsage = turn.assistantId
+      const turnUsage = update.usage as Record<string, unknown> | undefined
+      if (assistantIdForUsage && turnUsage) {
+        const inputTokensIncludingCache = Number(turnUsage.inputTokens ?? 0)
+        const cachedRead = Number(turnUsage.cachedReadTokens ?? 0)
+        const costTicks = typeof turnUsage.costUsdTicks === 'number' ? turnUsage.costUsdTicks : null
+        const newTokens = {
+          // inputTokens 口径含缓存读（PromptUsageModel 注释："including cache reads"）；
+          // 减去 cachedRead 换算成 uncached，跟 StepFinishPartView 的
+          // input + cache.read 求和口径对齐，避免缓存部分被重复计入 totalTokens。
+          input: Math.max(0, inputTokensIncludingCache - cachedRead),
+          output: Number(turnUsage.outputTokens ?? 0),
+          reasoning: Number(turnUsage.reasoningTokens ?? 0),
+          cache: {
+            read: cachedRead,
+            write: Number(turnUsage.cacheCreationTokens ?? 0),
+          },
+        }
+        const newCost = costTicks != null ? costTicks / 1e10 : 0
+        void import('../store/messageStore').then(({ messageStore }) => {
+          const msgs = messageStore.getSessionState(sessionId)?.messages ?? []
+          const msg = msgs.find(m => m.info.id === assistantIdForUsage)
+          if (!msg || msg.info.role !== 'assistant') return
+          emit('message.updated', { info: { ...msg.info, tokens: newTokens, cost: newCost } }, sessionId)
+        })
+      }
       const promptId = typeof update.prompt_id === 'string' ? update.prompt_id : ''
       if (!turn.wakeTaskId && promptId.startsWith('task-completed-')) {
         // 唤醒轮识别失败（reminder 文案漂移？）——内容已按普通消息渲染，
@@ -1388,6 +1422,37 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
         )
         emit('session.status', { sessionID: sessionId, status: { type: 'idle' } }, sessionId)
         emit('session.idle', { sessionID: sessionId }, sessionId)
+      }
+      break
+    }
+    case 'response_completed': {
+      // 每次 model response 完成（XaiSessionUpdate::ResponseCompleted）都会
+      // 带一份这次调用自己的 token/cost 用量——构造成 step-finish part 挂到
+      // 当前 assistant 消息末尾，供 StepFinishPartView 渲染"Step 完成信息"。
+      // 一条消息内多轮 tool-call 循环会触发多次，各自产出独立的 part（id 带
+      // 时间戳），不会互相覆盖。
+      const usage = update.usage as Record<string, unknown> | undefined
+      if (usage) {
+        const assistantId = ensureAssistant(sessionId, turn)
+        const costTicks = typeof usage.cost_usd_ticks === 'number' ? usage.cost_usd_ticks : null
+        emitPartUpdated(sessionId, assistantId, {
+          id: `${assistantId}:step-finish:${Date.now()}`,
+          type: 'step-finish',
+          reason: typeof update.stop_reason === 'string' ? update.stop_reason : '',
+          // ticks → USD：1e10 ticks = $1（对应后端 USD_TICKS_PER_USD）。
+          // costTicks 为 null 表示 provider 未上报 cost（不是免费），
+          // StepFinishPartView 里 cost > 0 才显示，落到 0 等价于"不显示"。
+          cost: costTicks != null ? costTicks / 1e10 : 0,
+          tokens: {
+            input: Number(usage.input_tokens ?? 0),
+            output: Number(usage.output_tokens ?? 0),
+            reasoning: Number(usage.reasoning_tokens ?? 0),
+            cache: {
+              read: Number(usage.cache_read_input_tokens ?? 0),
+              write: Number(usage.cache_creation_input_tokens ?? 0),
+            },
+          },
+        })
       }
       break
     }
@@ -1585,15 +1650,23 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
   }
 }
 
-function handleExtNotification(method: string, params: unknown) {
+export function handleExtNotification(method: string, params: unknown) {
   if (method === 'x.ai/models/update' && isRecord(params)) {
     _modelState = params as unknown as AcpModelState
     return
   }
-  // x.ai/session_notification 携带 RetryState 等 xAI 扩展更新，
-  // 结构与 session/update 兼容（{ sessionId, update: { sessionUpdate, ... } }），
+  // x.ai/session_notification 携带 RetryState 等 xAI 扩展更新，结构与
+  // session/update 兼容（{ sessionId, update: { sessionUpdate, ... } }），
   // 走同一个转译入口以触发 session.error / messageStore.setLoadError。
-  if (method === 'x.ai/session_notification' && isRecord(params)) {
+  //
+  // x.ai/session/update 是同一类通知的另一个 method 名——leader/replay 路径
+  // （mvp_agent/replay.rs 的 forward_raw_replay_line）固定用这个名字转发
+  // updates.jsonl 里持久化的 xAI 通知（TUI 侧 acp/mod.rs::is_session_update_ext_method
+  // 早就把这两个名字当同义词处理）。此前这里只认 session_notification，
+  // session/load 回放期间到达的 turn_completed/response_completed 全部落进
+  // default 分支的 acp:extNotification，从未经过 handleAcpSessionUpdate——
+  // 页面刷新后历史消息的 token/cost 回填因此丢失，只是从未被注意到。
+  if ((method === 'x.ai/session_notification' || method === 'x.ai/session/update') && isRecord(params)) {
     handleAcpSessionUpdate(params)
     return
   }

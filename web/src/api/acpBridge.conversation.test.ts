@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   handleAcpSessionUpdate,
+  handleExtNotification,
   getAvailableCommands,
   getCurrentMode,
   beginAcpReplay,
@@ -1087,6 +1088,196 @@ describe('Web 对话交互全量可用性', () => {
     expect(parts().some(p => p.type === 'retry')).toBe(true)
     expect(sessionErrors).toHaveLength(1)
     expect(messageStore.getIsStreaming(SID)).toBe(false)
+  })
+
+  // ── 7b. response_completed → step-finish part（Step 完成信息数据源） ──
+
+  it('response_completed 带 usage 时产生带 tokens/cost 的 step-finish part', () => {
+    textChunk('正在回答')
+    update({
+      sessionUpdate: 'response_completed',
+      stop_reason: 'end_turn',
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_read_input_tokens: 10,
+        cache_creation_input_tokens: 20,
+        reasoning_tokens: 5,
+        cost_usd_ticks: 25_000_000, // 25e6 / 1e10 = $0.0025
+      },
+    })
+
+    const stepFinish = parts().find(p => p.type === 'step-finish') as
+      | (Part & { tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }; cost: number; reason: string })
+      | undefined
+    expect(stepFinish).toBeDefined()
+    expect(stepFinish?.reason).toBe('end_turn')
+    expect(stepFinish?.tokens).toEqual({
+      input: 100,
+      output: 50,
+      reasoning: 5,
+      cache: { read: 10, write: 20 },
+    })
+    expect(stepFinish?.cost).toBeCloseTo(0.0025)
+  })
+
+  it('response_completed 无 cost_usd_ticks（provider 未上报）时 cost 落到 0', () => {
+    textChunk('正在回答')
+    update({
+      sessionUpdate: 'response_completed',
+      stop_reason: 'end_turn',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_tokens: 0,
+        cost_usd_ticks: null,
+      },
+    })
+
+    const stepFinish = parts().find(p => p.type === 'step-finish') as (Part & { cost: number }) | undefined
+    expect(stepFinish?.cost).toBe(0)
+  })
+
+  it('response_completed 无 usage 时不产生 step-finish part', () => {
+    textChunk('正在回答')
+    update({ sessionUpdate: 'response_completed', stop_reason: 'end_turn' })
+
+    expect(parts().some(p => p.type === 'step-finish')).toBe(false)
+  })
+
+  it('同一条消息内多次 response_completed 各自产生独立的 step-finish part', async () => {
+    textChunk('第一轮')
+    update({
+      sessionUpdate: 'response_completed',
+      stop_reason: 'tool_use',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_tokens: 0,
+        cost_usd_ticks: 1_000_000,
+      },
+    })
+    // part id 含 Date.now()，同一毫秒会撞 id；真实两轮 tool-call 间隔为秒级
+    await new Promise(r => setTimeout(r, 2))
+    update({
+      sessionUpdate: 'response_completed',
+      stop_reason: 'end_turn',
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_tokens: 0,
+        cost_usd_ticks: 2_000_000,
+      },
+    })
+
+    const stepFinishes = parts().filter(p => p.type === 'step-finish') as Array<Part & { id: string }>
+    expect(stepFinishes).toHaveLength(2)
+    expect(new Set(stepFinishes.map(p => p.id)).size).toBe(2)
+  })
+
+  it('turn_completed 把 usage 回填到 assistant message.info（左下角用量进度条数据源）', async () => {
+    textChunk('正在回答')
+    update({
+      sessionUpdate: 'turn_completed',
+      prompt_id: 'p-usage-1',
+      stop_reason: 'end_turn',
+      usage: {
+        inputTokens: 18890,
+        outputTokens: 114,
+        totalTokens: 19004,
+        cachedReadTokens: 147,
+        cacheCreationTokens: 0,
+        reasoningTokens: 59,
+        costUsdTicks: 25_000_000,
+        modelCalls: 1,
+        apiDurationMs: 3395,
+      },
+    })
+    // 回填走异步动态 import('../store/messageStore')，等一个宏任务边界落地
+    await new Promise(r => setTimeout(r, 0))
+
+    const messages = messageStore.getVisibleMessages(SID)
+    const assistant = messages.find(m => m.info.role === 'assistant')
+    expect(assistant).toBeDefined()
+    const info = assistant!.info as unknown as {
+      tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+      cost: number
+    }
+    // inputTokens(18890) 口径含缓存读，减去 cachedReadTokens(147) 换算成 uncached
+    expect(info.tokens).toEqual({
+      input: 18890 - 147,
+      output: 114,
+      reasoning: 59,
+      cache: { read: 147, write: 0 },
+    })
+    expect(info.cost).toBeCloseTo(0.0025)
+  })
+
+  it('turn_completed 无 usage 时不改动 assistant message.info.tokens', async () => {
+    textChunk('正在回答')
+    update({ sessionUpdate: 'turn_completed', prompt_id: 'p-usage-2', stop_reason: 'end_turn' })
+    await new Promise(r => setTimeout(r, 0))
+
+    const messages = messageStore.getVisibleMessages(SID)
+    const assistant = messages.find(m => m.info.role === 'assistant')
+    const info = assistant!.info as unknown as { tokens: { input: number; output: number } }
+    expect(info.tokens).toEqual({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+  })
+
+  // ── 7c. handleExtNotification：x.ai/session/update 与 x.ai/session_notification
+  // 是同一类通知的两个 wire method 名（实时 vs session/load 回放），必须都路由到
+  // handleAcpSessionUpdate；此前只认 session_notification，回放期间到达的
+  // turn_completed/response_completed 全部静默丢失，页面刷新后历史消息的
+  // token/cost 回填因此消失 ──────────────────────────────────────
+
+  it('handleExtNotification("x.ai/session/update", ...) 路由到 handleAcpSessionUpdate（回放路径）', async () => {
+    textChunk('正在回答')
+    handleExtNotification('x.ai/session/update', {
+      sessionId: SID,
+      update: {
+        sessionUpdate: 'turn_completed',
+        prompt_id: 'p-replay-1',
+        stop_reason: 'end_turn',
+        usage: { inputTokens: 18890, outputTokens: 114, cachedReadTokens: 147, cacheCreationTokens: 0, reasoningTokens: 59 },
+      },
+    })
+    await new Promise(r => setTimeout(r, 0))
+
+    const messages = messageStore.getVisibleMessages(SID)
+    const assistant = messages.find(m => m.info.role === 'assistant')
+    const info = assistant!.info as unknown as { tokens: { input: number; output: number } }
+    expect(info.tokens).toEqual({ input: 18890 - 147, output: 114, reasoning: 59, cache: { read: 147, write: 0 } })
+  })
+
+  it('handleExtNotification("x.ai/session_notification", ...) 仍然路由到 handleAcpSessionUpdate（实时路径，回归）', () => {
+    textChunk('正在回答')
+    handleExtNotification('x.ai/session_notification', {
+      sessionId: SID,
+      update: { sessionUpdate: 'auto_compact_started', percentage: 77 },
+    })
+
+    const compactions = parts().filter(p => p.type === 'compaction') as Array<Part & { status: string }>
+    expect(compactions).toHaveLength(1)
+    expect(compactions[0].status).toBe('running')
+  })
+
+  it('handleExtNotification 对不认识的 method 仍走 acp:extNotification 兜底，不误吞', () => {
+    const events: Array<{ method: string; params: unknown }> = []
+    const onEvent = (e: Event) => events.push((e as CustomEvent).detail)
+    window.addEventListener('acp:extNotification', onEvent)
+    try {
+      handleExtNotification('x.ai/git/worktree/status', { foo: 'bar' })
+    } finally {
+      window.removeEventListener('acp:extNotification', onEvent)
+    }
+    expect(events).toHaveLength(1)
+    expect(events[0].method).toBe('x.ai/git/worktree/status')
   })
 
   // ── 8. 会话级状态：斜杠命令 / 模式 / 标题 ───────────────────
