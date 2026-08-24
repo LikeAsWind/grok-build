@@ -31,7 +31,6 @@ import {
   prefetchCommands,
   prefetchRootDirectory,
   getSessionChildren,
-  executeCommand,
   summarizeSession,
   updateSession,
   forkSession,
@@ -1056,12 +1055,12 @@ export function useChatSession({
   // Command handler (slash commands)
   const handleCommand = useCallback(
     async (commandStr: string) => {
-      // 解析命令："/help arg1 arg2" => command="help", args="arg1 arg2"
+      // 解析命令名（用于识别 /new /compact 这两个前端特殊分支）；其余命令
+      // 连同参数原样整句转发给后端解析，不在这里拆分 args。
       const trimmed = commandStr.trim()
       const withoutSlash = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed
       const spaceIndex = withoutSlash.indexOf(' ')
       const command = spaceIndex > 0 ? withoutSlash.slice(0, spaceIndex) : withoutSlash
-      const args = spaceIndex > 0 ? withoutSlash.slice(spaceIndex + 1) : ''
 
       if (!command) return false
 
@@ -1097,20 +1096,51 @@ export function useChatSession({
 
           // Commands should count as sent once they are accepted for execution.
           // Do not keep the draft alive until the long-running compaction finishes.
+          //
+          // /compact never goes through session/prompt, so none of the
+          // normal turn machinery (settlePromptTurn / turn_completed) ever
+          // fires for it — restore idle here once the ext-request settles
+          // (success, failure, or cancel alike), or the chat input stays
+          // stuck on the Stop button forever.
+          //
+          // Capture as a const: TS can't narrow `sessionId` (a reassignable
+          // `let`) to non-null inside the `.finally` closure below.
+          const compactSessionId: string = sessionId
           void summarizeSession(
-            sessionId,
+            compactSessionId,
             { providerID: currentModel.providerId, modelID: currentModel.id },
             effectiveDirectory,
-          ).catch(err => {
-            handleError('execute command', err)
-          })
+          )
+            .catch(err => {
+              handleError('execute command', err)
+            })
+            .finally(() => {
+              messageStore.handleSessionIdle(compactSessionId)
+            })
 
           return true
         }
 
-        // Keep command submission semantics aligned with normal messages:
-        // once the command is dispatched, clear the draft immediately.
-        void executeCommand(sessionId, command, args, effectiveDirectory).catch(err => {
+        if (!currentModel) {
+          handleError('execute command', new Error('No model selected'))
+          return false
+        }
+
+        // ACP 没有独立的"命令执行" RPC——slash 命令（/context、/memory、
+        // /hooks-*、/plugins、/workflow 等）都是通过 session/prompt 把命令
+        // 文本当普通 prompt 发出去，后端 slash_commands::resolve() 解析
+        // prompt 里的 /命令前缀后再分发（TUI 走的是同一条路）。
+        // 之前这里调 executeCommand → sdk.session.command(...)，但
+        // sdk.ts 的 getSDKClient() 是 ACP 化后留下的死 stub（REST 后端
+        // 不存在，任何调用都静默返回 { data: undefined }），命令实际上
+        // 从未发到后端——回车后毫无反应。
+        void sendMessageAsync({
+          sessionId,
+          text: commandStr,
+          attachments: [],
+          model: { providerID: currentModel.providerId, modelID: currentModel.id },
+          directory: effectiveDirectory,
+        }).catch(err => {
           handleError('execute command', err)
         })
 

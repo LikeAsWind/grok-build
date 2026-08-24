@@ -1,11 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatSession } from './useChatSession'
+import { messageStore } from '../store'
 
 const {
   createSessionMock,
   summarizeSessionMock,
   executeCommandMock,
+  sendMessageAsyncMock,
   getSelectableAgentsMock,
   registerSessionConsumerMock,
   updateConsumerSessionIdMock,
@@ -28,6 +30,7 @@ const {
   createSessionMock: vi.fn(),
   summarizeSessionMock: vi.fn(),
   executeCommandMock: vi.fn(),
+  sendMessageAsyncMock: vi.fn(),
   getSelectableAgentsMock: vi.fn(),
   registerSessionConsumerMock: vi.fn(),
   updateConsumerSessionIdMock: vi.fn(),
@@ -64,6 +67,7 @@ vi.mock('../store', () => ({
     restoreSendRollback: vi.fn(),
     handleMessageUpdated: vi.fn(),
     handlePartUpdated: vi.fn(),
+    handleSessionIdle: vi.fn(),
   },
   useSessionFamily: (sessionId: string | null) => useSessionFamilyMock(sessionId),
   useSessionState: (sessionId: string | null) => useSessionStateMock(sessionId),
@@ -137,7 +141,7 @@ vi.mock('../store/notificationEventSettingsStore', () => ({
 }))
 
 vi.mock('../api', () => ({
-  sendMessageAsync: vi.fn(),
+  sendMessageAsync: (...args: unknown[]) => sendMessageAsyncMock(...args),
   getSessionMessages: vi.fn(),
   abortSession: vi.fn(),
   getSelectableAgents: (...args: unknown[]) => getSelectableAgentsMock(...args),
@@ -171,6 +175,7 @@ describe('useChatSession handleCommand', () => {
     createSessionMock.mockReset()
     summarizeSessionMock.mockReset()
     executeCommandMock.mockReset()
+    sendMessageAsyncMock.mockReset()
     getSelectableAgentsMock.mockReset()
     registerSessionConsumerMock.mockReset()
     updateConsumerSessionIdMock.mockReset()
@@ -187,6 +192,7 @@ describe('useChatSession handleCommand', () => {
     handlePermissionReplyMock.mockReset()
     refreshPendingRequestsMock.mockReset()
     useSessionStateMock.mockReset()
+    vi.mocked(messageStore.handleSessionIdle).mockReset()
     pendingPermissionRequestsMock.length = 0
     for (const key of Object.keys(activeSessionStatusMap)) {
       delete activeSessionStatusMap[key]
@@ -252,8 +258,54 @@ describe('useChatSession handleCommand', () => {
     expect(commandResult).toBe(true)
   })
 
-  it('treats api commands as sent before execution finishes', async () => {
-    executeCommandMock.mockReturnValue(new Promise(() => {}))
+  it('restores idle after a successful compact', async () => {
+    summarizeSessionMock.mockResolvedValue(true)
+
+    const { result } = renderHook(() =>
+      useChatSession({
+        paneId: 'pane-1',
+        chatAreaRef: { current: null },
+        currentModel: { id: 'model-1', providerId: 'provider-1', variants: [] } as never,
+        refetchModels: vi.fn(async () => {}),
+        sessionId: 'session-1',
+        navigateToSession: vi.fn(),
+        navigateHome: vi.fn(),
+      }),
+    )
+
+    await act(async () => {
+      await result.current.handleCommand('/compact')
+      await Promise.resolve()
+    })
+
+    expect(messageStore.handleSessionIdle).toHaveBeenCalledWith('session-1')
+  })
+
+  it('restores idle after a failed or cancelled compact', async () => {
+    summarizeSessionMock.mockRejectedValue(new Error('compact cancelled'))
+
+    const { result } = renderHook(() =>
+      useChatSession({
+        paneId: 'pane-1',
+        chatAreaRef: { current: null },
+        currentModel: { id: 'model-1', providerId: 'provider-1', variants: [] } as never,
+        refetchModels: vi.fn(async () => {}),
+        sessionId: 'session-1',
+        navigateToSession: vi.fn(),
+        navigateHome: vi.fn(),
+      }),
+    )
+
+    await act(async () => {
+      await result.current.handleCommand('/compact')
+      await Promise.resolve()
+    })
+
+    expect(messageStore.handleSessionIdle).toHaveBeenCalledWith('session-1')
+  })
+
+  it('sends non-special slash commands as a normal prompt (ACP has no separate command RPC)', async () => {
+    sendMessageAsyncMock.mockReturnValue(new Promise(() => {}))
 
     const { result } = renderHook(() =>
       useChatSession({
@@ -279,7 +331,14 @@ describe('useChatSession handleCommand', () => {
       await Promise.resolve()
     })
 
-    expect(executeCommandMock).toHaveBeenCalledWith('session-1', 'review', 'src/App.tsx', '/workspace/demo')
+    expect(sendMessageAsyncMock).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      text: '/review src/App.tsx',
+      attachments: [],
+      model: { providerID: 'provider-1', modelID: 'model-1' },
+      directory: '/workspace/demo',
+    })
+    expect(executeCommandMock).not.toHaveBeenCalled()
     expect(settled).toBe(true)
     expect(commandResult).toBe(true)
   })
@@ -395,6 +454,7 @@ describe('useChatSession busy UI signal', () => {
     createSessionMock.mockReset()
     summarizeSessionMock.mockReset()
     executeCommandMock.mockReset()
+    sendMessageAsyncMock.mockReset()
     getSelectableAgentsMock.mockReset()
     registerSessionConsumerMock.mockReset()
     updateConsumerSessionIdMock.mockReset()
@@ -411,6 +471,7 @@ describe('useChatSession busy UI signal', () => {
     handlePermissionReplyMock.mockReset()
     refreshPendingRequestsMock.mockReset()
     useSessionStateMock.mockReset()
+    vi.mocked(messageStore.handleSessionIdle).mockReset()
     pendingPermissionRequestsMock.length = 0
     for (const key of Object.keys(activeSessionStatusMap)) {
       delete activeSessionStatusMap[key]
