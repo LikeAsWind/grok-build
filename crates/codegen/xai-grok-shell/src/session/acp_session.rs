@@ -1678,6 +1678,9 @@ mod prompt_queue_actor_tests;
 #[path = "acp_session_tests/record_response_token_usage_tests.rs"]
 mod record_response_token_usage_tests;
 #[cfg(test)]
+#[path = "acp_session_tests/response_completed_update_tests.rs"]
+mod response_completed_update_tests;
+#[cfg(test)]
 #[path = "acp_session_tests/replay_buffer_send_update_tests.rs"]
 mod replay_buffer_send_update_tests;
 #[cfg(test)]

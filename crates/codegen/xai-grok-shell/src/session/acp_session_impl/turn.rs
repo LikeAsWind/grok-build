@@ -2500,7 +2500,7 @@ impl SessionActor {
                 )
                 .await;
             }
-            self.send_buffered_xai_update(response_completed).await;
+            self.send_xai_notification(response_completed).await;
             if tool_calls.is_empty() {
                 if !schema_ok
                     && !turn_refused

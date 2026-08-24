@@ -238,6 +238,13 @@ pub struct ResponseUsage {
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    /// Server cost in USD ticks for this single response
+    /// (`ConversationResponse::cost_usd_ticks`, already normalized — `None`
+    /// means the provider didn't report cost for this call, not that it was
+    /// free). Distinct from `PromptUsage.totals.cost_usd_ticks`, which sums
+    /// the whole session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd_ticks: Option<i64>,
 }
 
 impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {

@@ -891,6 +891,7 @@ impl SessionActor {
                     cache_read_input_tokens: u64::from(u.cached_prompt_tokens),
                     cache_creation_input_tokens: u64::from(u.cache_creation_prompt_tokens),
                     reasoning_tokens: u64::from(u.reasoning_tokens),
+                    cost_usd_ticks: response.cost_usd_ticks,
                 });
         let signature = response
             .reasoning_items()
