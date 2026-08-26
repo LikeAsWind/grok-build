@@ -59,6 +59,12 @@ pub struct RosterEntry {
     pub last_change_unix_ms: i64,
     #[serde(default)]
     pub origin: RosterOrigin,
+    #[serde(default)]
+    pub additions: Option<usize>,
+    #[serde(default)]
+    pub deletions: Option<usize>,
+    #[serde(default)]
+    pub files: Option<usize>,
 }
 
 /// Response to `x.ai/sessions/list`.
@@ -122,6 +128,9 @@ mod tests {
             resident: true,
             last_change_unix_ms: 1_725_000_000_123,
             origin: agent::RosterOrigin::Local,
+            additions: Some(42),
+            deletions: Some(7),
+            files: Some(3),
         }
     }
 
@@ -187,6 +196,9 @@ mod tests {
         assert!(e.resident);
         assert_eq!(e.last_change_unix_ms, 1_725_000_000_123);
         assert_eq!(e.origin.kind, "local");
+        assert_eq!(e.additions, Some(42));
+        assert_eq!(e.deletions, Some(7));
+        assert_eq!(e.files, Some(3));
     }
 
     /// A bare `{ "sessions": [...] }` body (no `result` envelope) must still

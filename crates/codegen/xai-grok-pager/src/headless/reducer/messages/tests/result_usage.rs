@@ -16,6 +16,7 @@ fn messages_usage_drops_reasoning_tokens() {
             cache_read_input_tokens: 1,
             cache_creation_input_tokens: 0,
             reasoning_tokens: 9,
+            ..Default::default()
         }),
         signature: None,
         stop_sequence: None,

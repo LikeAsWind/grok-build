@@ -774,6 +774,9 @@ fn make_picker_entry(id: &str, cwd: &str) -> crate::app::app_view::SessionPicker
         worktree_label: None,
         last_turn_summary: None,
         card_detail: None,
+        additions: None,
+        deletions: None,
+        files: None,
     }
 }
 fn make_conversation_entry(id: &str) -> crate::app::app_view::SessionPickerEntry {

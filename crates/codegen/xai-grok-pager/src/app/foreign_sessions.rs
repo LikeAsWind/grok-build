@@ -449,6 +449,10 @@ pub(crate) fn map_summary(summary: ForeignSessionSummary) -> SessionPickerEntry 
         worktree_label: None,
         last_turn_summary: None,
         card_detail: None,
+        // Foreign-tool (Claude Code, etc.) sessions carry no grok diff stats.
+        additions: None,
+        deletions: None,
+        files: None,
     }
 }
 
@@ -559,6 +563,9 @@ mod tests {
             worktree_label: None,
             last_turn_summary: None,
             card_detail: None,
+            additions: None,
+            deletions: None,
+            files: None,
         }
     }
 

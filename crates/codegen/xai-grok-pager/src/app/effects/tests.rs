@@ -2559,6 +2559,9 @@ fn session_picker_entry_maps_to_dormant_roster_row() {
         worktree_label: Some("wt".to_string()),
         last_turn_summary: Some("Fixed the parser".to_string()),
         card_detail: None,
+        additions: None,
+        deletions: None,
+        files: None,
     };
     let roster = session_picker_entry_to_roster(&entry);
     assert_eq!(roster.session_id, "sess-1");

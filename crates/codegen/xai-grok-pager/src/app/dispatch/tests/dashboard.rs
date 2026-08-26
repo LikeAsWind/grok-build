@@ -1434,6 +1434,9 @@ fn idle_roster_entry(session_id: &str, title: &str) -> crate::app::roster::Roste
         resident: false,
         last_change_unix_ms: 1,
         origin: crate::app::roster::RosterOrigin::default(),
+        additions: None,
+        deletions: None,
+        files: None,
     }
 }
 /// Without a leader there is no live roster to poll, so opening the

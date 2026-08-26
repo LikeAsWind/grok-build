@@ -4457,6 +4457,9 @@ mod tests {
             resident: true,
             last_change_unix_ms: 1_725_000_000_000,
             origin: RosterOrigin::default(),
+            additions: None,
+            deletions: None,
+            files: None,
         }];
 
         let _ = render_dashboard(
@@ -4506,6 +4509,9 @@ mod tests {
                 resident: true,
                 last_change_unix_ms: 1_725_000_000_000,
                 origin: RosterOrigin::default(),
+                additions: None,
+                deletions: None,
+                files: None,
             }];
             state.hovered_row = Some(DashboardRowId::Roster {
                 session_id: "sess-hover".into(),

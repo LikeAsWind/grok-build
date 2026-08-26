@@ -330,10 +330,20 @@ fn append_roster_rows(
         }
         let cwd_display = super::state::compact_cwd(&cwd, home);
         let is_pinned = pinned.contains(&id);
+        // Diff stats subtitle (`+42 -7 3f`), only when the persisted snapshot
+        // has all three — `None` (not `0`) means "no snapshot captured", and
+        // showing `+0 -0 0f` for that case would misleadingly claim the
+        // session made zero changes.
+        let diff_subtitle = match (entry.additions, entry.deletions, entry.files) {
+            (Some(additions), Some(deletions), Some(files)) => {
+                Some(format!("+{additions} -{deletions} {files}f"))
+            }
+            _ => None,
+        };
         rows.push(DashboardRow {
             id,
             label,
-            subtitle: None,
+            subtitle: diff_subtitle,
             state,
             activity,
             secondary_line: entry
@@ -1517,6 +1527,9 @@ mod tests {
             resident: false,
             last_change_unix_ms,
             origin: RosterOrigin::default(),
+            additions: None,
+            deletions: None,
+            files: None,
         }
     }
     fn now_unix_ms() -> i64 {
@@ -1647,6 +1660,37 @@ mod tests {
             &empty,
         );
         assert_eq!(rows.len(), 1, "titled entries are kept");
+    }
+    /// A roster entry with a full diff snapshot renders it as the row
+    /// subtitle, matching the web sidebar's `+N -N Nf` format.
+    #[test]
+    fn append_roster_rows_renders_diff_stats_subtitle() {
+        let empty = std::collections::BTreeSet::new();
+        let entry = RosterEntry {
+            title: Some("Fix the bug".to_string()),
+            additions: Some(42),
+            deletions: Some(7),
+            files: Some(3),
+            ..roster_entry("t", now_unix_ms())
+        };
+        let rows = collect_roster(&[entry], &empty);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].subtitle.as_deref(), Some("+42 -7 3f"));
+    }
+    /// A roster entry with no captured diff snapshot (predates the feature,
+    /// or a foreign-tool session) must not show a misleading `+0 -0 0f` —
+    /// the subtitle stays `None` entirely.
+    #[test]
+    fn append_roster_rows_omits_diff_subtitle_without_a_snapshot() {
+        let empty = std::collections::BTreeSet::new();
+        let entry = RosterEntry {
+            title: Some("Fix the bug".to_string()),
+            ..roster_entry("t", now_unix_ms())
+        };
+        assert_eq!(entry.additions, None, "fixture must start with no snapshot");
+        let rows = collect_roster(&[entry], &empty);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].subtitle, None);
     }
     /// A blank/whitespace title is treated as no title.
     #[test]

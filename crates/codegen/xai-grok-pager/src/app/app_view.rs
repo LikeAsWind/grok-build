@@ -378,6 +378,14 @@ pub struct SessionPickerEntry {
     pub last_turn_summary: Option<String>,
     /// Lazy-loaded detail for the expanded card view.
     pub card_detail: Option<CardDetail>,
+    /// Lines added during the session (from `Summary.additions`, hunk-tracker
+    /// accepted + pending). `None` for foreign-tool sessions and sessions
+    /// captured before this field existed.
+    pub additions: Option<usize>,
+    /// Lines removed during the session (from `Summary.deletions`).
+    pub deletions: Option<usize>,
+    /// Files modified during the session (from `Summary.files`).
+    pub files: Option<usize>,
 }
 /// Detail loaded on-demand when a session card is expanded.
 #[derive(Debug, Clone)]
@@ -6637,6 +6645,9 @@ pub(crate) mod tests {
             worktree_label: None,
             last_turn_summary: None,
             card_detail: None,
+            additions: None,
+            deletions: None,
+            files: None,
         };
         if let Some(crate::views::modal::ActiveModal::SessionPicker { entries, .. }) =
             app.agents.get_mut(&id).unwrap().active_modal.as_mut()
@@ -8012,6 +8023,9 @@ pub(crate) mod tests {
             worktree_label: None,
             last_turn_summary: None,
             card_detail: None,
+            additions: None,
+            deletions: None,
+            files: None,
         }
     }
     fn open_welcome_session_picker(app: &mut AppView) {
@@ -12140,6 +12154,9 @@ pub(crate) mod tests {
             worktree_label: None,
             last_turn_summary: None,
             card_detail: None,
+            additions: None,
+            deletions: None,
+            files: None,
         };
         let f_key = Event::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
         crate::appearance::cache::set_vim_mode(false);

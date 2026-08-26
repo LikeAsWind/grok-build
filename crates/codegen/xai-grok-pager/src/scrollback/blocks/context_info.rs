@@ -683,6 +683,7 @@ mod tests {
             usage_pct: 4,
             auto_compact_threshold_percent: 85,
             usage_categories: vec![],
+            ..Default::default()
         }
     }
 
@@ -1034,6 +1035,7 @@ mod tests {
             usage_pct: 20,
             auto_compact_threshold_percent: 65,
             usage_categories: vec![],
+            ..Default::default()
         };
         let block = ContextInfoBlock::new(snap, "grok-build");
         let theme = test_theme();

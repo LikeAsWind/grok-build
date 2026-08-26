@@ -841,6 +841,11 @@ pub(super) fn parse_session_picker_entries(
                 .and_then(|s| s.as_str())
                 .map(String::from);
             let repo_name = crate::views::session_picker::repo_name_from_cwd(&cwd_str);
+            // `Summary` has no `rename_all`, so these are already snake_case
+            // on the wire — no camelCase variant to fall back to.
+            let additions = v.get("additions").and_then(|n| n.as_u64()).map(|n| n as usize);
+            let deletions = v.get("deletions").and_then(|n| n.as_u64()).map(|n| n as usize);
+            let files = v.get("files").and_then(|n| n.as_u64()).map(|n| n as usize);
             Some(SessionPickerEntry {
                 id,
                 summary: display,
@@ -857,6 +862,9 @@ pub(super) fn parse_session_picker_entries(
                 worktree_label,
                 last_turn_summary,
                 card_detail: None,
+                additions,
+                deletions,
+                files,
             })
         })
         .filter_map(|mut e| {
@@ -903,6 +911,9 @@ pub(super) fn session_picker_entry_to_roster(
             kind: e.source.clone(),
             host: e.hostname.clone(),
         },
+        additions: e.additions,
+        deletions: e.deletions,
+        files: e.files,
     }
 }
 pub(super) async fn send_logout(tx: &AcpAgentTx) {
