@@ -1530,7 +1530,7 @@ function diffPairStats(before: string, after: string): { additions: number; dele
 // Helper: Group parts for rendering
 // ============================================
 
-type RenderItem =
+export type RenderItem =
   | { type: 'single'; part: Part }
   | { type: 'tool-group'; parts: ToolPart[]; stepFinish?: StepFinishPart }
 
@@ -1547,16 +1547,35 @@ function hasMoreToolsAhead(parts: Part[], from: number): boolean {
   return false
 }
 
-function groupPartsForRender(parts: Part[]): RenderItem[] {
+export function groupPartsForRender(parts: Part[]): RenderItem[] {
   const result: RenderItem[] = []
   let toolGroup: ToolPart[] = []
   let stepFinish: StepFinishPart | undefined
+  // 本步是否已有内容排在前面。step-finish 是「这一步结束」的信息栏，必须渲染在
+  // 本步内容之后；但 wire 顺序不保证这一点——回放时后端先写 response_completed、
+  // 后写聚合的 agent_message_chunk（实测 updates.jsonl 帧序），照原序渲染会把
+  // 用量栏顶到回复上方。没有前置内容的 step-finish 先扣住，等内容出现再挂到其后。
+  let contentSinceBoundary = false
+  let orphanStepFinish: StepFinishPart | undefined
+
+  /** 内容项入列后补挂被扣住的 step-finish */
+  const afterContent = () => {
+    contentSinceBoundary = true
+    if (!orphanStepFinish) return
+    result.push({ type: 'single', part: orphanStepFinish })
+    orphanStepFinish = undefined
+    contentSinceBoundary = false
+  }
 
   const flushToolGroup = (sf?: StepFinishPart) => {
     if (toolGroup.length === 0) return
-    result.push({ type: 'tool-group', parts: toolGroup, stepFinish: sf })
+    // 扣住的 step-finish 优先并入本组页脚——它属于这一步，位置和语义都对得上
+    const finish = sf ?? orphanStepFinish
+    if (finish !== undefined && finish === orphanStepFinish) orphanStepFinish = undefined
+    result.push({ type: 'tool-group', parts: toolGroup, stepFinish: finish })
     toolGroup = []
     stepFinish = undefined
+    afterContent()
   }
 
   for (let i = 0; i < parts.length; i++) {
@@ -1576,15 +1595,22 @@ function groupPartsForRender(parts: Part[]): RenderItem[] {
       } else if (toolGroup.length > 0) {
         // 最后一个 step-finish，结束 tool group
         flushToolGroup(part)
-      } else {
+      } else if (contentSinceBoundary) {
         result.push({ type: 'single', part })
+        contentSinceBoundary = false
+      } else {
+        // 本步内容还没到（回放帧序）——扣住，等内容入列后补挂
+        orphanStepFinish = part
       }
     } else {
       flushToolGroup(stepFinish)
       result.push({ type: 'single', part })
+      afterContent()
     }
   }
 
   flushToolGroup(stepFinish)
+  // 整条消息都没有内容（空回复）：别把用量栏丢了
+  if (orphanStepFinish) result.push({ type: 'single', part: orphanStepFinish })
   return result
 }

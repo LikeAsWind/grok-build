@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MessageRenderer,
+  groupPartsForRender,
   messageHasFinalContent,
   messageHasProcessContent,
   splitProcessRenderItems,
@@ -57,7 +58,7 @@ vi.mock('./parts', () => ({
   FilePartView: () => null,
   AgentPartView: () => null,
   SyntheticTextPartView: () => null,
-  StepFinishPartView: () => null,
+  StepFinishPartView: () => <div data-testid="step-finish">step usage</div>,
   SubtaskPartView: () => null,
   RetryPartView: () => null,
   CompactionPartView: () => <div>History compacted</div>,
@@ -332,5 +333,119 @@ describe('process content split', () => {
     expect(messageHasProcessContent(plain)).toBe(false)
     expect(messageHasFinalContent(plain)).toBe(true)
     void splitProcessRenderItems
+  })
+})
+
+describe('groupPartsForRender step-finish 排序', () => {
+  const stepFinish = (id: string): StepFinishPart => ({
+    id,
+    sessionID: 'session-1',
+    messageID: 'assistant-1',
+    type: 'step-finish',
+    reason: 'stop',
+    cost: 0,
+    tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+
+  const text = (id: string, value: string): TextPart => ({
+    id,
+    sessionID: 'session-1',
+    messageID: 'assistant-1',
+    type: 'text',
+    text: value,
+  })
+
+  const tool = (id: string): ToolPart => ({
+    id,
+    sessionID: 'session-1',
+    messageID: 'assistant-1',
+    type: 'tool',
+    callID: `call-${id}`,
+    tool: 'bash',
+    state: {
+      status: 'completed',
+      input: { command: 'pwd' },
+      output: '/workspace',
+      title: 'pwd',
+      metadata: {},
+      time: { start: 1, end: 2 },
+    },
+  })
+
+  /** 回放帧序（后端 updates.jsonl 实测）：response_completed 先于聚合的正文帧 */
+  it('把排在正文前的 step-finish 挪到正文之后', () => {
+    const items = groupPartsForRender([stepFinish('step-1'), text('text-1', 'reply')])
+
+    expect(items.map(item => (item.type === 'single' ? item.part.type : 'tool-group'))).toEqual([
+      'text',
+      'step-finish',
+    ])
+  })
+
+  it('正文已在前面时保持原顺序不动', () => {
+    const items = groupPartsForRender([text('text-1', 'reply'), stepFinish('step-1')])
+
+    expect(items.map(item => (item.type === 'single' ? item.part.type : 'tool-group'))).toEqual([
+      'text',
+      'step-finish',
+    ])
+  })
+
+  it('多步各自的 step-finish 都跟在本步正文之后', () => {
+    const items = groupPartsForRender([
+      stepFinish('step-1'),
+      text('text-1', 'first'),
+      stepFinish('step-2'),
+      text('text-2', 'second'),
+    ])
+
+    expect(
+      items.map(item => (item.type === 'single' ? `${item.part.type}:${item.part.id}` : 'tool-group')),
+    ).toEqual(['text:text-1', 'step-finish:step-1', 'text:text-2', 'step-finish:step-2'])
+  })
+
+  it('step-finish 排在 tool 之前时并入 tool group 而不是单独顶到上方', () => {
+    const items = groupPartsForRender([stepFinish('step-1'), tool('tool-1')])
+
+    expect(items).toHaveLength(1)
+    expect(items[0].type).toBe('tool-group')
+  })
+
+  it('整条消息只有 step-finish（空回复）时不丢用量栏', () => {
+    const items = groupPartsForRender([stepFinish('step-1')])
+
+    expect(items.map(item => (item.type === 'single' ? item.part.type : 'tool-group'))).toEqual([
+      'step-finish',
+    ])
+  })
+
+  it('渲染到 DOM 后 Step 栏在回复正文之下', () => {
+    const message: Message = {
+      info: {
+        id: 'assistant-1',
+        sessionID: 'session-1',
+        role: 'assistant',
+        parentID: 'user-1',
+        modelID: 'model-1',
+        providerID: 'provider-1',
+        mode: 'chat',
+        agent: 'build',
+        path: { cwd: '/workspace', root: '/workspace' },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 1, completed: 2 },
+      },
+      // 回放帧序：用量帧在正文帧之前
+      parts: [stepFinish('step-1'), text('text-1', 'assistant reply')],
+      isStreaming: false,
+    }
+
+    const { container } = render(<MessageRenderer message={message} />)
+
+    const replyNode = screen.getByText('assistant reply')
+    const stepNode = screen.getByTestId('step-finish')
+    // Node.DOCUMENT_POSITION_FOLLOWING = 4：stepNode 在 replyNode 之后
+    expect(replyNode.compareDocumentPosition(stepNode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    void container
   })
 })
