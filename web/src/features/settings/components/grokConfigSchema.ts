@@ -589,7 +589,7 @@ export const KEYED_TABLES: KeyedTableDef[] = [
     fields: [
       s('directory', '工作目录 *', '绝对路径', '/path/to/project'),
       s('workspace_id', 'TAPD Workspace ID *', undefined, '12345'),
-      arr('entity_types', '同步的实体类型', '留空默认仅同步 task；可填 story/task/bug'),
+      arr('entity_types', '同步的实体类型', '留空默认仅同步 story；可填 story/task/bug'),
       arr('module_filter', '模块筛选', '留空 = 不筛选模块'),
       n('poll_interval_override_secs', '同步间隔覆盖（秒）', undefined, '0 或留空 = 使用全局默认间隔'),
       b('enabled', '启用', 'true'),

@@ -5,13 +5,16 @@
 //! cross-checked with Apache DevLake's TAPD plugin (a production consumer of
 //! the same API): every request appends `?s=mcp` (or `&s=mcp`), auth is
 //! `Authorization: Bearer <token>` or HTTP Basic, and incremental pulls pass
-//! `modified=>YYYY-MM-DD` (day-granularity, single-sided lower bound — NOT a
-//! `~`-separated range) combined with `order=created asc` for stable paging.
+//! `modified=>YYYY-MM-DD HH:MM:SS` (full timestamp, single-sided lower
+//! bound — NOT a `~`-separated range) combined with `order=created asc` for
+//! stable paging. The lower-bound semantics of `modified=>T` only work with
+//! ascending order: paging from the newest end of `created` would silently
+//! miss items whose `created` is older than the page window.
 //!
-//! Unconfirmed against a live TAPD account (flagged per field below):
-//! - The exact key used for the "module" facet (assumed `module`, matching
-//!   TAPD's UI terminology; the reference docs list only `category_id` for
-//!   requirement categories, not module).
+//! `module=` is passed as a hint when configured — TAPD's server-side
+//! handling of it is inconsistent across endpoints, so the client also
+//! post-filters pages against the configured module list. The query hint
+//! is harmless when ignored, useful when honored.
 
 use std::collections::HashMap;
 
@@ -130,11 +133,13 @@ impl TapdClient {
     }
 
     /// List work items of `entity_type` for `workspace_id`, optionally
-    /// filtered to items modified since `since` (day-granularity date,
-    /// `YYYY-MM-DD`), to items in one of the given `modules`, to a TAPD-side
-    /// `status` value, and sorted either `created desc` (when
-    /// `order_desc`) or `created asc`. Pages through the result set until
-    /// one of the four terminating conditions fires.
+    /// filtered to items modified since `since` (full TAPD `modified`
+    /// timestamp `YYYY-MM-DD HH:MM:SS`), to items in one of the given
+    /// `modules`, to a TAPD-side `status` value. Always sorts
+    /// `order=created asc` (no `order_desc` knob — ascending is the only
+    /// mode compatible with the `modified=>T` lower-bound pagination).
+    /// Pages through the result set until one of the four terminating
+    /// conditions fires.
     ///
     /// **Termination conditions.** The loop stops at the first one of:
     /// 1. The page comes back empty (`< 1` items) — TAPD ran out, or the
@@ -151,6 +156,18 @@ impl TapdClient {
     /// (2) only fires when `module_filter` has more than one entry. When it
     /// has one, the single module goes onto the query string and TAPD does
     /// the filter server-side, making (2) equivalent to (1).
+    /// Page through TAPD's `stories` / `tasks` / `bugs` list for one
+    /// workspace, optionally filtered to items modified since `since` (full
+    /// `YYYY-MM-DD HH:MM:SS` timestamp — the per-entity_type cursor), and
+    /// filtered to items whose `module` matches any of `modules`.
+    ///
+    /// **Always sorts `order=created asc`** — the lower bound semantics of
+    /// `modified=>T` only make sense in chronological order: anything
+    /// modified after T can sit anywhere in a created-desc sorted set, and
+    /// paging from the newest end would silently miss items whose
+    /// `created` is older than the page window. Asc + full-timestamp
+    /// `modified=>T` is the only stable combo for incremental syncs. (No
+    /// `order_desc` knob — it's gone.)
     pub async fn list_work_items(
         &self,
         workspace_id: &str,
@@ -158,20 +175,30 @@ impl TapdClient {
         since: Option<&str>,
         modules: &[String],
         status: Option<&str>,
-        order_desc: bool,
     ) -> Result<Vec<TapdWorkItem>, TapdClientError> {
         let mut all = Vec::new();
         let mut page = 1u32;
         const PAGE_LIMIT: u32 = 200;
         const MAX_PAGES: u32 = 200;
-        // TAPD's server-side `module` filter is ignored (see note below), so we
-        // always post-filter on the client side when any module is specified —
-        // regardless of whether the user passed one or many.
+        // Post-filter by module on the client as well — TAPD's task/story/bug
+        // endpoints are inconsistent on whether the `module` query is honored
+        // (see the `module` doc comment at the top of this file), so the
+        // safe path is server-side hint + client-side authoritative filter.
         let post_filter = !modules.is_empty();
         let allowed: std::collections::HashSet<&String> = if post_filter {
             modules.iter().collect()
         } else {
             std::collections::HashSet::new()
+        };
+        // Push the first configured module onto the query string as a hint
+        // — useful when TAPD does honor `module` server-side, harmless when
+        // it doesn't (see post-filter above). Comma-joined if the caller
+        // somehow passes more than one (binding.module_filter is a Vec for
+        // future expansion; today's UI sends at most one).
+        let module_query = if !modules.is_empty() {
+            Some(modules.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","))
+        } else {
+            None
         };
 
         loop {
@@ -179,19 +206,16 @@ impl TapdClient {
             params.insert("workspace_id", workspace_id.to_string());
             params.insert("page", page.to_string());
             params.insert("limit", PAGE_LIMIT.to_string());
-            params.insert("order", if order_desc { "created desc".to_string() } else { "created asc".to_string() });
+            params.insert("order", "created asc".to_string());
             if let Some(since) = since {
                 params.insert("modified", format!(">{since}"));
             }
             if let Some(status) = status {
                 params.insert("status", status.to_string());
             }
-            // NOTE: We intentionally do NOT push `module` into the query string.
-            // Empirically TAPD's task/story/bug endpoints ignore it server-side
-            // (returning the same first page regardless of the parameter),
-            // see `module` doc comment at the top of this file. Filtering
-            // happens client-side via `allowed` below; that's the only path
-            // that actually narrows results.
+            if let Some(m) = module_query.as_deref() {
+                params.insert("module", m.to_string());
+            }
 
             let page_items = self.fetch_page(entity_type, &params).await?;
             let raw_got = page_items.len();

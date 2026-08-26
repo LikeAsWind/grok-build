@@ -35,8 +35,6 @@ struct TapdTomlConfig {
     /// workspace defines its own status taxonomy, so this is the default
     /// rather than a hard-coded contract.
     default_status_filter: Option<String>,
-    /// Default sort direction for derived bindings (true = `created desc`).
-    default_order_desc: Option<bool>,
     poll_interval_secs: Option<u64>,
     projects: std::collections::HashMap<String, TapdTomlProject>,
 }
@@ -53,10 +51,6 @@ struct TapdTomlProject {
     /// string rather than an enum. Default `planning` (configured via
     /// `default_status_filter` below for derived bindings).
     status: Option<String>,
-    /// When true (the default), sort the sync pulls by `created desc` so the
-    /// workbench sees the most recently created items first.
-    #[serde(default)]
-    order_desc: bool,
     poll_interval_override_secs: Option<u64>,
     enabled: Option<bool>,
 }
@@ -138,15 +132,15 @@ impl DiskTapdConfigSource {
     }
 }
 
-/// `entity_types` strings → enum, defaulting to `[task, story, bug]` when
-/// empty or when nothing parses (an unrecognised name must not silently
-/// sync nothing). The three-way default reflects the user's expectation:
-/// stories are "需求", tasks are "任务", bugs are "缺陷" — the workbench
-/// is a unified inbox across all TAPD-side item types.
+/// `entity_types` strings → enum, defaulting to `[story]` when empty
+/// or when nothing parses (an unrecognised name must not silently sync
+/// nothing). The workbench's primary interest is requirements/stories
+/// ("需求"); per-project bindings can opt in to task/bug by listing them
+/// explicitly in `[tapd.projects.<key>].entity_types`.
 fn parse_entity_types(raw: &[String]) -> Vec<TapdEntityType> {
     let parsed: Vec<_> = raw.iter().filter_map(|s| TapdEntityType::parse(s)).collect();
     if parsed.is_empty() {
-        vec![TapdEntityType::Task, TapdEntityType::Story, TapdEntityType::Bug]
+        vec![TapdEntityType::Story]
     } else {
         parsed
     }
@@ -159,7 +153,6 @@ fn binding_from_project(p: &TapdTomlProject) -> TapdProjectBinding {
         entity_types: parse_entity_types(&p.entity_types),
         module_filter: p.module_filter.clone(),
         status: p.status.clone().filter(|s| !s.trim().is_empty()),
-        order_desc: p.order_desc,
     }
 }
 
@@ -193,7 +186,6 @@ fn derived_binding(cfg: &TapdTomlConfig, directory: &str) -> Option<TapdProjectB
         // user opts in by editing the binding.
         module_filter: Vec::new(),
         status: cfg.default_status_filter.clone().filter(|s| !s.trim().is_empty()),
-        order_desc: cfg.default_order_desc.unwrap_or(true),
     })
 }
 
@@ -358,7 +350,6 @@ mod tests {
             access_token = "tok"
             default_workspace_id = "69280376"
             default_status_filter = "planning"
-            default_order_desc = true
             "#,
         );
         let source = DiskTapdConfigSource::new(dir.path().to_path_buf());
@@ -374,7 +365,6 @@ mod tests {
             "derived binding defaults to stories only — user's workbench is for 需求"
         );
         assert_eq!(binding.status.as_deref(), Some("planning"));
-        assert!(binding.order_desc, "default_order_desc=true flows through");
         assert!(!source.has_explicit_binding("D:/work/My-Repo"));
     }
 
@@ -393,7 +383,6 @@ mod tests {
             workspace_id = "222"
             module_filter = ["自定义模块"]
             status = "open"
-            order_desc = false
             "#,
         );
         let source = DiskTapdConfigSource::new(dir.path().to_path_buf());
@@ -402,7 +391,6 @@ mod tests {
         assert_eq!(binding.workspace_id, "222");
         assert_eq!(binding.module_filter, vec!["自定义模块".to_string()]);
         assert_eq!(binding.status.as_deref(), Some("open"));
-        assert!(!binding.order_desc, "explicit order_desc=false flows through");
         assert!(source.has_explicit_binding("/repo/a"));
 
         // 其他目录仍然落到默认 workspace（默认 status 也继承）
@@ -431,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_entity_types_falls_back_to_all_three_for_explicit_binding() {
+    fn empty_entity_types_falls_back_to_story_for_explicit_binding() {
         let dir = tempfile::tempdir().unwrap();
         write_config(
             dir.path(),
@@ -450,7 +438,7 @@ mod tests {
         let binding = source.binding_for("/repo/a").unwrap();
         assert_eq!(
             binding.entity_types,
-            vec![TapdEntityType::Task, TapdEntityType::Story, TapdEntityType::Bug]
+            vec![TapdEntityType::Story]
         );
         let _ = bindings; // both names used to silence unused warnings
     }

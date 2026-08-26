@@ -26,8 +26,6 @@ pub struct TapdProjectBinding {
     pub module_filter: Vec<String>,
     /// TAPD-side status filter — see [`crate::agent::config::TapdProjectConfig::status`].
     pub status: Option<String>,
-    /// Sync pulls are sorted `created desc` when true, `created asc` otherwise.
-    pub order_desc: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -77,33 +75,38 @@ pub async fn sync_project(
     store: &TapdStore,
     client: &TapdClient,
     binding: &TapdProjectBinding,
+    entity_type: TapdEntityType,
     trigger: SyncTrigger,
     owner_id: &str,
 ) -> Result<SyncStats, SyncError> {
+    let entity_type_str = entity_type.as_str();
+
     // Make sure the cursor row exists before trying to acquire its lease.
     // Without this, a freshly-configured binding (the only way the user can
     // reach sync_project — the binding comes from config.toml and the SQLite
-    // cursor is per-directory) trips try_acquire_lock's `WHERE directory = ?1`
-    // and returns `false` ("LeaseHeld"), silently skipping sync. The cursor
-    // gets lazily seeded on first sync, with the workspace_id from the binding.
-    store.upsert_project_binding(&binding.directory, &binding.workspace_id)?;
+    // cursor is per-(directory, entity_type)) trips try_acquire_lock's
+    // `WHERE directory = ?1 AND entity_type = ?2` and returns `false`
+    // ("LeaseHeld"), silently skipping sync. The cursor gets lazily seeded
+    // on first sync, with the workspace_id from the binding.
+    store.upsert_project_cursor(&binding.directory, &binding.workspace_id, entity_type_str)?;
 
-    if !store.try_acquire_lock(&binding.directory, owner_id, LOCK_STALE_AFTER_SECS)? {
+    if !store.try_acquire_lock(&binding.directory, entity_type_str, owner_id, LOCK_STALE_AFTER_SECS)? {
         return Err(SyncError::LeaseHeld(binding.directory.clone()));
     }
 
     let started = std::time::Instant::now();
     let run_id = store.start_run(&binding.directory, trigger.as_str())?;
-    let cursor = store.get_cursor(&binding.directory)?;
+    let cursor = store.get_cursor(&binding.directory, entity_type_str)?;
     let since = cursor.as_ref().and_then(|c| c.last_synced_modified.clone());
 
-    let result = run_pulls(store, client, binding, since.as_deref()).await;
+    let result = run_pulls(store, client, binding, entity_type, since.as_deref()).await;
     let duration_ms = started.elapsed().as_millis() as i64;
 
     match result {
         Ok((stats, watermark)) => {
             store.release_lock_success(
                 &binding.directory,
+                entity_type_str,
                 owner_id,
                 watermark.as_deref(),
                 &stats,
@@ -114,90 +117,100 @@ pub async fn sync_project(
         }
         Err((partial_stats, error)) => {
             let message = error.to_string();
-            store.release_lock_failure(&binding.directory, owner_id, &message, &partial_stats, duration_ms)?;
+            store.release_lock_failure(
+                &binding.directory,
+                entity_type_str,
+                owner_id,
+                &message,
+                &partial_stats,
+                duration_ms,
+            )?;
             store.finish_run(run_id, "failed", &partial_stats, Some(&message))?;
             Err(error)
         }
     }
 }
 
-/// Pull every configured entity type and upsert into the queue. Returns the
-/// aggregate stats plus the new watermark (the max `modified` timestamp seen
-/// across all pulled items) on success. On failure, returns whatever partial
+/// Pull one entity type from the cursor's watermark forward and upsert
+/// into the queue. Returns the per-entity_type stats plus the new watermark
+/// (the max `modified` timestamp seen across pulled items — the FULL
+/// timestamp, not day-granularity). On failure, returns whatever partial
 /// stats had accumulated so the sync_runs record isn't silently zeroed.
+///
+/// The per-entity_type split (caller iterates `binding.entity_types` and
+/// invokes `sync_project` once each) is what makes the per-entity_type
+/// watermark possible: each pull advances only its own cursor row, so a
+/// slower entity type doesn't drag a faster one backward.
 async fn run_pulls(
     store: &TapdStore,
     client: &TapdClient,
     binding: &TapdProjectBinding,
+    entity_type: TapdEntityType,
     since: Option<&str>,
 ) -> Result<(SyncStats, Option<String>), (SyncStats, SyncError)> {
     let mut stats = SyncStats::default();
     let mut max_modified: Option<String> = None;
 
-    for entity_type in &binding.entity_types {
-        let items = match client
-            .list_work_items(
-                &binding.workspace_id,
-                *entity_type,
-                since,
-                &binding.module_filter,
-                binding.status.as_deref(),
-                binding.order_desc,
-            )
-            .await
+    let items = match client
+        .list_work_items(
+            &binding.workspace_id,
+            entity_type,
+            since,
+            &binding.module_filter,
+            binding.status.as_deref(),
+        )
+        .await
+    {
+        Ok(items) => items,
+        Err(e) => return Err((stats, SyncError::Client(e))),
+    };
+
+    for item in items {
+        stats.fetched += 1;
+        if let Some(modified) = &item.modified
+            && max_modified.as_deref().is_none_or(|m| modified.as_str() > m)
         {
-            Ok(items) => items,
-            Err(e) => return Err((stats, SyncError::Client(e))),
+            max_modified = Some(modified.clone());
+        }
+
+        let input = UpsertTaskInput {
+            directory: binding.directory.clone(),
+            workspace_id: binding.workspace_id.clone(),
+            entity_type: entity_type.as_str().to_string(),
+            tapd_id: item.id.clone(),
+            title: item.title.clone(),
+            status: item.status.clone(),
+            priority: item.priority.clone(),
+            module: item.module.clone(),
+            owner: item.owner.clone(),
+            tapd_created_at: item.created.clone(),
+            tapd_modified_at: item.modified.clone(),
+            raw_json: item.raw.to_string(),
         };
 
-        for item in items {
-            stats.fetched += 1;
-            if let Some(modified) = &item.modified
-                && max_modified.as_deref().is_none_or(|m| modified.as_str() > m)
-            {
-                max_modified = Some(modified.clone());
-            }
-
-            let input = UpsertTaskInput {
-                directory: binding.directory.clone(),
-                workspace_id: binding.workspace_id.clone(),
-                entity_type: entity_type.as_str().to_string(),
-                tapd_id: item.id.clone(),
-                title: item.title.clone(),
-                status: item.status.clone(),
-                priority: item.priority.clone(),
-                module: item.module.clone(),
-                owner: item.owner.clone(),
-                tapd_created_at: item.created.clone(),
-                tapd_modified_at: item.modified.clone(),
-                raw_json: item.raw.to_string(),
-            };
-
-            match store.upsert_task(&input) {
-                Ok(UpsertOutcome::Added) => stats.added += 1,
-                Ok(UpsertOutcome::Updated) => stats.updated += 1,
-                Ok(UpsertOutcome::Duplicate) => stats.duplicate += 1,
-                Err(e) => {
-                    stats.failed += 1;
-                    tracing::warn!(
-                        directory = %binding.directory,
-                        tapd_id = %item.id,
-                        error = %e,
-                        "failed to upsert TAPD task"
-                    );
-                }
+        match store.upsert_task(&input) {
+            Ok(UpsertOutcome::Added) => stats.added += 1,
+            Ok(UpsertOutcome::Updated) => stats.updated += 1,
+            Ok(UpsertOutcome::Duplicate) => stats.duplicate += 1,
+            Err(e) => {
+                stats.failed += 1;
+                tracing::warn!(
+                    directory = %binding.directory,
+                    tapd_id = %item.id,
+                    error = %e,
+                    "failed to upsert TAPD task"
+                );
             }
         }
     }
 
-    // Day-granularity `modified=>YYYY-MM-DD` re-pulls the whole watermark
-    // day every time (see client.rs doc comment) — the content-hash dedup
-    // in `upsert_task` is what keeps that idempotent, not a tighter cursor.
-    let watermark = max_modified
-        .as_deref()
-        .and_then(|m| m.split(' ').next())
-        .map(str::to_string)
-        .or_else(|| since.map(str::to_string));
+    // Full `modified=>YYYY-MM-DD HH:MM:SS` watermark — the day-truncation
+    // we used to do here would re-pull the same day on every subsequent
+    // sync and rely on content_hash dedup to absorb the dupes. With
+    // per-entity_type cursors we can advance to the precise timestamp and
+    // avoid the wasted requests. (Lexicographic order matches chronological
+    // order for TAPD's zero-padded timestamp format, so `max` is correct.)
+    let watermark = max_modified.or_else(|| since.map(str::to_string));
 
     Ok((stats, watermark))
 }
@@ -208,9 +221,9 @@ async fn run_pulls(
 /// before the background timer's first tick — this is what lets the
 /// workbench recover without waiting for the next scheduled sync.
 ///
-/// Returns the directories whose lease was reclaimed (these should be
-/// re-synced immediately by the caller).
-pub fn recover_on_startup(store: &TapdStore) -> Result<Vec<String>, rusqlite::Error> {
+/// Returns the `(directory, entity_type)` pairs whose lease was reclaimed
+/// (these should be re-synced immediately by the caller).
+pub fn recover_on_startup(store: &TapdStore) -> Result<Vec<(String, TapdEntityType)>, rusqlite::Error> {
     let reclaimed = store.reconcile_stale_locks(LOCK_STALE_AFTER_SECS)?;
     let requeued = store.reconcile_stale_processing_tasks(LOCK_STALE_AFTER_SECS)?;
     let stale_runs = store.reconcile_stale_runs()?;
@@ -222,7 +235,16 @@ pub fn recover_on_startup(store: &TapdStore) -> Result<Vec<String>, rusqlite::Er
             "TAPD workbench: startup recovery reconciled interrupted state"
         );
     }
-    Ok(reclaimed)
+    // Reclaimed tuples come back as `(directory, entity_type_str)`; parse
+    // them into the enum so the caller can iterate typed pairs. Unknown
+    // strings (forward-compat: a future schema_version introducing a new
+    // entity type would produce one) are skipped — they'll be picked up
+    // by the next scheduled tick once sync_project falls back to the
+    // binding's configured entity_types list.
+    Ok(reclaimed
+        .into_iter()
+        .filter_map(|(d, et)| TapdEntityType::parse(&et).map(|t| (d, t)))
+        .collect())
 }
 
 /// Source of the current set of bound projects + credentials, re-read on
@@ -339,12 +361,12 @@ impl TapdSyncManager {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(self.config.poll_interval());
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // First tick fires immediately; recovered directories are synced
+            // First tick fires immediately; recovered pairs are synced
             // right away below rather than waiting for it.
             interval.tick().await;
 
             if !recovered.is_empty() {
-                self.sync_directories(recovered, SyncTrigger::StartupRecovery).await;
+                self.sync_pairs(recovered, SyncTrigger::StartupRecovery).await;
             }
 
             loop {
@@ -353,25 +375,43 @@ impl TapdSyncManager {
                         if !self.config.enabled() {
                             continue;
                         }
-                        let all: Vec<String> = self
+                        let all: Vec<(String, TapdEntityType)> = self
                             .config
                             .bindings()
                             .into_iter()
-                            .map(|b| b.directory)
+                            .flat_map(|b| {
+                                let dir = b.directory.clone();
+                                b.entity_types.iter().map(move |&et| (dir.clone(), et)).collect::<Vec<_>>()
+                            })
                             .collect();
-                        self.sync_directories(all, SyncTrigger::Scheduled).await;
+                        self.sync_pairs(all, SyncTrigger::Scheduled).await;
                     }
                     Some(request) = manual_trigger_rx.recv() => {
-                        let directories = match &request.directory {
-                            Some(dir) => vec![dir.clone()],
+                        let pairs: Vec<(String, TapdEntityType)> = match &request.directory {
+                            Some(dir) => {
+                                // Single directory: resolve via binding_for so
+                                // a directory reached only via
+                                // default_workspace_id still syncs.
+                                match self.config.binding_for(dir) {
+                                    Some(b) => b
+                                        .entity_types
+                                        .iter()
+                                        .map(|et| (dir.clone(), *et))
+                                        .collect(),
+                                    None => Vec::new(),
+                                }
+                            }
                             None => self
                                 .config
                                 .bindings()
                                 .into_iter()
-                                .map(|b| b.directory)
+                                .flat_map(|b| {
+                                    let dir = b.directory.clone();
+                                    b.entity_types.iter().map(move |&et| (dir.clone(), et)).collect::<Vec<_>>()
+                                })
                                 .collect(),
                         };
-                        self.sync_directories(directories, SyncTrigger::Manual).await;
+                        self.sync_pairs(pairs, SyncTrigger::Manual).await;
                         let _ = request.reply.send(Ok(()));
                     }
                 }
@@ -379,19 +419,39 @@ impl TapdSyncManager {
         });
     }
 
-    async fn sync_directories(&self, directories: Vec<String>, trigger: SyncTrigger) {
+    /// Sync every `(directory, entity_type)` pair in `pairs` serially.
+    /// Each pair acquires its own lease and emits its own Started /
+    /// Succeeded / Failed event. Order is stable so a "scheduled" tick and
+    /// a "manual" trigger see the same acquisition order across runs —
+    /// helps when a pair is deadlocked and you need to know which one was
+    /// tried first.
+    async fn sync_pairs(
+        &self,
+        pairs: Vec<(String, TapdEntityType)>,
+        trigger: SyncTrigger,
+    ) {
         let Some(client_config) = self.config.client_config() else {
             tracing::debug!("TAPD workbench: no credentials configured, skipping sync");
             return;
         };
         let client = TapdClient::new(client_config);
 
-        for directory in directories {
+        for (directory, entity_type) in pairs {
             // binding_for (not bindings()) so a directory whose binding is
-            // derived from default_workspace_id still syncs on manual trigger
+            // derived from default_workspace_id still syncs on manual
+            // trigger or recovery.
             let Some(binding) = self.config.binding_for(&directory) else {
                 continue;
             };
+            // The pair may include an entity_type that the binding's current
+            // config no longer lists (e.g. user removed `task` from
+            // entity_types since the cursor row was seeded). Skip — the
+            // orphan cursor row is harmless and will be reaped by a future
+            // schema cleanup, but syncing it would require fabricating a
+            // binding.entity_types list and pretending the workbench wants it.
+            if !binding.entity_types.contains(&entity_type) {
+                continue;
+            }
             let binding = &binding;
             self.emit(SyncStatusEvent {
                 directory: directory.clone(),
@@ -405,7 +465,7 @@ impl TapdSyncManager {
             let result = execute_with_backoff(
                 &backoff,
                 || async {
-                    sync_project(store, &client, binding, trigger, owner_id)
+                    sync_project(store, &client, binding, entity_type, trigger, owner_id)
                         .await
                         .map_err(|e| e.to_string())
                 },
@@ -449,10 +509,9 @@ mod tests {
         TapdProjectBinding {
             directory: dir.to_string(),
             workspace_id: "999".to_string(),
-            entity_types: vec![TapdEntityType::Task],
+            entity_types: vec![TapdEntityType::Story],
             module_filter: vec![],
             status: None,
-            order_desc: true,
         }
     }
 
@@ -474,10 +533,9 @@ mod tests {
                 Some(TapdProjectBinding {
                     directory: directory.to_string(),
                     workspace_id: "derived".to_string(),
-                    entity_types: vec![TapdEntityType::Task],
+                    entity_types: vec![TapdEntityType::Story],
                     module_filter: vec![],
                     status: None,
-                    order_desc: true,
                 })
             }
             fn poll_interval(&self) -> Duration {
@@ -516,7 +574,13 @@ mod tests {
     // idempotency, lease/cursor semantics) plus this pure watermark-picking
     // check, which does not require network access.
     #[test]
-    fn watermark_picks_max_modified_and_truncates_to_day() {
+    /// Per-entity_type cursors advance to the FULL TAPD `modified`
+    /// timestamp (no day truncation). Lexicographic order matches
+    /// chronological order for TAPD's zero-padded `YYYY-MM-DD HH:MM:SS`
+    /// format, so a plain `.max()` on the pulled batch picks the right
+    /// next-watermark — which is what `run_pulls` returns, and what
+    /// `sync_project` then writes to the per-entity_type cursor.
+    fn watermark_picks_full_timestamp_max() {
         let items = [
             TapdWorkItem {
                 id: "1".into(),
@@ -546,9 +610,9 @@ mod tests {
             .filter_map(|i| i.modified.as_deref())
             .max()
             .unwrap();
+        // No day truncation — full `YYYY-MM-DD HH:MM:SS` survives.
         assert_eq!(max, "2026-01-03 08:00:00");
-        assert_eq!(max.split(' ').next().unwrap(), "2026-01-03");
-        let _ = binding("/proj"); // exercised via sync_project in integration-style tests below
+        let _ = binding("/proj");
     }
 
     /// Regression: previously, sync_project on a brand-new binding silently
@@ -563,12 +627,13 @@ mod tests {
         let store = TapdStore::new(dir.path().join("tapd.sqlite"));
         // No prior upsert: simulating the bug condition.
         store
-            .upsert_project_binding("/proj/fresh", "999")
+            .upsert_project_cursor("/proj/fresh", "999", "story")
             .expect("upsert");
         let cursor = store
-            .get_cursor("/proj/fresh")
+            .get_cursor("/proj/fresh", "story")
             .expect("get_cursor")
             .expect("cursor row must exist after upsert");
         assert_eq!(cursor.workspace_id, "999");
+        assert_eq!(cursor.entity_type, "story");
     }
 }

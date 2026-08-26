@@ -262,7 +262,11 @@ async fn handle_status(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         let store = store.clone();
         let directory = req.directory.clone();
         move || -> anyhow::Result<(Option<CursorDto>, CountsDto, Vec<String>, Vec<RunDto>)> {
-            let cursor = store.get_cursor(&directory)?;
+            // get_cursor_summary aggregates per-(directory, entity_type)
+            // cursors into a single view for the workbench header. The
+            // aggregate carries a synthetic `entity_type` (lexicographic min)
+            // since the summary has no single type.
+            let cursor = store.get_cursor_summary(&directory)?;
             let is_syncing = cursor.as_ref().is_some_and(|c| c.lock_owner.is_some());
             let cursor_dto = cursor.map(|c| CursorDto {
                 directory: c.directory,

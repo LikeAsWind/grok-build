@@ -1,9 +1,12 @@
 //! SQLite persistence for the TAPD workbench.
 //!
 //! Three tables, one file (`~/.grok/tapd/tapd.sqlite`):
-//! - `sync_cursor` — one row per bound directory: workspace binding, the
-//!   incremental watermark, sync-lease (lock) fields, and the last-run
-//!   summary shown in the workbench header.
+//! - `sync_cursor` — one row per (directory, entity_type) pair: workspace
+//!   binding, per-entity_type incremental watermark (full TAPD `modified`
+//!   timestamp, not day-granularity), sync-lease (lock) fields, and the
+//!   last-run summary shown in the workbench header. Splitting by
+//!   entity_type keeps one type's progress from being artificially held
+//!   back by another's slower watermark.
 //! - `tasks` — the local task queue. Primary key is the TAPD-native identity
 //!   (`workspace_id:entity_type:tapd_id`), so re-pulling the same item is
 //!   always an idempotent upsert, never a duplicate row.
@@ -21,7 +24,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub fn db_path(grok_home: &Path) -> PathBuf {
     let dir = grok_home.join("tapd");
@@ -57,6 +60,11 @@ impl SyncStats {
 pub struct SyncCursor {
     pub directory: String,
     pub workspace_id: String,
+    /// TAPD-side entity type this cursor tracks (`story` / `task` / `bug`).
+    /// Combined with `directory` as the row's primary key — each
+    /// (directory, entity_type) pair has its own watermark and lock so a
+    /// slower entity type doesn't drag a faster one backward.
+    pub entity_type: String,
     pub last_synced_modified: Option<String>,
     pub last_sync_started_at: Option<i64>,
     pub last_sync_finished_at: Option<i64>,
@@ -210,7 +218,8 @@ impl TapdStore {
             );
 
             CREATE TABLE IF NOT EXISTS sync_cursor (
-                directory TEXT PRIMARY KEY,
+                directory TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
                 workspace_id TEXT NOT NULL,
                 last_synced_modified TEXT,
                 last_sync_started_at INTEGER,
@@ -225,7 +234,8 @@ impl TapdStore {
                 last_sync_failed INTEGER NOT NULL DEFAULT 0,
                 lock_owner TEXT,
                 lock_heartbeat_at INTEGER,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (directory, entity_type)
             );
 
             CREATE TABLE IF NOT EXISTS tasks (
@@ -275,6 +285,42 @@ impl TapdStore {
             ",
         )?;
 
+        if let Some(v) = stored {
+            // v1 —> v2: split sync_cursor by entity_type. The old schema had
+            // only (directory) as the primary key and stored a single shared
+            // day-granularity watermark; the new schema has
+            // (directory, entity_type) and stores a full TAPD 'modified'
+            // timestamp. We DROP the old table — the watermark is the only
+            // thing lost, and the task queue is preserved (it never lived
+            // in sync_cursor). The next sync repopulates cursors as it walks
+            // the per-(directory, entity_type) schedule.
+            if v < 2 {
+                db.execute_batch(
+                    "DROP TABLE IF EXISTS sync_cursor;
+                     CREATE TABLE sync_cursor (
+                         directory TEXT NOT NULL,
+                         entity_type TEXT NOT NULL,
+                         workspace_id TEXT NOT NULL,
+                         last_synced_modified TEXT,
+                         last_sync_started_at INTEGER,
+                         last_sync_finished_at INTEGER,
+                         last_sync_status TEXT,
+                         last_sync_error TEXT,
+                         last_sync_duration_ms INTEGER,
+                         last_sync_fetched INTEGER NOT NULL DEFAULT 0,
+                         last_sync_added INTEGER NOT NULL DEFAULT 0,
+                         last_sync_updated INTEGER NOT NULL DEFAULT 0,
+                         last_sync_duplicate INTEGER NOT NULL DEFAULT 0,
+                         last_sync_failed INTEGER NOT NULL DEFAULT 0,
+                         lock_owner TEXT,
+                         lock_heartbeat_at INTEGER,
+                         updated_at INTEGER NOT NULL,
+                         PRIMARY KEY (directory, entity_type)
+                     );",
+                )?;
+            }
+        }
+
         if stored.is_none_or(|v| v < SCHEMA_VERSION) {
             db.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
@@ -287,17 +333,25 @@ impl TapdStore {
 
     // ── Project bindings / cursor ──────────────────────────────────────
 
-    pub fn upsert_project_binding(
+    /// Seed the cursor row for one (directory, entity_type) pair if it does
+    /// not exist yet, or refresh the workspace_id if the binding changed.
+    /// Called once per entity_type at the start of every sync so a
+    /// freshly-added project type doesn't trip `try_acquire_lock`'s
+    /// `WHERE directory = ?1 AND entity_type = ?2` predicate and silently
+    /// skip the sync.
+    pub fn upsert_project_cursor(
         &self,
         directory: &str,
         workspace_id: &str,
+        entity_type: &str,
     ) -> rusqlite::Result<()> {
         let conn = self.open()?;
         conn.execute(
-            "INSERT INTO sync_cursor (directory, workspace_id, updated_at)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(directory) DO UPDATE SET workspace_id = excluded.workspace_id, updated_at = excluded.updated_at",
-            params![directory, workspace_id, now_secs()],
+            "INSERT INTO sync_cursor (directory, entity_type, workspace_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(directory, entity_type) DO UPDATE SET
+                 workspace_id = excluded.workspace_id, updated_at = excluded.updated_at",
+            params![directory, entity_type, workspace_id, now_secs()],
         )?;
         Ok(())
     }
@@ -311,26 +365,103 @@ impl TapdStore {
         Ok(())
     }
 
-    pub fn get_cursor(&self, directory: &str) -> rusqlite::Result<Option<SyncCursor>> {
+    /// Cursor for one specific (directory, entity_type) pair. Used by
+    /// `sync_project` to read the per-entity_type watermark before a pull.
+
+    pub fn get_cursor(
+        &self,
+        directory: &str,
+        entity_type: &str,
+    ) -> rusqlite::Result<Option<SyncCursor>> {
         let conn = self.open()?;
         conn.query_row(
-            "SELECT directory, workspace_id, last_synced_modified, last_sync_started_at,
-                    last_sync_finished_at, last_sync_status, last_sync_error, last_sync_duration_ms,
-                    last_sync_fetched, last_sync_added, last_sync_updated, last_sync_duplicate,
+            "SELECT directory, entity_type, workspace_id, last_synced_modified,
+                    last_sync_started_at, last_sync_finished_at, last_sync_status,
+                    last_sync_error, last_sync_duration_ms, last_sync_fetched,
+                    last_sync_added, last_sync_updated, last_sync_duplicate,
                     last_sync_failed, lock_owner, lock_heartbeat_at, updated_at
-             FROM sync_cursor WHERE directory = ?1",
-            params![directory],
+             FROM sync_cursor WHERE directory = ?1 AND entity_type = ?2",
+            params![directory, entity_type],
             row_to_cursor,
         )
         .optional()
     }
 
+    /// Aggregated cursor view over **all** entity_types for a directory.
+    /// Used by `handle_status` to feed the workbench header — a single
+    /// project may carry story + task + bug cursors; the workbench UI only
+    /// surfaces one combined state.
+    ///
+    /// Aggregation rules:
+    /// - `last_synced_modified` — max over all entity_types (lexicographic on
+    ///   TAPD's `YYYY-MM-DD HH:MM:SS` is equivalent to chronological, so
+    ///   `max_str` is correct).
+    /// - `last_sync_started_at` / `last_sync_finished_at` / `updated_at` —
+    ///   max.
+    /// - `last_sync_status` — `failed` if any cursor failed, else `success`.
+    /// - `last_sync_error` — first non-empty error encountered.
+    /// - `last_sync_stats` — summed across cursors.
+    /// - `is_syncing` (encoded via `lock_owner`) — true if any cursor has a
+    ///   live lease.
+    pub fn get_cursor_summary(&self, directory: &str) -> rusqlite::Result<Option<SyncCursor>> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT directory, entity_type, workspace_id, last_synced_modified,
+                    last_sync_started_at, last_sync_finished_at, last_sync_status,
+                    last_sync_error, last_sync_duration_ms, last_sync_fetched,
+                    last_sync_added, last_sync_updated, last_sync_duplicate,
+                    last_sync_failed, lock_owner, lock_heartbeat_at, updated_at
+             FROM sync_cursor WHERE directory = ?1",
+        )?;
+        let rows: Vec<SyncCursor> = stmt
+            .query_map(params![directory], row_to_cursor)?
+            .collect::<rusqlite::Result<_>>()?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut summary = rows[0].clone();
+        // entity_type in the summary is meaningless — pick the lexicographically
+        // first one for stability (it's not displayed anywhere).
+        summary.entity_type = rows.iter().map(|c| &c.entity_type).min().cloned().unwrap_or_default();
+        for c in &rows[1..] {
+            summary.last_synced_modified = max_str(summary.last_synced_modified.as_deref(), c.last_synced_modified.as_deref()).map(str::to_string);
+            summary.last_sync_started_at = max_opt(summary.last_sync_started_at, c.last_sync_started_at);
+            summary.last_sync_finished_at = max_opt(summary.last_sync_finished_at, c.last_sync_finished_at);
+            summary.updated_at = summary.updated_at.max(c.updated_at);
+            summary.last_sync_duration_ms = match (summary.last_sync_duration_ms, c.last_sync_duration_ms) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            };
+            summary.last_sync_stats.merge(&c.last_sync_stats);
+            if c.last_sync_status.as_deref() == Some("failed")
+                || summary.last_sync_status.as_deref() == Some("failed")
+            {
+                summary.last_sync_status = Some("failed".to_string());
+            }
+            if summary.last_sync_error.is_none() {
+                summary.last_sync_error = c.last_sync_error.clone();
+            }
+            // lock_owner: any live lease means the workbench is syncing.
+            if summary.lock_owner.is_none() && c.lock_owner.is_some() {
+                summary.lock_owner = c.lock_owner.clone();
+                summary.lock_heartbeat_at = c.lock_heartbeat_at;
+            } else if c.lock_owner.is_some() {
+                summary.lock_heartbeat_at = max_opt(summary.lock_heartbeat_at, c.lock_heartbeat_at);
+            }
+        }
+        Ok(Some(summary))
+    }
+
+    /// All cursor rows across all (directory, entity_type) pairs. Used by
+    /// startup recovery and tests; the workbench UI uses
+    /// [`Self::get_cursor_summary`] for a per-directory aggregate view.
     pub fn list_cursors(&self) -> rusqlite::Result<Vec<SyncCursor>> {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
-            "SELECT directory, workspace_id, last_synced_modified, last_sync_started_at,
-                    last_sync_finished_at, last_sync_status, last_sync_error, last_sync_duration_ms,
-                    last_sync_fetched, last_sync_added, last_sync_updated, last_sync_duplicate,
+            "SELECT directory, entity_type, workspace_id, last_synced_modified,
+                    last_sync_started_at, last_sync_finished_at, last_sync_status,
+                    last_sync_error, last_sync_duration_ms, last_sync_fetched,
+                    last_sync_added, last_sync_updated, last_sync_duplicate,
                     last_sync_failed, lock_owner, lock_heartbeat_at, updated_at
              FROM sync_cursor",
         )?;
@@ -338,15 +469,16 @@ impl TapdStore {
         rows.collect()
     }
 
-    /// Try to acquire the sync lease for `directory`. Fails (returns `false`)
-    /// if another owner holds a live (non-stale) lease. A lease held by a
-    /// dead process is reclaimed transparently — restart recovery does not
-    /// require a separate step for the *acquire* path, only for the
-    /// *startup reconciliation* of orphaned `sync_runs`/task state (see
-    /// [`Self::reconcile_stale_locks`]).
+    /// Try to acquire the sync lease for one (directory, entity_type) pair.
+    /// Fails (returns `false`) if another owner holds a live (non-stale)
+    /// lease for the same pair. A lease held by a dead process is reclaimed
+    /// transparently — restart recovery does not require a separate step for
+    /// the *acquire* path, only for the *startup reconciliation* of orphaned
+    /// `sync_runs`/task state (see [`Self::reconcile_stale_locks`]).
     pub fn try_acquire_lock(
         &self,
         directory: &str,
+        entity_type: &str,
         owner: &str,
         stale_after_secs: i64,
     ) -> rusqlite::Result<bool> {
@@ -354,28 +486,37 @@ impl TapdStore {
         let now = now_secs();
         let updated = conn.execute(
             "UPDATE sync_cursor
-             SET lock_owner = ?2, lock_heartbeat_at = ?3, updated_at = ?3
-             WHERE directory = ?1
-               AND (lock_owner IS NULL OR lock_heartbeat_at < ?4)",
-            params![directory, owner, now, now - stale_after_secs],
+             SET lock_owner = ?3, lock_heartbeat_at = ?4, updated_at = ?4
+             WHERE directory = ?1 AND entity_type = ?2
+               AND (lock_owner IS NULL OR lock_heartbeat_at < ?5)",
+            params![directory, entity_type, owner, now, now - stale_after_secs],
         )?;
         Ok(updated > 0)
     }
 
-    pub fn heartbeat_lock(&self, directory: &str, owner: &str) -> rusqlite::Result<()> {
+    pub fn heartbeat_lock(
+        &self,
+        directory: &str,
+        entity_type: &str,
+        owner: &str,
+    ) -> rusqlite::Result<()> {
         let conn = self.open()?;
         conn.execute(
-            "UPDATE sync_cursor SET lock_heartbeat_at = ?3 WHERE directory = ?1 AND lock_owner = ?2",
-            params![directory, owner, now_secs()],
+            "UPDATE sync_cursor SET lock_heartbeat_at = ?4
+             WHERE directory = ?1 AND entity_type = ?2 AND lock_owner = ?3",
+            params![directory, entity_type, owner, now_secs()],
         )?;
         Ok(())
     }
 
     /// Record a successful sync: advance the cursor (only if `new_watermark`
-    /// is `Some`), release the lease, and store the run summary.
+    /// is `Some`), release the lease, and store the run summary. Per
+    /// (directory, entity_type) so a successful story sync does not erase the
+    /// lock/watermark state of an in-progress task sync on the same binding.
     pub fn release_lock_success(
         &self,
         directory: &str,
+        entity_type: &str,
         owner: &str,
         new_watermark: Option<&str>,
         stats: &SyncStats,
@@ -386,16 +527,17 @@ impl TapdStore {
         conn.execute(
             "UPDATE sync_cursor
              SET lock_owner = NULL, lock_heartbeat_at = NULL,
-                 last_synced_modified = COALESCE(?3, last_synced_modified),
-                 last_sync_started_at = ?4, last_sync_finished_at = ?5,
+                 last_synced_modified = COALESCE(?4, last_synced_modified),
+                 last_sync_started_at = ?5, last_sync_finished_at = ?6,
                  last_sync_status = 'success', last_sync_error = NULL,
-                 last_sync_duration_ms = ?6,
-                 last_sync_fetched = ?7, last_sync_added = ?8, last_sync_updated = ?9,
-                 last_sync_duplicate = ?10, last_sync_failed = ?11,
-                 updated_at = ?5
-             WHERE directory = ?1 AND lock_owner = ?2",
+                 last_sync_duration_ms = ?7,
+                 last_sync_fetched = ?8, last_sync_added = ?9, last_sync_updated = ?10,
+                 last_sync_duplicate = ?11, last_sync_failed = ?12,
+                 updated_at = ?6
+             WHERE directory = ?1 AND entity_type = ?2 AND lock_owner = ?3",
             params![
                 directory,
+                entity_type,
                 owner,
                 new_watermark,
                 now,
@@ -414,6 +556,7 @@ impl TapdStore {
     pub fn release_lock_failure(
         &self,
         directory: &str,
+        entity_type: &str,
         owner: &str,
         error: &str,
         stats: &SyncStats,
@@ -424,15 +567,16 @@ impl TapdStore {
         conn.execute(
             "UPDATE sync_cursor
              SET lock_owner = NULL, lock_heartbeat_at = NULL,
-                 last_sync_finished_at = ?3,
-                 last_sync_status = 'failed', last_sync_error = ?4,
-                 last_sync_duration_ms = ?5,
-                 last_sync_fetched = ?6, last_sync_added = ?7, last_sync_updated = ?8,
-                 last_sync_duplicate = ?9, last_sync_failed = ?10,
-                 updated_at = ?3
-             WHERE directory = ?1 AND lock_owner = ?2",
+                 last_sync_finished_at = ?4,
+                 last_sync_status = 'failed', last_sync_error = ?5,
+                 last_sync_duration_ms = ?6,
+                 last_sync_fetched = ?7, last_sync_added = ?8, last_sync_updated = ?9,
+                 last_sync_duplicate = ?10, last_sync_failed = ?11,
+                 updated_at = ?4
+             WHERE directory = ?1 AND entity_type = ?2 AND lock_owner = ?3",
             params![
                 directory,
+                entity_type,
                 owner,
                 now,
                 error,
@@ -449,28 +593,34 @@ impl TapdStore {
 
     /// Startup recovery: clear any lease whose heartbeat is older than
     /// `stale_after_secs` (the holder died mid-sync) and mark its
-    /// last-known status as an interrupted failure. Returns the directories
-    /// that were reconciled, so the caller can immediately re-sync them.
-    pub fn reconcile_stale_locks(&self, stale_after_secs: i64) -> rusqlite::Result<Vec<String>> {
+    /// last-known status as an interrupted failure. Returns the
+    /// `(directory, entity_type)` pairs that were reconciled, so the caller
+    /// can immediately re-sync them per-entity_type.
+    pub fn reconcile_stale_locks(
+        &self,
+        stale_after_secs: i64,
+    ) -> rusqlite::Result<Vec<(String, String)>> {
         let conn = self.open()?;
         let now = now_secs();
         let mut stmt = conn.prepare(
-            "SELECT directory FROM sync_cursor
+            "SELECT directory, entity_type FROM sync_cursor
              WHERE lock_owner IS NOT NULL AND lock_heartbeat_at < ?1",
         )?;
-        let stale: Vec<String> = stmt
-            .query_map(params![now - stale_after_secs], |row| row.get(0))?
+        let stale: Vec<(String, String)> = stmt
+            .query_map(params![now - stale_after_secs], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for directory in &stale {
+        for (directory, entity_type) in &stale {
             conn.execute(
                 "UPDATE sync_cursor
                  SET lock_owner = NULL, lock_heartbeat_at = NULL,
                      last_sync_status = 'failed',
                      last_sync_error = 'interrupted: process restarted mid-sync',
-                     last_sync_finished_at = ?2, updated_at = ?2
-                 WHERE directory = ?1",
-                params![directory, now],
+                     last_sync_finished_at = ?3, updated_at = ?3
+                 WHERE directory = ?1 AND entity_type = ?2",
+                params![directory, entity_type, now],
             )?;
         }
         Ok(stale)
@@ -780,24 +930,47 @@ impl TapdStore {
 fn row_to_cursor(row: &rusqlite::Row) -> rusqlite::Result<SyncCursor> {
     Ok(SyncCursor {
         directory: row.get(0)?,
-        workspace_id: row.get(1)?,
-        last_synced_modified: row.get(2)?,
-        last_sync_started_at: row.get(3)?,
-        last_sync_finished_at: row.get(4)?,
-        last_sync_status: row.get(5)?,
-        last_sync_error: row.get(6)?,
-        last_sync_duration_ms: row.get(7)?,
+        entity_type: row.get(1)?,
+        workspace_id: row.get(2)?,
+        last_synced_modified: row.get(3)?,
+        last_sync_started_at: row.get(4)?,
+        last_sync_finished_at: row.get(5)?,
+        last_sync_status: row.get(6)?,
+        last_sync_error: row.get(7)?,
+        last_sync_duration_ms: row.get(8)?,
         last_sync_stats: SyncStats {
-            fetched: row.get(8)?,
-            added: row.get(9)?,
-            updated: row.get(10)?,
-            duplicate: row.get(11)?,
-            failed: row.get(12)?,
+            fetched: row.get(9)?,
+            added: row.get(10)?,
+            updated: row.get(11)?,
+            duplicate: row.get(12)?,
+            failed: row.get(13)?,
         },
-        lock_owner: row.get(13)?,
-        lock_heartbeat_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        lock_owner: row.get(14)?,
+        lock_heartbeat_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
+}
+
+fn max_str<'a>(a: Option<&'a str>, b: Option<&'a str>) -> Option<&'a str> {
+    // Both inputs are borrowed from the same source (rows in
+    // get_cursor_summary), so the returned reference can borrow from
+    // whichever is larger. The lifetime parameter is required so the
+    // compiler knows the output references one of the inputs.
+    match (a, b) {
+        (Some(x), Some(y)) => {
+            if x >= y { Some(x) } else { Some(y) }
+        }
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (None, None) => None,
+    }
+}
+
+fn max_opt(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (x, y) => x.or(y),
+    }
 }
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
@@ -916,10 +1089,10 @@ mod tests {
     #[test]
     fn lock_acquire_and_release_roundtrip() {
         let (store, _dir) = store();
-        store.upsert_project_binding("/proj", "12345").unwrap();
-        assert!(store.try_acquire_lock("/proj", "owner-a", 300).unwrap());
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+        assert!(store.try_acquire_lock("/proj", "task", "owner-a", 300).unwrap());
         // Second owner cannot acquire a live lease.
-        assert!(!store.try_acquire_lock("/proj", "owner-b", 300).unwrap());
+        assert!(!store.try_acquire_lock("/proj", "task", "owner-b", 300).unwrap());
 
         let stats = SyncStats {
             fetched: 3,
@@ -929,12 +1102,12 @@ mod tests {
             failed: 0,
         };
         store
-            .release_lock_success("/proj", "owner-a", Some("2026-01-02"), &stats, 500)
+            .release_lock_success("/proj", "task", "owner-a", Some("2026-01-02 12:00:00"), &stats, 500)
             .unwrap();
 
-        let cursor = store.get_cursor("/proj").unwrap().unwrap();
+        let cursor = store.get_cursor("/proj", "task").unwrap().unwrap();
         assert!(cursor.lock_owner.is_none());
-        assert_eq!(cursor.last_synced_modified, Some("2026-01-02".to_string()));
+        assert_eq!(cursor.last_synced_modified, Some("2026-01-02 12:00:00".to_string()));
         assert_eq!(cursor.last_sync_status, Some("success".to_string()));
         assert_eq!(cursor.last_sync_stats.added, 2);
     }
@@ -942,45 +1115,152 @@ mod tests {
     #[test]
     fn cursor_not_advanced_on_failure() {
         let (store, _dir) = store();
-        store.upsert_project_binding("/proj", "12345").unwrap();
-        store.try_acquire_lock("/proj", "owner-a", 300).unwrap();
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+        store.try_acquire_lock("/proj", "task", "owner-a", 300).unwrap();
         store
             .release_lock_success(
                 "/proj",
+                "task",
                 "owner-a",
-                Some("2026-01-01"),
+                Some("2026-01-01 09:00:00"),
                 &SyncStats::default(),
                 10,
             )
             .unwrap();
 
-        store.try_acquire_lock("/proj", "owner-a", 300).unwrap();
+        store.try_acquire_lock("/proj", "task", "owner-a", 300).unwrap();
         store
-            .release_lock_failure("/proj", "owner-a", "network error", &SyncStats::default(), 10)
+            .release_lock_failure("/proj", "task", "owner-a", "network error", &SyncStats::default(), 10)
             .unwrap();
 
-        let cursor = store.get_cursor("/proj").unwrap().unwrap();
+        let cursor = store.get_cursor("/proj", "task").unwrap().unwrap();
         assert_eq!(
             cursor.last_synced_modified,
-            Some("2026-01-01".to_string()),
+            Some("2026-01-01 09:00:00".to_string()),
             "a failed sync must not advance the watermark"
         );
         assert_eq!(cursor.last_sync_status, Some("failed".to_string()));
     }
 
     #[test]
-    fn reconcile_stale_locks_clears_dead_owner_and_reports_directory() {
+    fn reconcile_stale_locks_clears_dead_owner_and_reports_pair() {
         let (store, _dir) = store();
-        store.upsert_project_binding("/proj", "12345").unwrap();
-        store.try_acquire_lock("/proj", "dead-owner", 300).unwrap();
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+        store.try_acquire_lock("/proj", "task", "dead-owner", 300).unwrap();
 
-        // Fresh lease: nothing to reconcile at a short staleness window... unless we force it.
         let reconciled = store.reconcile_stale_locks(-1).unwrap();
-        assert_eq!(reconciled, vec!["/proj".to_string()]);
+        assert_eq!(reconciled, vec![("/proj".to_string(), "task".to_string())]);
 
-        let cursor = store.get_cursor("/proj").unwrap().unwrap();
+        let cursor = store.get_cursor("/proj", "task").unwrap().unwrap();
         assert!(cursor.lock_owner.is_none());
         assert_eq!(cursor.last_sync_status, Some("failed".to_string()));
+    }
+
+    #[test]
+    fn locks_are_isolated_per_entity_type() {
+        let (store, _dir) = store();
+        store.upsert_project_cursor("/proj", "12345", "story").unwrap();
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+        // Locking story does not block task on the same directory.
+        assert!(store.try_acquire_lock("/proj", "story", "owner", 300).unwrap());
+        assert!(
+            store.try_acquire_lock("/proj", "task", "owner", 300).unwrap(),
+            "task should be lockable independently of story"
+        );
+    }
+
+    #[test]
+    fn cursors_are_isolated_per_entity_type() {
+        let (store, _dir) = store();
+        store.upsert_project_cursor("/proj", "12345", "story").unwrap();
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+        store.try_acquire_lock("/proj", "story", "owner", 300).unwrap();
+        store
+            .release_lock_success(
+                "/proj",
+                "story",
+                "owner",
+                Some("2026-08-26 10:00:00"),
+                &SyncStats::default(),
+                100,
+            )
+            .unwrap();
+
+        // story has a full watermark; task only has a placeholder row (created
+        // by upsert_project_cursor above but never written to by a sync).
+        // get_cursor is per-entity_type, so the two never leak into each other.
+        assert_eq!(
+            store.get_cursor("/proj", "story").unwrap().unwrap().last_synced_modified,
+            Some("2026-08-26 10:00:00".to_string()),
+        );
+        assert_eq!(
+            store.get_cursor("/proj", "task").unwrap().unwrap().last_synced_modified,
+            None,
+            "task cursor exists but never written to"
+        );
+    }
+
+    #[test]
+    fn cursor_summary_aggregates_across_entity_types() {
+        let (store, _dir) = store();
+        store.upsert_project_cursor("/proj", "12345", "story").unwrap();
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+
+        // story: success, watermark 10:00, 3 fetched/2 added
+        store.try_acquire_lock("/proj", "story", "owner", 300).unwrap();
+        store
+            .release_lock_success(
+                "/proj",
+                "story",
+                "owner",
+                Some("2026-08-26 10:00:00"),
+                &SyncStats { fetched: 3, added: 2, updated: 1, duplicate: 0, failed: 0 },
+                100,
+            )
+            .unwrap();
+
+        // task: failure, no advance
+        store.try_acquire_lock("/proj", "task", "owner", 300).unwrap();
+        store
+            .release_lock_failure(
+                "/proj",
+                "task",
+                "owner",
+                "network error",
+                &SyncStats { fetched: 1, added: 0, updated: 0, duplicate: 0, failed: 1 },
+                50,
+            )
+            .unwrap();
+
+        let summary = store.get_cursor_summary("/proj").unwrap().unwrap();
+        assert_eq!(
+            summary.last_sync_status,
+            Some("failed".to_string()),
+            "any cursor failed → summary failed"
+        );
+        assert_eq!(summary.last_sync_error, Some("network error".to_string()));
+        assert_eq!(summary.last_sync_stats.fetched, 4);
+        assert_eq!(summary.last_sync_stats.added, 2);
+        assert_eq!(summary.last_sync_stats.failed, 1);
+        assert!(
+            summary.lock_owner.is_none(),
+            "no live leases → summary is not syncing"
+        );
+    }
+
+    #[test]
+    fn cursor_summary_is_syncing_when_any_entity_type_is_locked() {
+        let (store, _dir) = store();
+        store.upsert_project_cursor("/proj", "12345", "story").unwrap();
+        store.upsert_project_cursor("/proj", "12345", "task").unwrap();
+        assert!(store.try_acquire_lock("/proj", "task", "owner", 300).unwrap());
+
+        let summary = store.get_cursor_summary("/proj").unwrap().unwrap();
+        assert_eq!(
+            summary.lock_owner,
+            Some("owner".to_string()),
+            "any live lease → workbench shows syncing"
+        );
     }
 
     #[test]
@@ -1053,10 +1333,10 @@ mod tests {
     #[test]
     fn directories_are_isolated() {
         let (store, _dir) = store();
-        store.upsert_project_binding("/a", "111").unwrap();
-        store.upsert_project_binding("/b", "222").unwrap();
-        store.try_acquire_lock("/a", "owner", 300).unwrap();
+        store.upsert_project_cursor("/a", "111", "task").unwrap();
+        store.upsert_project_cursor("/b", "222", "task").unwrap();
+        store.try_acquire_lock("/a", "task", "owner", 300).unwrap();
         // Locking /a must not affect /b's ability to be locked.
-        assert!(store.try_acquire_lock("/b", "owner", 300).unwrap());
+        assert!(store.try_acquire_lock("/b", "task", "owner", 300).unwrap());
     }
 }
