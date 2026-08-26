@@ -903,6 +903,7 @@ pub(crate) async fn spawn_session_actor(
             None
         },
     });
+    let system_prompt_build_start = std::time::Instant::now();
     let agent = rebuild_spec
         .build_agent_with_initial_overrides(
             agent_definition,
@@ -921,6 +922,7 @@ pub(crate) async fn spawn_session_actor(
             );
             e
         })?;
+    let system_prompt_build_elapsed = system_prompt_build_start.elapsed();
     agent
         .tool_bridge()
         .update_resource(task_completion_reservations.clone())
@@ -1541,6 +1543,9 @@ pub(crate) async fn spawn_session_actor(
             dream_error_count: std::sync::atomic::AtomicU64::new(0),
         },
         session_start: std::time::Instant::now(),
+        skill_discovery_elapsed: std::sync::Mutex::new(None),
+        system_prompt_build_elapsed: std::sync::Mutex::new(Some(system_prompt_build_elapsed)),
+        mcp_startup_elapsed: std::sync::Mutex::new(None),
         inference_idle_timeout: Duration::from_secs(inference_idle_timeout_secs),
         max_turns,
         max_retries: xai_grok_sampler::resolve_max_retries(max_retries),

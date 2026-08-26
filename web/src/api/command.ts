@@ -22,6 +22,11 @@ function getFrontendCommands(): Command[] {
   return [
     { name: 'new', description: i18n.t('commands:slashCommand.newSessionDesc'), source: 'frontend' },
     { name: 'compact', description: i18n.t('commands:slashCommand.compactDesc'), source: 'frontend' },
+    // /context is intercepted locally (opens ContextDetailsDialog, never hits
+    // session/prompt — see useChatSession::handleCommand) same as /compact,
+    // so it must run immediately on selection instead of sitting in the
+    // input box as a `source: 'api'` command would.
+    { name: 'context', description: i18n.t('commands:slashCommand.contextDesc'), source: 'frontend' },
   ]
 }
 

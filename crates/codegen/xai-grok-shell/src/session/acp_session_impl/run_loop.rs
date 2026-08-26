@@ -13,6 +13,38 @@ use super::*;
 pub(super) fn yolo_toggle_report(was: bool, actual: bool) -> Option<bool> {
     (was != actual).then_some(actual)
 }
+/// Detached, best-effort timing for the `/context` "Startup phases" panel —
+/// not on any path the user waits on. Called from `SessionCommand::Initialize`
+/// (new sessions) and `SessionCommand::RunStartupPhaseProbes` (resumed
+/// sessions, which never send `Initialize`) so both cases populate
+/// `skill_discovery_elapsed` / `mcp_startup_elapsed` and the panel doesn't
+/// spin forever.
+fn spawn_startup_phase_probes(session: &Arc<SessionActor>) {
+    // `AgentBuilder::build()` already did the real initial skill discovery
+    // (folded into `system_prompt_build_elapsed`); this reruns the same
+    // idempotent reload path used by `/skills reload` / the fs watcher just
+    // to get an isolated timing. Disk state matches the just-built baseline,
+    // so `apply_pending_skill_update` returns `None` here and this only
+    // re-broadcasts `available_commands` (harmless, idempotent).
+    let s3 = session.clone();
+    tokio::task::spawn_local(async move {
+        s3.reload_skills_from_disk().await;
+    });
+
+    // Same idea for MCP: `Blocking` strategy already times this inside
+    // `build_prefix_background` → `wait_for_mcp_handshakes_bounded`.
+    // `Progressive` (the interactive/Web default) never calls it, so
+    // `mcp_startup_elapsed` would stay `None` forever. `wait_for_mcp_handshakes_bounded`
+    // no-ops if a value is already set, so this can't race with the
+    // `Blocking` path.
+    if !matches!(session.mcp_strategy.get(), McpInitStrategy::Blocking) {
+        let s2 = session.clone();
+        tokio::task::spawn_local(async move {
+            s2.wait_for_mcp_handshakes_bounded(std::time::Duration::from_secs(15))
+                .await;
+        });
+    }
+}
 #[cfg(test)]
 mod yolo_toggle_report_tests {
     use super::yolo_toggle_report;
@@ -593,6 +625,10 @@ pub(super) async fn run_session(
                                 s.build_prefix_background().await
                             });
                             session.deferred_prefix.arm(handle);
+                            spawn_startup_phase_probes(&session);
+                        }
+                        SessionCommand::RunStartupPhaseProbes => {
+                            spawn_startup_phase_probes(&session);
                         }
                         SessionCommand::ReplaceSystemPrompt { system_prompt } => {
                             session.handle_replace_system_prompt(system_prompt).await;

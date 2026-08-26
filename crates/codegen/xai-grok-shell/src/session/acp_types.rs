@@ -467,6 +467,32 @@ pub struct ContextInfo {
     /// partial snapshots.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub usage_categories: Vec<TokenUsageCategory>,
+    /// Wall time of a best-effort `reload_skills_from_disk` rerun kicked off
+    /// once from `SessionCommand::Initialize`, in milliseconds. `None` until
+    /// that rerun completes (typically a few tens of ms after session start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_discovery_elapsed_ms: Option<u64>,
+    /// Wall time spent rendering the agent + system prompt upstream of
+    /// `SessionActor::initialize`, in milliseconds. Set once at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_build_elapsed_ms: Option<u64>,
+    /// Wall time spent in `prepare_tool_definitions_inner` for the snapshot
+    /// captured by `build_session_info`, in milliseconds. Measured inline
+    /// (no field on `SessionActor`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_registry_prep_elapsed_ms: Option<u64>,
+    /// Wall time spent waiting for MCP handshakes, in milliseconds. `None`
+    /// until `wait_for_mcp_handshakes_bounded` has run once for this session
+    /// (immediately for `Blocking` sessions; via a detached best-effort task
+    /// for `Progressive` sessions — see `SessionCommand::Initialize`). `Some`
+    /// covers completion, timeout, and the no-MCP-configured case alike.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_startup_elapsed_ms: Option<u64>,
+    /// The full text of the session's active system prompt, for the
+    /// `/context` panel. `None` if the conversation has no `System` item yet
+    /// (e.g. a not-yet-initialized session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 impl ContextInfo {

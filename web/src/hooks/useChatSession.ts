@@ -43,6 +43,7 @@ import {
 } from '../api'
 import { getMessageText, isUserMessage, type AssistantMessageInfo, type Message as UIMessage } from '../types/message'
 import { markSessionFresh } from './useSessionManager'
+import { setContextDialogOpen } from '../store/contextDialogStore'
 import { clipboardErrorHandler, copyTextToClipboard, createErrorHandler } from '../utils'
 import { clearSessionRuntimeState } from '../utils/sessionLifecycle'
 import { serverStorage } from '../utils/perServerStorage'
@@ -1067,6 +1068,17 @@ export function useChatSession({
       if (command === 'new') {
         navigateHome()
         handleNewChat()
+        return true
+      }
+
+      if (command === 'context') {
+        // TUI 的 /context 是纯本地动作（Action::ShowContextInfo，见
+        // pager slash/commands/context.rs），根本不发到服务端——shell 端
+        // 对应的 BuiltinAction::ContextInfo 故意 no-op（ok_end_turn(0, None)）,
+        // 假设"展示上下文"是客户端本地 UI 的责任。Web 端同样本地拦截，
+        // 打开已有的 ContextDetailsDialog（跟 SidebarFooter「查看详情」
+        // 按钮打开的是同一个弹窗），不再发 session/prompt。
+        setContextDialogOpen(true)
         return true
       }
 

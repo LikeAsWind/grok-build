@@ -720,6 +720,27 @@ pub(crate) struct SessionActor {
     pub(crate) memory: super::memory_state::SessionMemory,
     /// Telemetry counters for session summary.
     pub(crate) session_start: std::time::Instant,
+    /// Wall time of a `reload_skills_from_disk` pass run once from
+    /// `SessionCommand::Initialize` (a detached, best-effort rerun of the
+    /// same idempotent path used by `/skills reload` / the fs watcher — the
+    /// *actual* initial skill discovery happens inside `AgentBuilder::build()`
+    /// and is folded into `system_prompt_build_elapsed`, not measured here).
+    /// `None` until that rerun completes. Written from `run_loop.rs`, read
+    /// from `build_session_info`.
+    pub(crate) skill_discovery_elapsed: std::sync::Mutex<Option<std::time::Duration>>,
+    /// Wall time spent rendering the agent + system prompt upstream of
+    /// `SessionActor::initialize`. Set once at spawn from
+    /// `spawn_session_actor`. Read from `build_session_info`.
+    pub(crate) system_prompt_build_elapsed: std::sync::Mutex<Option<std::time::Duration>>,
+    /// Wall time spent waiting for MCP handshakes. `None` while waiting,
+    /// `Some(d)` once handshakes complete, timeout, or the wait is skipped
+    /// (e.g. no MCP servers configured). Written from
+    /// `mcp_snapshot.rs::wait_for_mcp_handshakes_bounded`, called from
+    /// `build_prefix_background` for `McpInitStrategy::Blocking` sessions and
+    /// from a detached best-effort task in `SessionCommand::Initialize` for
+    /// `Progressive` sessions (idempotent — whichever runs first wins). Read
+    /// from `build_session_info`.
+    pub(crate) mcp_startup_elapsed: std::sync::Mutex<Option<std::time::Duration>>,
     /// Per-chunk idle timeout for inference streaming. If no SSE chunk is received
     /// within this duration, the stream is aborted with a non-retryable error.
     /// Resolved at construction: per-model config.toml → remote settings → 300s default.
@@ -1927,6 +1948,9 @@ mod prompt_context_persistence_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/session_thread_tests.rs"]
 mod session_thread_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/startup_phase_timing_tests.rs"]
+mod startup_phase_timing_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/tool_layer_images_bridge_tests.rs"]
 mod tool_layer_images_bridge_tests;

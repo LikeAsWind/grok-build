@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { ShareDialog } from '../ShareDialog'
 import { ContextDetailsDialog } from './ContextDetailsDialog'
+import { isContextDialogOpen, setContextDialogOpen, subscribeContextDialog } from '../../../store/contextDialogStore'
 import {
   CogIcon,
   SunIcon,
@@ -87,7 +88,8 @@ export function SidebarFooter({
   const [isOpen, setIsOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 260, fromBottom: false })
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
-  const [contextDialogOpen, setContextDialogOpen] = useState(false)
+  // 跨组件共享（/context 命令也走这个 store 打开同一个弹窗）
+  const contextDialogOpen = useSyncExternalStore(subscribeContextDialog, isContextDialogOpen)
   const [isVisible, setIsVisible] = useState(false)
   const prevShowLabelsRef = useRef(showLabels)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -387,7 +389,6 @@ export function SidebarFooter({
       <ContextDetailsDialog
         isOpen={contextDialogOpen}
         onClose={() => setContextDialogOpen(false)}
-        contextLimit={stats.contextLimit}
       />
     </div>
   )

@@ -127,6 +127,24 @@ describe('InputBox slash command selection', () => {
     })
   })
 
+  it('executes /context immediately on selection and never falls through to onSend', async () => {
+    slashCommands = [{ name: 'context', description: 'Show context usage details', source: 'frontend' }]
+    const onCommand = vi.fn()
+    const onSend = vi.fn()
+
+    render(<InputBox paneId="pane-test" onSend={onSend} onCommand={onCommand} />)
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '/', selectionStart: 1 } })
+    fireEvent.click(screen.getByRole('button', { name: 'context' }))
+
+    await waitFor(() => {
+      expect(onCommand).toHaveBeenCalledWith('/context')
+      expect(textarea.value).toBe('')
+    })
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
   it('keeps api commands on attachment insertion path', async () => {
     slashCommands = [{ name: 'review', description: 'Run review', source: 'api' }]
     const onCommand = vi.fn()

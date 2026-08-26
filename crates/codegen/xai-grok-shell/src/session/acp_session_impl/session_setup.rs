@@ -178,6 +178,7 @@ impl SessionActor {
     /// and re-advertise slash commands to the client. Returns the number
     /// of skills discovered.
     pub(super) async fn reload_skills_from_disk(&self) -> usize {
+        let start = std::time::Instant::now();
         let cwd = &self.session_info.cwd;
         let skills_config = crate::util::config::load_config().await.skills;
         let plugin_snapshot = self.plugin_registry.borrow().clone();
@@ -188,6 +189,7 @@ impl SessionActor {
             self.rebuild_spec.compat,
         )
         .await;
+        *self.skill_discovery_elapsed.lock().unwrap() = Some(start.elapsed());
         let skill_count = new_skills.len();
         tracing::info!(
             session_id = %self.session_info.id.0,
@@ -592,13 +594,19 @@ impl SessionActor {
             .as_ref()
             .map(xai_chat_state::estimate_system_message_tokens)
             .unwrap_or(0);
+        let system_prompt = system_message.as_ref().and_then(|item| match item {
+            xai_grok_sampling_types::ConversationItem::System(s) => Some(s.content.to_string()),
+            _ => None,
+        });
         let backend_search_active = self.backend_search_active();
+        let tool_prep_start = std::time::Instant::now();
         let tool_defs: Vec<_> = self
             .prepare_tool_definitions_inner()
             .await
             .into_iter()
             .filter(|td| !backend_search_active || td.function.name != "web_search")
             .collect();
+        let tool_registry_prep_elapsed_ms = Some(tool_prep_start.elapsed().as_millis() as u64);
         let tool_definitions_count = tool_defs.len();
         let tool_definitions_tokens = xai_chat_state::estimate_tool_definitions_tokens(&tool_defs);
         let message_count = self.chat_state_handle.get_conversation_len().await;
@@ -639,6 +647,23 @@ impl SessionActor {
                 usage_pct,
                 auto_compact_threshold_percent: self.compaction.threshold_percent.get(),
                 usage_categories,
+                skill_discovery_elapsed_ms: self
+                    .skill_discovery_elapsed
+                    .lock()
+                    .unwrap()
+                    .map(|d| d.as_millis() as u64),
+                system_prompt_build_elapsed_ms: self
+                    .system_prompt_build_elapsed
+                    .lock()
+                    .unwrap()
+                    .map(|d| d.as_millis() as u64),
+                tool_registry_prep_elapsed_ms,
+                mcp_startup_elapsed_ms: self
+                    .mcp_startup_elapsed
+                    .lock()
+                    .unwrap()
+                    .map(|d| d.as_millis() as u64),
+                system_prompt,
             },
         }
     }

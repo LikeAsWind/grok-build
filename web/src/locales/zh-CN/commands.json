@@ -89,6 +89,7 @@
     "commands": "命令",
     "newSessionDesc": "创建新的对话会话",
     "compactDesc": "通过总结对话历史来压缩当前会话",
+    "contextDesc": "查看上下文用量详情",
     "noMatchingCommands": "没有匹配的命令",
     "noCommandsAvailable": "没有可用的命令"
   },

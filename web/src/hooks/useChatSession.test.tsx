@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatSession } from './useChatSession'
 import { messageStore } from '../store'
+import { isContextDialogOpen, setContextDialogOpen } from '../store/contextDialogStore'
 
 const {
   createSessionMock,
@@ -176,6 +177,7 @@ describe('useChatSession handleCommand', () => {
     summarizeSessionMock.mockReset()
     executeCommandMock.mockReset()
     sendMessageAsyncMock.mockReset()
+    setContextDialogOpen(false)
     getSelectableAgentsMock.mockReset()
     registerSessionConsumerMock.mockReset()
     updateConsumerSessionIdMock.mockReset()
@@ -343,6 +345,33 @@ describe('useChatSession handleCommand', () => {
     expect(commandResult).toBe(true)
   })
 
+  it('handles /context as a purely local action (opens ContextDetailsDialog, no request sent)', async () => {
+    const { result } = renderHook(() =>
+      useChatSession({
+        paneId: 'pane-1',
+        chatAreaRef: { current: null },
+        currentModel: { id: 'model-1', providerId: 'provider-1', variants: [] } as never,
+        refetchModels: vi.fn(async () => {}),
+        sessionId: 'session-1',
+        navigateToSession: vi.fn(),
+        navigateHome: vi.fn(),
+      }),
+    )
+
+    expect(isContextDialogOpen()).toBe(false)
+
+    let commandResult: boolean | undefined
+    await act(async () => {
+      commandResult = await result.current.handleCommand('/context')
+    })
+
+    expect(isContextDialogOpen()).toBe(true)
+    expect(commandResult).toBe(true)
+    expect(sendMessageAsyncMock).not.toHaveBeenCalled()
+    expect(executeCommandMock).not.toHaveBeenCalled()
+    expect(summarizeSessionMock).not.toHaveBeenCalled()
+  })
+
   it('refreshes pending permissions when session full auto pending sweep is enabled', async () => {
     getPaneFullAutoModeMock.mockReturnValue('session')
     autoApproveState.approvePendingOnFullAuto = true
@@ -455,6 +484,7 @@ describe('useChatSession busy UI signal', () => {
     summarizeSessionMock.mockReset()
     executeCommandMock.mockReset()
     sendMessageAsyncMock.mockReset()
+    setContextDialogOpen(false)
     getSelectableAgentsMock.mockReset()
     registerSessionConsumerMock.mockReset()
     updateConsumerSessionIdMock.mockReset()

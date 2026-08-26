@@ -322,7 +322,16 @@ impl SessionActor {
         }
     }
 
+    /// Idempotent: no-ops if `mcp_startup_elapsed` is already set, so the
+    /// `Blocking`-strategy call from `build_prefix_background` and the
+    /// best-effort `Progressive`-strategy timing task spawned from
+    /// `SessionCommand::Initialize` can't race and clobber each other's
+    /// (real) elapsed time with a near-zero one.
     pub(super) async fn wait_for_mcp_handshakes_bounded(&self, timeout: std::time::Duration) {
+        if self.mcp_startup_elapsed.lock().unwrap().is_some() {
+            return;
+        }
+        let start = std::time::Instant::now();
         let notified = self.mcp_handshakes_done.notified();
         tokio::pin!(notified);
 
@@ -331,10 +340,13 @@ impl SessionActor {
             (s.configs.is_empty(), s.is_initialized())
         };
         if configs_empty || already_ready {
+            // Still record a (near-zero) elapsed time — otherwise a session
+            // with no MCP servers configured never gets a value here and the
+            // `/context` "Startup phases" panel spins on this row forever.
+            *self.mcp_startup_elapsed.lock().unwrap() = Some(start.elapsed());
             return;
         }
 
-        let start = std::time::Instant::now();
         tracing::info!(
             session_id = %self.session_info.id.0,
             timeout_ms = timeout.as_millis() as u64,
@@ -352,6 +364,7 @@ impl SessionActor {
             elapsed_ms = start.elapsed().as_millis() as u64,
             "wait_for_mcp_handshakes_bounded: done"
         );
+        *self.mcp_startup_elapsed.lock().unwrap() = Some(start.elapsed());
     }
 
     /// Re-register MCP tools onto a freshly-built `ToolBridge` after a

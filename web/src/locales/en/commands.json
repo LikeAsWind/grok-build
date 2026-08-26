@@ -89,6 +89,7 @@
     "commands": "Commands",
     "newSessionDesc": "Create a new chat session",
     "compactDesc": "Compact session by summarizing conversation history",
+    "contextDesc": "Show context usage details",
     "noMatchingCommands": "No matching commands",
     "noCommandsAvailable": "No commands available"
   },

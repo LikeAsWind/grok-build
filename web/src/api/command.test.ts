@@ -32,6 +32,7 @@ describe('getCommands', () => {
       { name: 'review', description: 'Run project review', source: 'api' },
       { name: 'new', description: 'Create a new chat session', source: 'frontend' },
       { name: 'compact', description: 'Compact session by summarizing conversation history', source: 'frontend' },
+      { name: 'context', description: 'Show context usage details', source: 'frontend' },
     ])
   })
 
@@ -43,6 +44,7 @@ describe('getCommands', () => {
     expect(commands).toEqual([
       { name: 'new', description: 'Create a new chat session', source: 'frontend' },
       { name: 'compact', description: 'Compact session by summarizing conversation history', source: 'frontend' },
+      { name: 'context', description: 'Show context usage details', source: 'frontend' },
     ])
   })
 })

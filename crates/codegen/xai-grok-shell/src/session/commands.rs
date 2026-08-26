@@ -201,6 +201,13 @@ pub enum SessionCommand {
     ReplaceSystemPrompt {
         system_prompt: String,
     },
+    /// Fire the detached, best-effort startup-phase timing probes (skill
+    /// discovery rerun + MCP handshake wait) that `Initialize` normally
+    /// kicks off — sent for a *resumed* session (non-empty `chat_history`),
+    /// where `Initialize` itself is never sent, so without this the
+    /// `/context` panel's "Skill discovery" / "MCP startup" rows would spin
+    /// forever (the fields stay `None`, not merely slow to arrive).
+    RunStartupPhaseProbes,
     /// Resume hook: after a session is restored with
     /// `awaiting_plan_approval == true`, re-issue the `exit_plan_mode`
     /// reverse-request so the client re-shows approval chrome over a real live
