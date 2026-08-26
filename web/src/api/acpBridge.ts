@@ -1825,7 +1825,17 @@ export async function acpLoadSession(sessionId: string): Promise<void> {
 export async function acpExtRequest(method: string, params?: unknown): Promise<unknown> {
   const client = await ensureAcp()
   const raw = await client.extRequest(method, params ?? {})
-  if (isRecord(raw) && 'result' in raw) return raw.result
+  // Two envelope shapes on the wire:
+  //   1. `{result: <payload>}`  — standard ext handler returns the payload directly.
+  //   2. `{result: {result: <payload>}}` — handlers wrapped via
+  //      `crate::extensions::to_ext_response` add an inner `result` field per
+  //      the xai protocol envelope. Unwrap one extra level when present so
+  //      callers always see the payload.
+  if (isRecord(raw) && 'result' in raw) {
+    const inner = raw.result
+    if (isRecord(inner) && 'result' in inner && !('error' in inner)) return inner.result
+    return inner
+  }
   return raw
 }
 

@@ -46,6 +46,7 @@ export * from './global'
 export * from './tool'
 export * from './lsp'
 export * from './acpBridge'
+export * from './tapd'
 
 // ============================================
 // Model API Functions
