@@ -276,6 +276,7 @@ impl TapdClient {
     ) -> Result<Vec<TapdWorkItem>, TapdClientError> {
         let base = self.config.base_url();
         let url = format!("{base}/{}", entity_type.endpoint());
+        tracing::info!(method = "GET", url = %url, params = ?params, "TAPD request");
         let (header_name, header_value) = self.auth_header();
 
         let resp = self
