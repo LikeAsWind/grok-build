@@ -146,13 +146,34 @@ fn parse_entity_types(raw: &[String]) -> Vec<TapdEntityType> {
     }
 }
 
-fn binding_from_project(p: &TapdTomlProject) -> TapdProjectBinding {
+fn binding_from_project(cfg: &TapdTomlConfig, p: &TapdTomlProject) -> TapdProjectBinding {
+    // Fall back to the workspace-level [tapd] defaults when the project
+    // entry leaves a field unset, so callers do not have to repeat
+    // status / module_filter on every binding to inherit the global.
+    let status = p.status.clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| cfg.default_status_filter.clone().filter(|s| !s.trim().is_empty()));
+    // Default the module filter to the binding directory name
+    // (lowercased). The workbench is most often used to look at the
+    // module named after the project itself; the project has to opt
+    // out by setting an explicit `module_filter` (or by giving a
+    // directory whose last segment doesn't match any real module).
+    // Some(p.name) -> [name], None -> []; default the module filter to
+    // the directory name so the workbench sees the project name
+    // immediately, with no project-level config required.
+    let module_filter: Vec<String> = if !p.module_filter.is_empty() {
+        p.module_filter.clone()
+    } else {
+        default_module_for_directory(&p.directory)
+            .map(|m| vec![m])
+            .unwrap_or_default()
+    };
     TapdProjectBinding {
         directory: p.directory.clone(),
         workspace_id: p.workspace_id.clone(),
         entity_types: parse_entity_types(&p.entity_types),
-        module_filter: p.module_filter.clone(),
-        status: p.status.clone().filter(|s| !s.trim().is_empty()),
+        module_filter,
+        status,
     }
 }
 
@@ -162,7 +183,7 @@ fn explicit_binding(cfg: &TapdTomlConfig, directory: &str) -> Option<TapdProject
         .find(|p| {
             p.enabled.unwrap_or(true) && p.directory == directory && !p.workspace_id.is_empty()
         })
-        .map(binding_from_project)
+        .map(|p| binding_from_project(cfg, p))
 }
 
 fn derived_binding(cfg: &TapdTomlConfig, directory: &str) -> Option<TapdProjectBinding> {
@@ -229,7 +250,7 @@ impl TapdConfigSource for DiskTapdConfigSource {
         cfg.projects
             .values()
             .filter(|p| p.enabled.unwrap_or(true) && !p.directory.is_empty() && !p.workspace_id.is_empty())
-            .map(binding_from_project)
+            .map(|p| binding_from_project(&cfg, p))
             .collect()
     }
 
