@@ -3084,8 +3084,7 @@ email_domain = "example.com"
 #[serial_test::serial]
 fn project_config_never_sources_feedback_user() {
     use xai_grok_test_support::EnvGuard;
-    let home = tempfile::tempdir().unwrap();
-    let _env = EnvGuard::set("GROK_HOME", home.path());
+    let _env = xai_grok_test_support::IsolatedGrokHome::new();
     let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
     let _sim = simulate_release_build();
     let repo = tempfile::tempdir().unwrap();
@@ -3571,8 +3570,7 @@ fn explicit_grok_root_is_the_only_user_source() {
 #[serial_test::serial]
 fn resolve_effective_plugins_config_gates_project_paths_on_folder_trust() {
     use xai_grok_test_support::EnvGuard;
-    let home = tempfile::tempdir().unwrap();
-    let _env = EnvGuard::set("GROK_HOME", home.path());
+    let _env = xai_grok_test_support::IsolatedGrokHome::new();
     let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
     let _sim = simulate_release_build();
     let repo = tempfile::tempdir().unwrap();
@@ -3632,8 +3630,7 @@ fn resolve_effective_plugins_config_gates_project_paths_on_folder_trust() {
 fn discover_plugins_excludes_untrusted_configpath_plugin_end_to_end() {
     use xai_grok_agent::plugins::{TrustStore, discover_plugins};
     use xai_grok_test_support::EnvGuard;
-    let home = tempfile::tempdir().unwrap();
-    let _env = EnvGuard::set("GROK_HOME", home.path());
+    let home = xai_grok_test_support::IsolatedGrokHome::new();
     let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
     let _sim = simulate_release_build();
     let repo = tempfile::tempdir().unwrap();
@@ -3706,8 +3703,7 @@ fn discover_plugins_excludes_untrusted_configpath_plugin_end_to_end() {
 #[serial_test::serial]
 fn kill_switched_cold_cwd_stays_allowed_through_plugins_config_read() {
     use xai_grok_test_support::EnvGuard;
-    let home = tempfile::tempdir().unwrap();
-    let _env = EnvGuard::set("GROK_HOME", home.path());
+    let _env = xai_grok_test_support::IsolatedGrokHome::new();
     let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
     let _sim = simulate_release_build();
     let repo = tempfile::tempdir().unwrap();

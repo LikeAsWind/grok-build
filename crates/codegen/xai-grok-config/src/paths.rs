@@ -5,6 +5,30 @@ use std::sync::OnceLock;
 
 static GROK_HOME: OnceLock<PathBuf> = OnceLock::new();
 
+/// Test-only override, checked by [`grok_home()`] before the process-wide
+/// `OnceLock`. Exists because `OnceLock` caches its value for the life of the
+/// process: once any code path (including an unrelated test earlier in the
+/// same binary) has called `grok_home()`, later tests setting `$GROK_HOME`
+/// via an env guard have no effect and silently fall through to the real
+/// `~/.grok` — writing test fixtures into the user's actual data directory.
+/// `reset_grok_home_for_test` lets `#[serial]` tests force a fresh read.
+#[cfg(any(test, feature = "test-util"))]
+static GROK_HOME_TEST_OVERRIDE: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Force [`grok_home()`] to return `path` until the next call to this
+/// function, bypassing the process-wide `OnceLock` cache. Callers MUST be
+/// `#[serial_test::serial]` — this is process-global mutable state, same as
+/// the `$GROK_HOME` env var it is meant to make actually effective.
+///
+/// Pass `None` to clear the override (falls back to `$GROK_HOME` env var or
+/// the real `~/.grok`, still subject to the underlying `OnceLock` semantics
+/// for non-test callers).
+#[cfg(any(test, feature = "test-util"))]
+pub fn reset_grok_home_for_test(path: Option<&std::path::Path>) {
+    let mut guard = GROK_HOME_TEST_OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
+    *guard = path.map(PathBuf::from);
+}
+
 #[cfg(target_os = "macos")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str =
     "/Library/Application Support/ClaudeCode/managed-settings.json";
@@ -33,6 +57,16 @@ pub fn default_grok_home() -> PathBuf {
 
 /// Per-user config directory: `$GROK_HOME` or `~/.grok`. Created if needed.
 pub fn grok_home() -> PathBuf {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(overridden) = GROK_HOME_TEST_OVERRIDE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        let _ = std::fs::create_dir_all(&overridden);
+        return overridden;
+    }
+
     GROK_HOME
         .get_or_init(|| {
             let grok_home = if let Ok(v) = std::env::var("GROK_HOME") {

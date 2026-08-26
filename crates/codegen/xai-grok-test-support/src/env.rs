@@ -63,6 +63,51 @@ impl Drop for EnvGuard {
     }
 }
 
+/// RAII guard that isolates `xai_grok_config::grok_home()` to a fresh temp
+/// directory for the guard's lifetime. Callers MUST be `#[serial_test::serial]`
+/// (same requirement as [`EnvGuard`] — this is process-global state).
+///
+/// Setting the `$GROK_HOME` env var alone is not enough: `grok_home()` caches
+/// its resolved value in a process-wide `OnceLock` on first call, so once any
+/// earlier test in the same binary has called it, later env var changes are
+/// silently ignored and tests fall through to the real `~/.grok` — writing
+/// test fixtures into the user's actual data directory. This guard forces
+/// `grok_home()` to re-resolve via `reset_grok_home_for_test`, and clears the
+/// override on drop so non-isolated tests go back to normal resolution.
+pub struct IsolatedGrokHome {
+    _dir: tempfile::TempDir,
+    _env: EnvGuard,
+}
+
+impl IsolatedGrokHome {
+    /// Create a fresh temp directory and point `grok_home()` at it.
+    pub fn new() -> Self {
+        let dir = tempfile::tempdir().expect("create temp dir for isolated GROK_HOME");
+        let env = EnvGuard::set("GROK_HOME", dir.path());
+        xai_grok_config::reset_grok_home_for_test(Some(dir.path()));
+        Self { _dir: dir, _env: env }
+    }
+
+    /// The isolated home directory's path.
+    pub fn path(&self) -> &Path {
+        self._dir.path()
+    }
+}
+
+impl Default for IsolatedGrokHome {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for IsolatedGrokHome {
+    fn drop(&mut self) {
+        // Runs before the `_dir`/`_env` fields drop, so the override is gone
+        // before the temp dir is removed and `$GROK_HOME` is restored.
+        xai_grok_config::reset_grok_home_for_test(None);
+    }
+}
+
 fn workspace_root() -> PathBuf {
     // nth(3): crate is nested three levels below the cargo workspace root.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

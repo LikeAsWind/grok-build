@@ -167,17 +167,20 @@ mod tests {
     }
 
     /// Isolate HOME/GROK_HOME so ambient user MCP config cannot pad discovery.
+    /// `GROK_HOME` uses [`xai_grok_test_support::IsolatedGrokHome`], not a bare
+    /// env guard: `grok_home()` caches its resolved value in a process-wide
+    /// `OnceLock`, so an env var alone has no effect once any earlier test in
+    /// the binary has already called it — `IsolatedGrokHome` forces a fresh
+    /// read via `reset_grok_home_for_test`, and clears the override on drop.
     fn isolated_home() -> (
         tempfile::TempDir,
         xai_grok_test_support::EnvGuard,
-        xai_grok_test_support::EnvGuard,
+        xai_grok_test_support::IsolatedGrokHome,
     ) {
         let home = tempfile::tempdir().unwrap();
-        let grok_home = home.path().join(".grok");
-        std::fs::create_dir_all(&grok_home).unwrap();
-        std::fs::write(grok_home.join("config.toml"), "").unwrap();
+        let grok_guard = xai_grok_test_support::IsolatedGrokHome::new();
+        std::fs::write(grok_guard.path().join("config.toml"), "").unwrap();
         let home_guard = xai_grok_test_support::EnvGuard::set("HOME", home.path());
-        let grok_guard = xai_grok_test_support::EnvGuard::set("GROK_HOME", &grok_home);
         (home, home_guard, grok_guard)
     }
 

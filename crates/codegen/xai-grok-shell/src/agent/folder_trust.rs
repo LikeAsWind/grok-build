@@ -552,8 +552,7 @@ mod tests {
         // `resolve_and_record`). Seed the trust store so `was_trusted` is genuinely
         // true; GROK_HOME-isolated so the seed can't touch the real user file and
         // `#[serial]` because GROK_HOME is process-global.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let tmp = repo_tmp();
         let mut store = TrustStore::load();
         store.set_trusted(&workspace_key(tmp.path())).unwrap();
@@ -580,8 +579,7 @@ mod tests {
         // in-process cache, though, so a cached storeless grant cannot survive a
         // mid-session untrust. GROK_HOME-isolated so the grant writes to a temp
         // store; `#[serial]` because GROK_HOME is global.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         // Distinct git roots for parent/child so `workspace_key` does not collapse
         // them onto one key (the child's own `.git` stops discovery at the child).
         let parent = repo_tmp();
@@ -625,8 +623,7 @@ mod tests {
         // writes an explicit child deny (overriding the cascade) and downgrades
         // the cache. GROK_HOME-isolated so the grant writes to a temp store;
         // `#[serial]` because GROK_HOME is process-global.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         // Distinct git roots so `workspace_key` keeps parent/child as separate
         // keys (the child's own `.git` stops discovery at the child).
         let parent = repo_tmp();
@@ -672,8 +669,7 @@ mod tests {
         // default-on flag applies.
         let home = tempfile::tempdir().unwrap();
         let _home = EnvGuard::set("HOME", home.path());
-        let grok_home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", grok_home.path());
+        let _env = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         git2::Repository::init(home.path()).unwrap();
         // Repo-local code-exec config, so the final allow is the unrecordable-key
@@ -703,8 +699,7 @@ mod tests {
         // empty env), while a store-trusted folder resolves true and the loader
         // actually reads `.envrc`. GROK_HOME-isolated so the trust store is empty;
         // GROK_FOLDER_TRUST unset so the default-on feature flag applies.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         std::fs::write(tmp.path().join(".envrc"), "export GATED_ENVRC=1\n").unwrap();
@@ -738,8 +733,7 @@ mod tests {
         // folder merges it. GROK_HOME-isolated so the trust store is empty;
         // GROK_FOLDER_TRUST unset so the default-on feature flag applies.
         use xai_grok_workspace::permission::claude_settings::load_claude_env_with_project;
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         let claude = tmp.path().join(".claude");
@@ -782,8 +776,7 @@ mod tests {
         // cwd→repo-root, so detection MUST walk too (a git-root-only probe missed
         // this). GROK_HOME-isolated so the trust store is empty.
         use xai_grok_workspace::permission::claude_settings::load_claude_env_with_project;
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         let subdir = tmp.path().join("sub");
@@ -831,8 +824,7 @@ mod tests {
         // agent's hooks are kept. Exercises real discovery + the exact call-site
         // predicate used at mvp_agent/subagent. GROK_HOME-isolated (empty store).
         use xai_grok_agent::config::AgentScope;
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         let agents = tmp.path().join(".grok").join("agents");
@@ -885,8 +877,7 @@ mod tests {
         // fail-closed rather than defaulting open). GROK_HOME-isolated (empty
         // store); GROK_FOLDER_TRUST unset so the default-on flag applies.
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
@@ -906,8 +897,7 @@ mod tests {
         // verdict comes from `decide` rule 4 (no repo configs), not the inert
         // short-circuit.
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         assert!(
@@ -923,8 +913,7 @@ mod tests {
         // configs present. GROK_HOME-isolated so the seeded store is the temp one;
         // GROK_FOLDER_TRUST unset so the default-on flag applies.
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
@@ -947,8 +936,7 @@ mod tests {
         if option_env!("GROK_VERSION").is_some() {
             return; // a release-stamped test binary is not a local build
         }
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let tmp = repo_tmp();
         std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
         assert!(
@@ -966,8 +954,7 @@ mod tests {
         // discover_plugins/build_for_cwd/reload. GROK_HOME-isolated (empty store);
         // GROK_FOLDER_TRUST unset so the default-on flag applies.
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         std::fs::create_dir_all(tmp.path().join(".grok").join("plugins").join("evil")).unwrap();
@@ -986,8 +973,7 @@ mod tests {
         // path. Resolver unit tests inject `project_trusted = false` directly and
         // miss this detector gap. Subdir launch ensures the cwd→git-root walk.
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         let grok = tmp.path().join(".grok");
@@ -1015,8 +1001,7 @@ mod tests {
         // GROK_HOME-isolated (empty store); GROK_FOLDER_TRUST unset so the kill-switch
         // is the only signal.
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let remote = RemoteSettings {
             folder_trust_enabled: Some(false),
@@ -1061,8 +1046,7 @@ mod tests {
         // the default-on flag applies; `#[serial]` because both are process-global.
         use xai_grok_agent::plugins::discovery::DiscoveryConfig;
         use xai_grok_agent::plugins::{PluginRegistry, SharedPluginRegistryHandle};
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         // A project plugin. Project scope is default-disabled, so name it in the
@@ -1116,8 +1100,7 @@ mod tests {
         // folder is granted trust — the path where the regression historically re-opened.
         // GROK_HOME-isolated so the grant writes to a temp store; GROK_FOLDER_TRUST unset
         // so the default-on flag applies.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
         let hooks_dir = tmp.path().join(".grok").join("hooks");
@@ -1499,8 +1482,7 @@ mod tests {
         // vars are process-global.
         let _feature = EnvGuard::set("GROK_FOLDER_TRUST", "1");
         let _sim = simulate_release_build();
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
 
         // (a) No configs => provisional Trusted, NOT cached by the shared path.
         let empty = repo_tmp();
@@ -1544,8 +1526,7 @@ mod tests {
         if option_env!("GROK_VERSION").is_some() {
             return; // a release-stamped test binary is not a local build
         }
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let tmp = repo_tmp();
         std::fs::write(tmp.path().join(".envrc"), "export LOCAL_BUILD_ENVRC=1\n").unwrap();
 
@@ -1580,8 +1561,7 @@ mod tests {
         // Feature on (via remote), untrusted (empty store), repo configs present
         // => the GUI prompt is warranted. GROK_HOME-isolated so the store starts
         // empty; `#[serial]` because GROK_HOME is process-global.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let tmp = repo_tmp();
         std::fs::write(tmp.path().join(".mcp.json"), "{}").unwrap();
         // Simulate a release-stamped build so the inert local-build gate is off
@@ -1605,8 +1585,7 @@ mod tests {
         // with repo configs present. Simulate a release build so the inert
         // local-build path is not what's under test; GROK_HOME-isolated and
         // GROK_FOLDER_TRUST unset so the kill-switch is the only signal.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let _sim = simulate_release_build();
         let tmp = repo_tmp();
@@ -1622,8 +1601,7 @@ mod tests {
     #[serial_test::serial]
     fn prompt_warranted_false_when_store_trusted() {
         // A folder the user already trusted resolves Trusted, not Prompt.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let tmp = repo_tmp();
         std::fs::write(tmp.path().join(".mcp.json"), "{}").unwrap();
         let mut store = TrustStore::load();
@@ -1639,8 +1617,7 @@ mod tests {
     #[serial_test::serial]
     fn prompt_warranted_false_without_repo_configs() {
         // Nothing repo-local to gate => Trusted, not Prompt.
-        let home = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("GROK_HOME", home.path());
+        let home = xai_grok_test_support::IsolatedGrokHome::new();
         let tmp = repo_tmp();
         let remote = RemoteSettings {
             folder_trust_enabled: Some(true),

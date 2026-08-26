@@ -1327,16 +1327,21 @@ mod cta_e2e {
         })
     }
 
+    /// Points `grok_home()` at one shared temp dir for every test in this
+    /// module (not per-test — these tests aren't `#[serial]`, so per-test
+    /// dirs would race). Setting `$GROK_HOME` alone is not enough:
+    /// `grok_home()` caches its resolved value in a process-wide `OnceLock`,
+    /// so once any earlier test in the binary has called it, the env var
+    /// change is silently ignored — `reset_grok_home_for_test` forces the
+    /// override to stick regardless of call order.
     fn isolate_grok_home() {
         use std::sync::OnceLock;
         static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
-        HOME.get_or_init(|| {
-            let tmp = tempfile::tempdir().expect("tempdir creation");
-            unsafe {
-                std::env::set_var("GROK_HOME", tmp.path());
-            }
-            tmp
-        });
+        let tmp = HOME.get_or_init(|| tempfile::tempdir().expect("tempdir creation"));
+        unsafe {
+            std::env::set_var("GROK_HOME", tmp.path());
+        }
+        xai_grok_config::reset_grok_home_for_test(Some(tmp.path()));
     }
 
     fn app_matched() -> AppView {

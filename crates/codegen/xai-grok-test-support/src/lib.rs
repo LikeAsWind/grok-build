@@ -50,7 +50,7 @@ pub mod sse;
 pub mod uds_proxy;
 pub use acp_client::{GrokStdioClient, RawStdioClient};
 pub use counting_server::spawn_counting_server;
-pub use env::{EnvGuard, git_workdir, grok_binary};
+pub use env::{EnvGuard, IsolatedGrokHome, git_workdir, grok_binary};
 pub use headless::{
     HeadlessResult, assert_headless_success, assert_no_crashes, run_headless,
     run_headless_in_sandbox, run_headless_in_sandbox_borrowed,

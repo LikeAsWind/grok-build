@@ -66,6 +66,8 @@ pub use paths::{
     default_grok_home, encode_cwd_dirname, ensure_sessions_cwd_dir, grok_application,
     grok_application_in, grok_home, sessions_cwd_dir, system_config_dir, user_grok_home,
 };
+#[cfg(any(test, feature = "test-util"))]
+pub use paths::reset_grok_home_for_test;
 pub use validation::{
     RequirementsError, RequirementsLayer, RequirementsSource, load_merged_requirements,
     requirements_layers, validate_requirements,

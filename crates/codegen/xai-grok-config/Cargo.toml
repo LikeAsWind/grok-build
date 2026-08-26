@@ -33,6 +33,10 @@ core-foundation = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
+# Exposes `reset_grok_home_for_test` for integration-test crates that use
+# `xai-grok-config` as a normal (non-dev) dependency and so don't get the
+# `#[cfg(test)]` gate for free — e.g. `xai-grok-shell`'s test binaries.
+test-util = []
 
 [lints]
 workspace = true

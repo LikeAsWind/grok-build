@@ -2875,9 +2875,7 @@ mod welcome_workspace_mode {
         let _ack = xai_grok_test_support::EnvGuard::unset(
             crate::app::session_startup::GROK_CHAT_LOCAL_WORKSPACE_ACK_ENV,
         );
-        let home = tempfile::tempdir().unwrap();
-        let _home =
-            xai_grok_test_support::EnvGuard::set("GROK_HOME", home.path().to_str().unwrap());
+        let _home = xai_grok_test_support::IsolatedGrokHome::new();
         set_active_local_workspace(None).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let mut app = test_app();
@@ -2988,9 +2986,7 @@ mod welcome_workspace_mode {
         let _ack = xai_grok_test_support::EnvGuard::unset(
             crate::app::session_startup::GROK_CHAT_LOCAL_WORKSPACE_ACK_ENV,
         );
-        let home = tempfile::tempdir().unwrap();
-        let _home =
-            xai_grok_test_support::EnvGuard::set("GROK_HOME", home.path().to_str().unwrap());
+        let _home = xai_grok_test_support::IsolatedGrokHome::new();
         set_active_local_workspace(None).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let mut app = test_app();

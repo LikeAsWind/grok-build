@@ -2,25 +2,15 @@
 //! enqueue, non-resident skip, and control-char stripping at the boundary.
 
 use agent_client_protocol as acp;
-use xai_grok_test_support::EnvGuard;
+use xai_grok_test_support::IsolatedGrokHome;
 
 use super::{build_minimal_agent_for_tests, make_test_handle};
 use crate::session::info::Info;
 use crate::session::persistence::PersistenceMsg;
 use crate::session::storage::{JsonlStorageAdapter, StorageAdapter};
 
-struct IsolatedHome {
-    _dir: tempfile::TempDir,
-    _env: EnvGuard,
-}
-
-fn isolate_grok_home() -> IsolatedHome {
-    let dir = tempfile::tempdir().unwrap();
-    let env = EnvGuard::set("GROK_HOME", dir.path());
-    IsolatedHome {
-        _dir: dir,
-        _env: env,
-    }
+fn isolate_grok_home() -> IsolatedGrokHome {
+    IsolatedGrokHome::new()
 }
 
 async fn drive_rename(

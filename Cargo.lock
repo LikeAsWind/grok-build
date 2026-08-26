@@ -14275,6 +14275,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "xai-acp-lib",
+ "xai-grok-config",
  "xai-tty-utils",
 ]
 

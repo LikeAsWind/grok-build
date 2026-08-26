@@ -25,6 +25,7 @@ tracing-subscriber = { workspace = true, features = ["fmt"] }
 url = { workspace = true }
 xai-acp-lib = { workspace = true }
 xai-tty-utils = { workspace = true }
+xai-grok-config = { workspace = true, features = ["test-util"] }
 
 [dev-dependencies]
 reqwest = { workspace = true }
