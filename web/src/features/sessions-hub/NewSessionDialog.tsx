@@ -9,6 +9,7 @@ import { SpinnerIcon } from '../../components/Icons'
 import { useDirectory } from '../../contexts/useDirectory'
 import { useSessionContext } from '../../contexts/useSessionContext'
 import { gitRootFor, createIsolatedWorktree, pagerWorktreeId } from '../../api/worktree'
+import type { ApiSession } from '../../api'
 import { subscribeWorktreeStatus, type WorktreeProgress } from './worktreeStatusStore'
 import { DirBrowserModal } from '../chat/sidebar/DirBrowserModal'
 import { DirectorySelector } from './DirectorySelector'
@@ -17,7 +18,7 @@ export interface NewSessionDialogProps {
   isOpen: boolean
   initialDirectory: string
   onClose: () => void
-  onCreated: (session: { id: string; directory?: string }) => void
+  onCreated: (session: ApiSession) => void
 }
 
 export function NewSessionDialog({ isOpen, initialDirectory, onClose, onCreated }: NewSessionDialogProps) {

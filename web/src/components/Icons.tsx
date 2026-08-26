@@ -93,6 +93,7 @@ import {
   ZoomIn,
   ZoomOut,
   List,
+  LayoutDashboard,
 } from 'lucide-react'
 
 export interface IconProps extends SVGProps<SVGSVGElement> {
@@ -209,6 +210,7 @@ export const PatchIcon = wrap(FileDiff)
 export const GitWorktreeIcon = wrap(Waypoints)
 export const GitDiffIcon = wrap(GitCompare)
 export const PermissionListIcon = wrap(ListTodo)
+export const WorkbenchIcon = wrap(LayoutDashboard)
 export const ListFilterIcon = wrap(ListFilter)
 export const LayersIcon = wrap(Layers)
 export const MinusIcon = wrap(Minus)

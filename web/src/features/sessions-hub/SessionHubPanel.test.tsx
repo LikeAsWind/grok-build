@@ -231,14 +231,16 @@ describe('SessionHubPanel', () => {
     expect(groupHead?.textContent).toContain('sessionsHub.groupHeaderCount:2')
   })
 
-  it('点新建打开对话框，fake-create 后触发 onNewSession', () => {
+  it('点新建打开对话框，fake-create 后进入新会话（onSelectSession），而不是回首页', () => {
     const onNewSession = vi.fn()
+    const onSelect = vi.fn()
     useSessionContextMock.mockReturnValue(sessionCtx([]))
-    renderPanel({ onNewSession })
+    renderPanel({ onNewSession, onSelectSession: onSelect })
 
     fireEvent.click(screen.getByTitle('sessionsHub.newChatDialogTitle'))
     fireEvent.click(screen.getByText('fake-create'))
-    expect(onNewSession).toHaveBeenCalled()
+    expect(onSelect).toHaveBeenCalledWith({ id: 'new-1', directory: 'C:\\repo' })
+    expect(onNewSession).not.toHaveBeenCalled()
   })
 
   it('点击会话条目触发 onSelectSession', () => {
@@ -367,6 +369,46 @@ describe('SessionHubPanel', () => {
 
     expect(screen.getByText('子会话 A')).toBeInTheDocument()
     expect(screen.getByText('子会话 B')).toBeInTheDocument()
+  })
+
+  describe('工作台入口', () => {
+    it('点击调用 onOpenWorkbench', () => {
+      const onOpenWorkbench = vi.fn()
+      useSessionContextMock.mockReturnValue(sessionCtx([]))
+      renderPanel({ onOpenWorkbench })
+
+      fireEvent.click(screen.getByLabelText('sidebar.workbench'))
+      expect(onOpenWorkbench).toHaveBeenCalledTimes(1)
+    })
+
+    it('位置在「新对话」之上', () => {
+      const onOpenWorkbench = vi.fn()
+      useSessionContextMock.mockReturnValue(sessionCtx([]))
+      renderPanel({ onOpenWorkbench })
+
+      const workbench = screen.getByLabelText('sidebar.workbench')
+      const newChat = screen.getByLabelText('sidebar.newChat')
+      // DOCUMENT_POSITION_FOLLOWING = 4：newChat 在 workbench 之后
+      expect(workbench.compareDocumentPosition(newChat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('active 时标记 aria-current，非 active 时不标记', () => {
+      useSessionContextMock.mockReturnValue(sessionCtx([]))
+      const { unmount } = renderPanel({ onOpenWorkbench: vi.fn(), isWorkbenchActive: true })
+      expect(screen.getByLabelText('sidebar.workbench')).toHaveAttribute('aria-current', 'page')
+      unmount()
+
+      renderPanel({ onOpenWorkbench: vi.fn(), isWorkbenchActive: false })
+      expect(screen.getByLabelText('sidebar.workbench')).not.toHaveAttribute('aria-current')
+    })
+
+    it('未传 onOpenWorkbench 时不渲染入口（不给死按钮）', () => {
+      useSessionContextMock.mockReturnValue(sessionCtx([]))
+      renderPanel()
+
+      expect(screen.queryByLabelText('sidebar.workbench')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('sidebar.newChat')).toBeInTheDocument()
+    })
   })
 })
 

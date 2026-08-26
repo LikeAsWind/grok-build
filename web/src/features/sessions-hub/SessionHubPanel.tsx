@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SearchIcon, CloseIcon, BellIcon, NewChatIcon, SidebarIcon } from '../../components/Icons'
+import { SearchIcon, CloseIcon, BellIcon, NewChatIcon, SidebarIcon, WorkbenchIcon } from '../../components/Icons'
 import { useSessionContext } from '../../contexts/useSessionContext'
 import { useBusySessions } from '../../store/activeSessionStore'
 import { useNotifications, useUnreadNotificationCount } from '../../store/notificationStore'
@@ -29,6 +29,10 @@ export interface SessionHubPanelProps {
   isExpanded: boolean
   onToggleSidebar: () => void
   onOpenSettings?: () => void
+  /** 打开 TAPD 工作台页（与仪表盘并列的首页入口） */
+  onOpenWorkbench?: () => void
+  /** 工作台页当前是否正在显示——高亮入口 */
+  isWorkbenchActive?: boolean
 }
 
 type StatusFilter = 'all' | SessionUiStatus['kind']
@@ -80,6 +84,8 @@ export function SessionHubPanel({
   isExpanded,
   onToggleSidebar,
   onOpenSettings,
+  onOpenWorkbench,
+  isWorkbenchActive = false,
 }: SessionHubPanelProps) {
   const { t } = useTranslation(['chat', 'common'])
   const { sessions, isLoading, search, setSearch, refresh, deleteSession } = useSessionContext()
@@ -239,8 +245,36 @@ export function SessionHubPanel({
         </div>
       </div>
 
-      {/* New chat */}
+      {/* 导航入口（工作台）+ 新建对话 */}
       <div className="flex flex-col gap-0.5 mx-2 -mt-2.5">
+        {/* 工作台在「新对话」之上：先是"去哪个页面"，再是"开始做什么"，
+            两组之间用 mb-1 分隔出层级 */}
+        {onOpenWorkbench && (
+          <button
+            type="button"
+            onClick={onOpenWorkbench}
+            aria-label={t('sidebar.workbench')}
+            aria-current={isWorkbenchActive ? 'page' : undefined}
+            title={t('sidebar.workbenchHint')}
+            className={`h-8 mb-1 flex items-center rounded-lg active:scale-[0.98] transition-all duration-300 group overflow-hidden ${
+              isWorkbenchActive
+                ? 'bg-accent-main-100/10 text-accent-main-100'
+                : 'text-text-300 hover:text-text-100 hover:bg-bg-200'
+            }`}
+            style={{ width: showLabels ? '100%' : 32, paddingLeft: 6, paddingRight: 6 }}
+          >
+            <span className="size-5 flex items-center justify-center shrink-0">
+              <WorkbenchIcon size={16} />
+            </span>
+            <span
+              className="ml-2 text-[length:var(--fs-base)] whitespace-nowrap transition-opacity duration-300"
+              style={{ opacity: showLabels ? 1 : 0 }}
+            >
+              {t('sidebar.workbench')}
+            </span>
+          </button>
+        )}
+
         <button
           type="button"
           onClick={() => setNewDialogOpen(true)}
@@ -391,9 +425,9 @@ export function SessionHubPanel({
         isOpen={newDialogOpen}
         initialDirectory={getServerCwd()}
         onClose={() => setNewDialogOpen(false)}
-        onCreated={() => {
+        onCreated={session => {
           setNewDialogOpen(false)
-          onNewSession()
+          onSelectSession(session)
         }}
       />
     </div>

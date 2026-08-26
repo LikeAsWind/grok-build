@@ -22,6 +22,8 @@ interface SidebarProps {
   onOpen: () => void
   onClose: () => void
   onOpenSettings?: () => void
+  onOpenWorkbench?: () => void
+  isWorkbenchActive?: boolean
   mobileInline?: boolean
 }
 
@@ -33,6 +35,8 @@ export const Sidebar = memo(function Sidebar({
   onOpen,
   onClose,
   onOpenSettings,
+  onOpenWorkbench,
+  isWorkbenchActive = false,
   mobileInline = false,
 }: SidebarProps) {
   const { interaction, layout, actions } = useChatViewport()
@@ -183,6 +187,14 @@ export const Sidebar = memo(function Sidebar({
     [onClose, onSelectSession, isOverlay],
   )
 
+  // overlay 形态下点导航入口后要收起侧栏，跟选会话一致——否则内容被侧栏盖住
+  const handleOpenWorkbench = useCallback(() => {
+    onOpenWorkbench?.()
+    if (isOverlay) {
+      onClose()
+    }
+  }, [onOpenWorkbench, isOverlay, onClose])
+
   const touchStartX = useRef(0)
   const touchStartY = useRef(0)
   const touchDeltaX = useRef(0)
@@ -254,6 +266,8 @@ export const Sidebar = memo(function Sidebar({
             isExpanded={true}
             onToggleSidebar={onClose}
             onOpenSettings={onOpenSettings}
+            onOpenWorkbench={onOpenWorkbench ? handleOpenWorkbench : undefined}
+            isWorkbenchActive={isWorkbenchActive}
           />
         </div>
       )
@@ -296,6 +310,8 @@ export const Sidebar = memo(function Sidebar({
             isExpanded={true}
             onToggleSidebar={onClose}
             onOpenSettings={onOpenSettings}
+            onOpenWorkbench={onOpenWorkbench ? handleOpenWorkbench : undefined}
+            isWorkbenchActive={isWorkbenchActive}
           />
         </div>
       </>
@@ -319,6 +335,8 @@ export const Sidebar = memo(function Sidebar({
         isExpanded={isOpen}
         onToggleSidebar={handleToggle}
         onOpenSettings={onOpenSettings}
+        onOpenWorkbench={onOpenWorkbench ? handleOpenWorkbench : undefined}
+        isWorkbenchActive={isWorkbenchActive}
       />
 
       {isOpen && (
