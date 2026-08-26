@@ -232,12 +232,13 @@ function KeyedTableCard({
   onSaved: () => void
 }) {
   const { t } = useTranslation(['settings', 'common'])
+  const tablePath = useMemo(() => table.id.split('.'), [table.id])
   const allFields = useMemo(() => [...table.fields, ...(table.advanced ?? [])], [table])
   const entries = useMemo(() => {
-    const raw = readPath(parsed, [table.id])
+    const raw = readPath(parsed, tablePath)
     if (!isRecord(raw)) return [] as string[]
     return Object.keys(raw)
-  }, [parsed, table.id])
+  }, [parsed, tablePath])
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [newEntry, setNewEntry] = useState(false)
@@ -247,7 +248,7 @@ function KeyedTableCard({
   const handleDelete = async () => {
     if (!deleteId) return
     try {
-      await patchGrokConfig({ delete: [{ path: [table.id, deleteId] }] })
+      await patchGrokConfig({ delete: [{ path: [...tablePath, deleteId] }] })
       await afterSaveReload(table.reload)
       setDeleteId(null)
       onSaved()
@@ -258,12 +259,15 @@ function KeyedTableCard({
   }
 
   const summarize = (id: string): string => {
-    const raw = readPath(parsed, [table.id, id])
+    const raw = readPath(parsed, [...tablePath, id])
     if (!isRecord(raw)) return ''
     const cmd = typeof raw.command === 'string' ? raw.command : ''
     const url = typeof raw.url === 'string' ? raw.url : ''
+    const directory = typeof raw.directory === 'string' ? raw.directory : ''
+    const workspaceId = typeof raw.workspace_id === 'string' ? raw.workspace_id : ''
+    const tapdSummary = directory && workspaceId ? `${directory} → ${workspaceId}` : ''
     const enabled = raw.enabled === false ? ` · ${t('grokConfig.disabled')}` : ''
-    return `${cmd || url}${enabled}`
+    return `${cmd || url || tapdSummary}${enabled}`
   }
 
   return (
@@ -296,6 +300,7 @@ function KeyedTableCard({
       {newEntry && (
         <KeyedEntryEditor
           table={table}
+          tablePath={tablePath}
           allFields={allFields}
           parsed={parsed}
           entryId={null}
@@ -312,6 +317,7 @@ function KeyedTableCard({
           <KeyedEntryEditor
             key={id}
             table={table}
+            tablePath={tablePath}
             allFields={allFields}
             parsed={parsed}
             entryId={id}
@@ -366,6 +372,7 @@ function KeyedTableCard({
 
 function KeyedEntryEditor({
   table,
+  tablePath,
   allFields,
   parsed,
   entryId,
@@ -373,6 +380,7 @@ function KeyedEntryEditor({
   onDone,
 }: {
   table: KeyedTableDef
+  tablePath: string[]
   allFields: ConfigFieldDef[]
   parsed: Record<string, unknown> | undefined
   entryId: string | null
@@ -381,7 +389,7 @@ function KeyedEntryEditor({
 }) {
   const { t } = useTranslation(['settings', 'common'])
   const [{ draft: original, complexKeys }] = useState(() =>
-    entryId ? buildSectionDraft(parsed, [table.id, entryId], allFields) : { draft: {} as SectionDraft, complexKeys: new Set<string>() },
+    entryId ? buildSectionDraft(parsed, [...tablePath, entryId], allFields) : { draft: {} as SectionDraft, complexKeys: new Set<string>() },
   )
   const [id, setId] = useState(entryId ?? '')
   const [draft, setDraft] = useState<SectionDraft>(() => ({ ...original }))
@@ -403,7 +411,7 @@ function KeyedEntryEditor({
     setError('')
     try {
       const editable = allFields.filter(f => !complexKeys.has(f.key))
-      const ops = buildSectionOps([table.id, trimmedId], editable, entryId ? original : {}, draft)
+      const ops = buildSectionOps([...tablePath, trimmedId], editable, entryId ? original : {}, draft)
       if ((ops.set?.length ?? 0) + (ops.delete?.length ?? 0) > 0) {
         await patchGrokConfig(ops)
         await afterSaveReload(table.reload)
@@ -523,8 +531,11 @@ export function GrokConfigSettings() {
   }, [parsed])
 
   const group = CONFIG_GROUPS.find(g => g.id === activeGroup) ?? CONFIG_GROUPS[0]
-  const groupTables = KEYED_TABLES.filter(tbl =>
-    (activeGroup === 'extensions' && tbl.id === 'mcp_servers') || (activeGroup === 'auth' && tbl.id === 'auth_provider'),
+  const groupTables = KEYED_TABLES.filter(
+    tbl =>
+      (activeGroup === 'extensions' && tbl.id === 'mcp_servers') ||
+      (activeGroup === 'auth' && tbl.id === 'auth_provider') ||
+      (activeGroup === 'tapd' && tbl.id === 'tapd.projects'),
   )
 
   return (

@@ -518,6 +518,27 @@ export const CONFIG_GROUPS: ConfigGroupDef[] = [
       },
     ],
   },
+  {
+    id: 'tapd',
+    title: 'TAPD 工作台',
+    sections: [
+      {
+        id: 'tapd',
+        title: 'TAPD 凭据与同步',
+        desc: '工作台按目录关联的 TAPD 项目从这里读取凭据；项目绑定在下方「TAPD 项目绑定」管理',
+        fields: [
+          b('enabled', '启用自动同步', 'true', '关闭后仅能手动触发同步'),
+          e('auth_method', '认证方式', ['token', 'basic'], 'token'),
+          { key: 'access_token', label: 'Access Token', type: 'string', secret: true, desc: 'auth_method = token 时使用' },
+          s('api_user', 'API 用户名', 'auth_method = basic 时使用'),
+          { key: 'api_password', label: 'API 密码', type: 'string', secret: true, desc: 'auth_method = basic 时使用' },
+          s('api_base_url', 'API Base URL', undefined, 'https://api.tapd.cn'),
+          s('default_workspace_id', '默认 Workspace ID', '未显式配置 [tapd.projects.*] 的目录使用此 workspace'),
+          n('poll_interval_secs', '自动同步间隔（秒）', '600', '默认 10 分钟；项目可各自覆盖'),
+        ],
+      },
+    ],
+  },
 ]
 
 // ── 动态键表（[section.<自定义名>]）─────────────────────────────
@@ -558,6 +579,20 @@ export const KEYED_TABLES: KeyedTableDef[] = [
       n('token_ttl_secs', 'Token TTL（秒）'),
       n('timeout_secs', '超时（秒）', '30'),
       s('cwd', '工作目录', '支持 ~'),
+    ],
+  },
+  {
+    id: 'tapd.projects',
+    title: 'TAPD 项目绑定',
+    desc: '按对话目录关联 TAPD 项目（workspace_id）；工作台据此展示对应项目的任务',
+    idLabel: '绑定名称',
+    fields: [
+      s('directory', '工作目录 *', '绝对路径', '/path/to/project'),
+      s('workspace_id', 'TAPD Workspace ID *', undefined, '12345'),
+      arr('entity_types', '同步的实体类型', '留空默认仅同步 task；可填 story/task/bug'),
+      arr('module_filter', '模块筛选', '留空 = 不筛选模块'),
+      n('poll_interval_override_secs', '同步间隔覆盖（秒）', undefined, '0 或留空 = 使用全局默认间隔'),
+      b('enabled', '启用', 'true'),
     ],
   },
 ]
