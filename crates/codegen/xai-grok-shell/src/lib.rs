@@ -37,6 +37,7 @@ pub mod relay;
 pub mod remote;
 pub mod sampling;
 pub mod session;
+pub mod tapd;
 pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_support;

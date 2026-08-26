@@ -497,6 +497,7 @@ async fn run_persistent_agent(
             .unwrap_or_else(crate::agent::init::exit_on_config_error),
     );
     agent.models_manager.spawn_background_refresh();
+    agent.spawn_tapd_sync_manager();
 
     let relay_dest: RelayDest = Rc::new(RefCell::new(None));
 

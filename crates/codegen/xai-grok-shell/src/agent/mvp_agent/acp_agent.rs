@@ -2504,6 +2504,9 @@ impl acp::Agent for MvpAgent {
             s if s.starts_with(crate::extensions::mcp::mcp_methods::PREFIX) => {
                 crate::extensions::mcp::handle(self, &args).await
             }
+            s if s.starts_with("x.ai/tapd/") => {
+                crate::extensions::tapd::handle(self, &args).await
+            }
             s if s.starts_with("x.ai/task/") => {
                 crate::extensions::task::handle(self, &args).await
             }

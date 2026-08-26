@@ -982,6 +982,15 @@ pub struct MvpAgent {
     heap_profile_monitor: RefCell<crate::heap_profile::HeapProfileMonitor>,
     /// Idempotency guard for the heap-profile poll / kill-switch loop.
     heap_profile_started: std::cell::Cell<bool>,
+    /// TAPD workbench SQLite store. LEADER-SAFE(shared): one file, one
+    /// process, `TapdStore` opens its own connection per call.
+    pub(crate) tapd_store: Arc<crate::tapd::store::TapdStore>,
+    /// TAPD workbench background sync service. `None` until
+    /// `spawn_tapd_sync_manager` runs it once (mirrors
+    /// `ModelsManager::spawn_background_refresh`'s single-instance lifecycle,
+    /// but this needs the constructed `Arc<MvpAgent>`'s gateway clone, so it
+    /// is spawned by the caller of `MvpAgent::new` — see `agent::server`).
+    tapd_sync_manager: RefCell<Option<Arc<crate::tapd::sync::TapdSyncManager>>>,
     /// Test-only spy recording every session id whose cloud replica was
     /// finalized via `finalize_session_replica`. Lets the no-evict tests assert
     /// that `finalize()` does NOT fire on a mere client disconnect (only on a

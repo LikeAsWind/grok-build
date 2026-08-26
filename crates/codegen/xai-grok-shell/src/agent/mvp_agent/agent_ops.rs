@@ -55,6 +55,63 @@ impl MvpAgent {
                 );
         }
     }
+    /// The TAPD workbench's SQLite store handle. Shared with the sync
+    /// manager and the `x.ai/tapd/*` ext handlers.
+    pub fn tapd_store(&self) -> Arc<crate::tapd::store::TapdStore> {
+        self.tapd_store.clone()
+    }
+
+    /// The TAPD workbench's background sync manager, if
+    /// [`Self::spawn_tapd_sync_manager`] has been called on this agent.
+    pub fn tapd_sync_manager(&self) -> Option<Arc<crate::tapd::sync::TapdSyncManager>> {
+        self.tapd_sync_manager.borrow().clone()
+    }
+
+    /// Start the TAPD workbench's background sync service. Call once, right
+    /// after agent construction — same lifecycle as
+    /// `models_manager.spawn_background_refresh()`. A second call is a
+    /// no-op (the manager is only ever spawned once per process).
+    ///
+    /// The sync manager reads `[tapd]` straight from `config.toml` on disk
+    /// on every tick (see `crate::tapd::disk_config_source`), not from
+    /// `self.cfg` — `self.cfg` is a `!Send` `RefCell` on this agent's
+    /// `LocalSet` thread, while the manager's timer loop runs on a plain
+    /// `tokio::spawn` task and must be `Send`. Reading fresh from disk also
+    /// means a config edit takes effect on the next tick without a restart.
+    pub fn spawn_tapd_sync_manager(&self) {
+        if self.tapd_sync_manager.borrow().is_some() {
+            return;
+        }
+        let source = Arc::new(crate::tapd::disk_config_source::DiskTapdConfigSource::new(
+            xai_grok_config::grok_home(),
+        ));
+        let manager = crate::tapd::sync::TapdSyncManager::new(self.tapd_store.clone(), source);
+
+        // Forward sync status events to the client as `x.ai/tapd/sync_status`
+        // ext notifications, so the workbench UI updates live instead of
+        // polling. One forwarder per manager instance (the manager itself is
+        // only ever spawned once), so no dedup guard is needed here.
+        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
+        let manager_for_subscribe = manager.clone();
+        let gateway = self.gateway.clone();
+        tokio::task::spawn_local(async move {
+            manager_for_subscribe.subscribe(status_tx).await;
+        });
+        tokio::task::spawn_local(async move {
+            while let Some(event) = status_rx.recv().await {
+                if let Ok(params) = serde_json::value::to_raw_value(&event) {
+                    let notification = acp::ExtNotification::new(
+                        crate::extensions::tapd::tapd_methods::SYNC_STATUS_NOTIFICATION,
+                        params.into(),
+                    );
+                    let _ = gateway.ext_notification(notification).await;
+                }
+            }
+        });
+
+        *self.tapd_sync_manager.borrow_mut() = Some(manager);
+    }
+
     pub fn reload_skills_all_sessions(&self) -> usize {
         let session_ids = self.resident_ids();
         for sid in &session_ids {
@@ -2496,6 +2553,10 @@ impl MvpAgent {
                 crate::heap_profile::HeapProfileMonitor::new(),
             ),
             heap_profile_started: std::cell::Cell::new(false),
+            tapd_store: Arc::new(crate::tapd::store::TapdStore::new(
+                crate::tapd::store::db_path(&xai_grok_config::grok_home()),
+            )),
+            tapd_sync_manager: RefCell::new(None),
             #[cfg(test)]
             finalize_spy: RefCell::new(Vec::new()),
             #[cfg(test)]
@@ -4712,6 +4773,12 @@ impl MvpAgent {
                     system_prompt,
                 });
             tracing::debug!(session_id = %session_info.id.0, "enqueued SessionCommand::Initialize");
+        } else {
+            // Resumed session: `Initialize` (which normally kicks off the
+            // `/context` startup-phase timing probes) is never sent, so do
+            // it explicitly here — otherwise "Skill discovery" / "MCP
+            // startup" spin forever in the panel for any loaded session.
+            let _ = handle.cmd_tx.send(SessionCommand::RunStartupPhaseProbes);
         }
         let _ = handle.cmd_tx.send(SessionCommand::AdvertiseCommands);
         if let Some(mut loc_rx) = loc_aggregate_rx {

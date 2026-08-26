@@ -1132,6 +1132,108 @@ impl HubConfig {
         self.url.as_ref().is_some_and(|u| !u.trim().is_empty())
     }
 }
+/// `[tapd]` section: global TAPD credentials and default sync cadence for
+/// the workbench. Per-directory bindings live under `[tapd.projects.<key>]`
+/// (see [`TapdProjectConfig`]).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TapdConfig {
+    /// Total automatic-sync switch. Manual sync (the workbench's "sync now"
+    /// button) always works regardless of this flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// `"token"` (uses `access_token`) or `"basic"` (uses `api_user` +
+    /// `api_password`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_base_url: Option<String>,
+    /// Workspace used by directories that have no explicit
+    /// `[tapd.projects.<key>]` entry. With this set, the workbench works for
+    /// every directory out of the box: the binding is derived on demand
+    /// (`module_filter` defaults to the directory's own name, lowercased) and
+    /// only gets written to `[tapd.projects.*]` if the user edits it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_workspace_id: Option<String>,
+    /// Default TAPD-side status filter for derived bindings (those without an
+    /// explicit `[tapd.projects.*]` entry). The user's expectation is "show
+    /// me what's currently being worked on" — TAPD's `planning` is the most
+    /// common such state. Each workspace defines its own status taxonomy, so
+    /// this is a default, not a contract — explicit per-project `status`
+    /// always wins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_status_filter: Option<String>,
+    /// Default sort direction for derived bindings (true = `created desc`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_order_desc: Option<bool>,
+    /// Default automatic-sync interval, in seconds. A project's
+    /// `poll_interval_override_secs` (if nonzero) wins over this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval_secs: Option<u64>,
+    /// `[tapd.projects.<key>]` — one binding per directory. The key is an
+    /// opaque slug (not read back), matching the `mcp_servers`/`auth_provider`
+    /// keyed-table convention.
+    #[serde(default)]
+    pub projects: std::collections::HashMap<String, TapdProjectConfig>,
+}
+
+impl TapdConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    pub fn poll_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.poll_interval_secs.unwrap_or(600).max(30))
+    }
+}
+
+/// One `[tapd.projects.<key>]` entry: binds a working directory to a TAPD
+/// workspace, with optional entity-type and module filtering.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TapdProjectConfig {
+    pub directory: String,
+    pub workspace_id: String,
+    /// `"story"` | `"task"` | `"bug"`. Empty defaults to `[Task, Story, Bug]`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub entity_types: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub module_filter: Vec<String>,
+    /// TAPD-side status filter (e.g. `planning`, `open`, `in_progress`).
+    /// Each workspace has its own status taxonomy, so this is opaque.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// When true (the default), sync pulls are sorted `created desc`.
+    #[serde(default = "default_order_desc")]
+    #[serde(skip_serializing_if = "is_order_desc")]
+    pub order_desc: bool,
+    /// Overrides `[tapd].poll_interval_secs` when nonzero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval_override_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+fn default_order_desc() -> bool {
+    true
+}
+
+fn is_order_desc(b: &bool) -> bool {
+    *b
+}
+
+impl TapdProjectConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WorktreePoolConfig {
@@ -1409,6 +1511,9 @@ pub struct Config {
     /// Computer Hub configuration (`[hub]` in config.toml).
     #[serde(default, skip_serializing)]
     pub hub: HubConfig,
+    /// TAPD workbench configuration (`[tapd]` in config.toml).
+    #[serde(default, skip_serializing)]
+    pub tapd: TapdConfig,
     #[serde(default, skip_serializing)]
     pub worktree_pool: WorktreePoolConfig,
     #[serde(default, skip_serializing)]
@@ -1818,6 +1923,7 @@ impl Default for Config {
             harness: HarnessConfig::default(),
             relay: RelayConfig::default(),
             hub: HubConfig::default(),
+            tapd: TapdConfig::default(),
             worktree_pool: WorktreePoolConfig::default(),
             sandbox: SandboxSettingsConfig::default(),
             mcp_servers: std::collections::HashMap::new(),

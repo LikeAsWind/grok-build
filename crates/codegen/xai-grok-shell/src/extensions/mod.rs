@@ -34,6 +34,7 @@ pub mod session_updates;
 pub mod share;
 pub mod skills;
 pub mod suggest;
+pub mod tapd;
 pub mod task;
 pub mod terminal;
 pub mod usage;
