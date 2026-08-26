@@ -1,0 +1,22 @@
+{
+  "all": "All",
+  "currentStreak": "Current streak",
+  "models": "Models",
+  "overview": "Overview",
+  "sessions": "Sessions",
+  "peakHour": "Peak hour",
+  "greeting": "What's up next?",
+  "totalTokens": "Total tokens",
+  "tokenComparison": "You've used ~{{multiplier}}x more tokens than The Hobbit",
+  "activeDays": "Active days",
+  "emptyTitle": "No sessions yet",
+  "favoriteModel": "Favorite model",
+  "emptyDescription": "Start your first conversation from the sidebar to see your stats here.",
+  "messages": "Messages",
+  "longestStreak": "Longest streak",
+  "in": "in",
+  "out": "out",
+  "heatmapSummary": "{{count}} message(s) in the last year",
+  "heatmapTooltip": "{{count}} message(s) on {{date}}",
+  "heatmapCaption": "Assistant messages across all sessions."
+}

@@ -361,6 +361,7 @@ pub mod testkit;
 pub mod tool_index;
 pub(crate) mod turn_completion;
 pub mod unified_list;
+pub(crate) mod usage_daily;
 pub(crate) mod user_message;
 pub(crate) mod wire_tags;
 pub(crate) mod workflow;

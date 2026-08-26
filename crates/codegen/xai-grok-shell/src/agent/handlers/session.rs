@@ -233,8 +233,46 @@ async fn handle_session_summaries(
 
             Ok(acp::ExtResponse::new(value))
         }
+        "x.ai/session_summaries/dashboard_stats" => handle_dashboard_stats(args).await,
         _ => Err(acp::Error::method_not_found()),
     }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct DashboardStatsRequest {
+    #[serde(default)]
+    days: Option<u32>,
+}
+
+/// `x.ai/session_summaries/dashboard_stats` — the Web home dashboard's
+/// Overview + Models tab data (see `usage_daily.rs`). Reads the global
+/// per-model-call log plus all local session summaries and aggregates both
+/// in one pure function, so the client makes a single request per time-range
+/// tab (All/30d/7d) rather than fetching the roster and computing stats
+/// client-side.
+async fn handle_dashboard_stats(args: &acp::ExtRequest) -> Result<acp::ExtResponse, acp::Error> {
+    let req = if args.params.get().trim().is_empty() {
+        DashboardStatsRequest::default()
+    } else {
+        serde_json::from_str::<DashboardStatsRequest>(args.params.get())?
+    };
+
+    let _timer = crate::instrumentation_timer!("session.dashboard_stats");
+
+    let summaries = list_summaries(None).await.map_err(|e| {
+        acp::Error::internal_error().data(format!("failed to list sessions: {e}"))
+    })?;
+    let records = crate::session::usage_daily::read_usage_daily()
+        .await
+        .map_err(|e| acp::Error::internal_error().data(format!("failed to read usage log: {e}")))?;
+
+    let today = chrono::Local::now().date_naive();
+    let stats = crate::session::usage_daily::compute_dashboard_stats(&records, &summaries, req.days, today);
+
+    ExtMethodResult::success(stats)
+        .to_ext_response()
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
 /// Group summaries by cwd and serialize into an [`AllSessionOverviewResponse`].

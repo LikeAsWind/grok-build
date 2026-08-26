@@ -11,6 +11,7 @@ import type { ApiSession, SessionListParams, FileDiff } from './types'
 import type { GlobalEvent } from '../types/api/event'
 import type { SessionStatusMap } from '../types/api/session'
 import type { TodoItem } from '../types/api/event'
+import type { DashboardStats } from '../types/api/dashboard'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
@@ -300,4 +301,15 @@ export type ApiTodo = TodoItem
  */
 export async function getSessionTodos(_sessionId: string, _directory?: string): Promise<ApiTodo[]> {
   return normalizeTodoItems([])
+}
+
+/**
+ * 首页仪表盘统计快照 → ACP x.ai/session_summaries/dashboard_stats
+ * `days` 未传 = 全部时间（All 筛选）；30 / 7 对应 30d / 7d 筛选。
+ */
+export async function getDashboardStats(days?: number): Promise<DashboardStats> {
+  return (await acpExtRequest(
+    'x.ai/session_summaries/dashboard_stats',
+    days ? { days } : {},
+  )) as DashboardStats
 }

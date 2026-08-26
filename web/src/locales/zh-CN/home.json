@@ -1,0 +1,22 @@
+{
+  "all": "全部",
+  "currentStreak": "当前连续天数",
+  "models": "模型",
+  "overview": "总览",
+  "sessions": "会话数",
+  "peakHour": "活跃高峰时段",
+  "greeting": "接下来想做什么？",
+  "totalTokens": "总 token 数",
+  "tokenComparison": "你用掉的 token 数约是《霍比特人》全书的 {{multiplier}} 倍",
+  "activeDays": "活跃天数",
+  "emptyTitle": "还没有任何会话",
+  "favoriteModel": "常用模型",
+  "emptyDescription": "从侧栏新建对话，开始使用后这里会显示你的统计数据。",
+  "messages": "消息数",
+  "longestStreak": "最长连续天数",
+  "in": "输入",
+  "out": "输出",
+  "heatmapSummary": "最近一年共 {{count}} 条消息",
+  "heatmapTooltip": "{{date}} · {{count}} 条消息",
+  "heatmapCaption": "所有会话中的 AI 回复消息。"
+}

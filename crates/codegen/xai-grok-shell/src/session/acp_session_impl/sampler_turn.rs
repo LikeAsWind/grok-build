@@ -1377,14 +1377,35 @@ impl SessionActor {
             self.chat_state_handle
                 .record_token_usage(u64::from(u.total_tokens));
             self.chat_state_handle.record_last_turn_usage(u.clone());
+            let model_id = response.assistant().and_then(|a| a.model_id.clone());
             self.chat_state_handle.record_model_call_usage(
-                response.assistant().and_then(|a| a.model_id.clone()),
+                model_id.clone(),
                 u.clone(),
                 api_duration_ms,
                 response.cost_usd_ticks,
             );
             self.signals_handle()
                 .record_token_usage(u.completion_tokens, u.reasoning_tokens);
+            // Global cross-session daily usage log for the Web home
+            // dashboard (`x.ai/session_summaries/dashboard_stats`) — records
+            // this exact call's day/hour so per-day stats don't have to be
+            // approximated from a session-level end-of-life snapshot.
+            if let Some(model_id) = model_id {
+                use chrono::Timelike;
+                let now = chrono::Local::now();
+                crate::session::usage_daily::record_usage_daily(
+                    crate::session::usage_daily::UsageDailyRecord {
+                        date: now.date_naive(),
+                        session_id: self.session_info.id.0.to_string(),
+                        model_id,
+                        input_tokens: u64::from(u.prompt_tokens),
+                        output_tokens: u64::from(u.completion_tokens),
+                        cost_usd_ticks: response.cost_usd_ticks,
+                        hour: now.hour() as u8,
+                        message_count: response.items.len() as u64,
+                    },
+                );
+            }
         } else if self.tool_context.task_output_token_budget.is_some() {
             self.tool_context.fail_task_output_usage_closed();
             let handle = self.chat_state_handle.clone();
