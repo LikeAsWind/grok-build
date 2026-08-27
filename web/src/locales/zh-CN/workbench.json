@@ -70,9 +70,11 @@
     "success": "成功",
     "failed": "失败"
   },
+  "selectTaskToView": "选择一个任务查看",
+  "selectTaskToViewHint": "先在上方选个工作目录,这里会展示它的 TAPD 任务",
   "selectProjectPrompt": "请选择工作目录以加载其 TAPD 工作台",
   "selectProjectHint": "在上方选择器切换目录,或开新对话",
-  "selectProjectPlaceholder": "请选择工作目录",  "relativeTime": {
+  "relativeTime": {
     "justNow": "刚刚",
     "soon": "即将",
     "minutesAgo": "{{count}} 分钟前",

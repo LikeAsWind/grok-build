@@ -1,9 +1,9 @@
 // TAPD 工作台页面:独立路由 #/workbench?dir=... 下的视图。
 // 顶部工作目录选择/筛选组件永远可见(不管当前是否已选),符合"先选再加载"语义;
-// 选完后下方面板显示该目录的 TAPD 视图。
+// 未选时下方的 WorkbenchPanel 退化成空任务框(提示"选个任务查看")——
+// 不再额外塞一张"请选择工作目录"提示卡片。
 
 import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useCurrentDirectory } from '../../contexts/useDirectory'
 import { useSessionContext } from '../../contexts/useSessionContext'
 import { useRouter } from '../../hooks/useRouter'
@@ -14,8 +14,8 @@ import { WorkbenchProjectSelector } from './WorkbenchProjectSelector'
 
 export interface WorkbenchPageProps {
   onOpenConfigSettings: () => void
-  /** 初始目录(从 URL hash 读),用于 server-side 渲染或首次挂载时预填 */
-  initialDirectory?: string
+  /** 初始目录(从 URL hash 读),用于 server-side 渲染或首次挂载时预填。null 与 undefined 同样视为"还没选" */
+  initialDirectory?: string | null
 }
 
 /** 会话目录 + 当前目录去重排序,作为项目选择器的候选 */
@@ -35,7 +35,6 @@ function collectProjectDirectories(sessionDirs: (string | undefined)[], extra: (
 }
 
 export function WorkbenchPage({ onOpenConfigSettings, initialDirectory }: WorkbenchPageProps) {
-  const { t } = useTranslation('workbench')
   const currentDirectory = useCurrentDirectory()
   const { sessions } = useSessionContext()
   const router = useRouter()
@@ -72,20 +71,10 @@ export function WorkbenchPage({ onOpenConfigSettings, initialDirectory }: Workbe
             onSelect={handleSelect}
           />
         </div>
-        {directory ? (
-          <WorkbenchPanel
-            directory={directory}
-            onOpenSettings={onOpenConfigSettings}
-            projectCandidates={candidates}
-            onSelectProject={handleSelect}
-          />
-        ) : (
-          // 没 directory 时 selector 仍可见,下方给一句说明 + 跳转 settings 的入口
-          <div className="rounded-xl bg-bg-100 border border-border-200/50 p-8 text-center">
-            <div className="text-[length:var(--fs-base)] text-text-200">{t('selectProjectPrompt')}</div>
-            <div className="mt-1 text-[length:var(--fs-sm)] text-text-400">{t('selectProjectHint')}</div>
-          </div>
-        )}
+        <WorkbenchPanel
+          directory={directory}
+          onOpenSettings={onOpenConfigSettings}
+        />
       </div>
     </div>
   )

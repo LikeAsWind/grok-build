@@ -1,6 +1,7 @@
-// TAPD 工作台面板：挂载在新对话页面（HomeDashboard）顶部，按当前对话目录
-// 关联的 TAPD 项目管理任务。目录切换时自动切换展示的项目（无后端"项目"
-// 实体，纯按目录字符串关联——见 BindProjectDialog 的绑定逻辑）。
+// TAPD 工作台面板:按当前目录展示其 TAPD 项目视图。
+// - 未选目录:只渲染空任务框,提示"选个任务查看"
+// - 已选目录:渲染 header(项目名 + 分支 + 同步/编辑/设置按钮) + overview + 任务列表 + 同步历史
+// - 顶部项目选择器在 WorkbenchPage 那一层(永远可见),这里不再放选择器避免重复
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -18,17 +19,9 @@ import type { TapdTask } from '../../api/tapd'
 export interface WorkbenchPanelProps {
   directory: string | undefined
   onOpenSettings: () => void
-  /** 可切换的项目目录（含当前目录）；只有一个时选择器退化成标题 */
-  projectCandidates?: string[]
-  onSelectProject?: (directory: string) => void
 }
 
-export function WorkbenchPanel({
-  directory,
-  onOpenSettings,
-  projectCandidates,
-  onSelectProject,
-}: WorkbenchPanelProps) {
+export function WorkbenchPanel({ directory, onOpenSettings }: WorkbenchPanelProps) {
   const { t } = useTranslation('workbench')
   const { status, loading, syncing, triggerSync, refresh } = useTapdWorkbench(directory)
   const [bindOpen, setBindOpen] = useState(false)
@@ -40,14 +33,30 @@ export function WorkbenchPanel({
     void triggerSync()
   }, [triggerSync])
 
-  // 同步完成（syncing 从 true → false）时任务列表也要跟着刷新一次。
+  // 同步完成(syncing 从 true → false)时任务列表也要跟着刷新一次。
   const wasSyncingRef = useRef(syncing)
   useEffect(() => {
     if (wasSyncingRef.current && !syncing) setRefreshToken(v => v + 1)
     wasSyncingRef.current = syncing
   }, [syncing])
 
-  if (!directory) return null
+  // 未选目录:任务框本身保持可见,空态提示"选个任务查看"。
+  // 不渲染 header / overview / 同步历史 —— 都没对应数据。
+  if (!directory) {
+    return (
+      <div className="rounded-xl bg-bg-100 border border-border-200/50 p-4 flex flex-col gap-3">
+        <div className="border-t border-border-200/50 pt-3 flex-1 min-h-0">
+          <WorkbenchTaskList
+            directory={undefined}
+            modules={[]}
+            onOpenTask={setSelectedTask}
+            refreshToken={refreshToken}
+          />
+        </div>
+        <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTask(null)} />
+      </div>
+    )
+  }
 
   if (loading && !status) {
     return (
@@ -75,8 +84,6 @@ export function WorkbenchPanel({
     )
   }
 
-  const candidates = projectCandidates?.length ? projectCandidates : [directory]
-
   return (
     <div className="rounded-xl bg-bg-100 border border-border-200/50 p-4 flex flex-col gap-3">
       <WorkbenchHeader
@@ -85,8 +92,6 @@ export function WorkbenchPanel({
         onSyncNow={handleSyncNow}
         onOpenSettings={onOpenSettings}
         binding={status.binding}
-        projectCandidates={candidates}
-        onSelectProject={onSelectProject ?? (() => {})}
         onEditBinding={() => setBindOpen(true)}
       />
 

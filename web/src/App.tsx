@@ -187,20 +187,15 @@ function App() {
     navigatePaneHome(paneId)
   }, [paneLayout.focusedPaneId, navigatePaneHome])
 
-  // 停留在某个项目的会话里进工作台时，默认展示该项目的工作台。
-  // 必须在 navigatePaneHome 之前取——它会清掉 pane 的 session，
-  // 之后 focusedDirectory 就退回全局目录了。
-  // workbenchDirectory 直接从 URL hash 读，不用本地 useState — 刷新 / 收藏夹 /
-  // 跨标签同步都从 URL 恢复，不再需要手动同步。
-  // (保留占位 import 行为:handleOpenWorkbench 直接走 navigateRouteToWorkbench)
-
-  // 侧栏「工作台」:走独立路由 #/workbench?dir=... 不与 session 复用 URL。
-  // 离开当前会话 → 写新 hash → WorkbenchPage 渲染。
+  // workbenchDirectory 直接从 URL hash 读,刷新 / 收藏夹 / 跨标签同步都从 URL 恢复。
+  // 侧栏「工作台」:永远传 undefined —— 不带链接会话的目录,进来时强制要求显式选项目。
+  // WorkbenchPage 在没 directory 时把任务框渲染出来,显示「选个任务查看」占位,
+  // 不再额外塞一张「请选择工作目录」提示卡片。
   const handleOpenWorkbench = useCallback(() => {
     const paneId = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
     if (paneId) navigatePaneHome(paneId)
-    navigateRouteToWorkbench(focusedRouteDirectory || undefined)
-  }, [paneLayout.focusedPaneId, navigatePaneHome, focusedRouteDirectory, navigateRouteToWorkbench])
+    navigateRouteToWorkbench(undefined)
+  }, [paneLayout.focusedPaneId, navigatePaneHome, navigateRouteToWorkbench])
 
   const handleEnterSplitMode = useCallback(() => {
     paneLayoutStore.enterSplitMode(paneLayout.focusedSessionId)

@@ -42,6 +42,8 @@
   "selectProjectPrompt": "Pick a working directory to load its TAPD workbench",
   "selectProjectHint": "Switch directory from the selector above, or open a new chat",
   "selectProjectPlaceholder": "Select a working directory",
+  "selectTaskToView": "Pick a task to view",
+  "selectTaskToViewHint": "Choose a working directory above — its TAPD tasks will show up here",
   "searchPlaceholder": "Search task titles…",
   "allStates": "All states",
   "allTypes": "All types",

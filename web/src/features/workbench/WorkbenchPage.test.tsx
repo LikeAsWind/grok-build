@@ -1,6 +1,6 @@
 // WorkbenchPage:工作台作为独立首页入口(#/workbench?dir=...)的页面外壳。
-// ProjectSelector 永远顶部可见;WorkbenchPanel 内容区按当前 directory 渲染。
-// 这里只验证外壳行为 + 路由交互(URL 是 selected directory 的 source of truth)。
+// ProjectSelector 永远顶部可见;WorkbenchPanel 永远渲染(directory=undefined 时退化为
+// 空任务框 + "选个任务查看"提示)。这里只验证外壳行为 + 路由交互。
 
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -26,7 +26,7 @@ vi.mock('../../contexts/useSessionContext', () => ({
 }))
 
 // useRouter mock:每个测试可以独立设置 workbenchDirectory + 捕获 navigateToWorkbench 调用
-let mockWorkbenchDirectory: string | undefined = undefined
+let mockWorkbenchDirectory: string | null | undefined = undefined
 const mockNavigateToWorkbench = vi.fn()
 useRouterMock.mockImplementation(() => ({
   workbenchDirectory: mockWorkbenchDirectory,
@@ -42,20 +42,30 @@ vi.mock('../../hooks/useRouter', () => ({
 }))
 
 // 替身把收到的 props 暴露成 DOM,便于断言目录与候选列表
-vi.mock('./WorkbenchPanel', () => ({
-  WorkbenchPanel: ({
+// 候选目录排序 + 点选调用 navigateToWorkbench 这条线现在走 WorkbenchProjectSelector
+// (内层 WorkbenchHeader 不再重复渲染选择器)。把选择器 mock 暴露 candidates + pick-beta 按钮。
+vi.mock('./WorkbenchProjectSelector', () => ({
+  WorkbenchProjectSelector: ({
     directory,
-    projectCandidates,
-    onSelectProject,
+    candidates,
+    onSelect,
   }: {
     directory: string | undefined
-    projectCandidates?: string[]
-    onSelectProject?: (dir: string) => void
+    candidates: string[]
+    onSelect: (dir: string) => void
   }) => (
-    <div data-testid="workbench-panel">
+    <div data-testid="workbench-project-selector">
       <span data-testid="panel-directory">{directory ?? 'NONE'}</span>
-      <span data-testid="panel-candidates">{(projectCandidates ?? []).join('|')}</span>
-      <button onClick={() => onSelectProject?.('C:/repo/beta')}>pick-beta</button>
+      <span data-testid="panel-candidates">{candidates.join('|')}</span>
+      <button onClick={() => onSelect('C:/repo/beta')}>pick-beta</button>
+    </div>
+  ),
+}))
+
+vi.mock('./WorkbenchPanel', () => ({
+  WorkbenchPanel: ({ directory }: { directory: string | undefined; onOpenSettings: () => void }) => (
+    <div data-testid="workbench-panel">
+      <span data-testid="panel-inner-directory">{directory ?? 'NONE'}</span>
     </div>
   ),
 }))
@@ -81,15 +91,16 @@ describe('WorkbenchPage', () => {
     expect(screen.queryByText('noDirectoryTitle')).not.toBeInTheDocument()
   })
 
-  it('没有工作目录时显示引导文案 + 占位提示,不渲染 WorkbenchPanel', () => {
+  it('没有工作目录时仍渲染 WorkbenchPanel(directory=undefined),不再出"请选择工作目录"提示卡片', () => {
     useCurrentDirectoryMock.mockReturnValue(undefined)
     render(<WorkbenchPage onOpenConfigSettings={() => {}} />)
 
-    // 引导文案:WorkbenchProjectSelector 永远可见 + 内容区给"请选择"提示
-    expect(screen.getByText('selectProjectPrompt')).toBeInTheDocument()
-    expect(screen.getByText('selectProjectHint')).toBeInTheDocument()
-    // 没 directory 时不渲染 WorkbenchPanel 内容区
-    expect(screen.queryByTestId('workbench-panel')).not.toBeInTheDocument()
+    // 任务框本身保持可见 —— Panel 拿到 undefined,由 Panel 内部用 selectTaskToView 空态
+    expect(screen.getByTestId('workbench-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('panel-directory')).toHaveTextContent('NONE')
+    // 老的"请选择工作目录"提示卡片去掉了
+    expect(screen.queryByText('selectProjectPrompt')).not.toBeInTheDocument()
+    expect(screen.queryByText('selectProjectHint')).not.toBeInTheDocument()
   })
 
   it('initialDirectory(进入前所处会话的目录)优先于全局当前目录', () => {
