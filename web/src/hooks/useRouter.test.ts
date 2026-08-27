@@ -1,7 +1,8 @@
 // useRouter hash 路由的回归测试。
-// 重点盯住"#/workbench 但没选目录"这个状态 —— buildHash 之前会把它降级成 "#/"
-// 导致 App.tsx 的 isWorkbenchActive 一直是 false,点了工作台没反应。
-// 现在用 null sentinel 表达"在 workbench 但没选目录"。
+// 覆盖三个状态的 round-trip:
+//   - "#/workbench" 用 null sentinel 表达"在工作台但没选目录"(buildHash 之前降级成 "#/" 导致点不进工作台)
+//   - "#/workbench?dir=X" 表达"在工作台且选了这个目录"
+//   - "#/session/X" 不再写 dir —— session URL 完全干净,cwd 由 DirectoryContext 从元数据派生
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildHash, parseHash } from './useRouter'
@@ -38,6 +39,14 @@ describe('useRouter hash <-> state', () => {
       const state = parseHash()
       expect(state.workbenchDirectory).toBeUndefined()
     })
+
+    it('"#/session/X?dir=..." 也忽略 dir —— session cwd 由 DirectoryContext 从元数据派生', () => {
+      window.location.hash = '#/session/X?dir=C%3A%2Frepo'
+      const state = parseHash()
+      expect(state.sessionId).toBe('X')
+      expect(state.directory).toBeUndefined()
+      expect(state.workbenchDirectory).toBeUndefined()
+    })
   })
 
   describe('buildHash', () => {
@@ -52,7 +61,9 @@ describe('useRouter hash <-> state', () => {
     it('workbenchDirectory=undefined 回到普通 home / session 路由', () => {
       expect(buildHash(null, undefined, undefined)).toBe('#/')
       expect(buildHash(null, 'C:/repo', undefined)).toBe('#/?dir=C%3A%2Frepo')
+      // session 路由:不管 directory 传什么,URL 都不带 ?dir=
       expect(buildHash('sess-1', undefined, undefined)).toBe('#/session/sess-1')
+      expect(buildHash('sess-1', 'C:/repo', undefined)).toBe('#/session/sess-1')
     })
   })
 
@@ -67,6 +78,17 @@ describe('useRouter hash <-> state', () => {
       const built = buildHash(null, undefined, 'C:/repo')
       window.location.hash = built
       expect(parseHash()).toMatchObject({ workbenchDirectory: 'C:/repo' })
+    })
+
+    it('parse(build(#/session/X)) 回到 sid + cwd 留空 (由 DirectoryContext 派生)', () => {
+      const built = buildHash('sess-1', undefined, undefined)
+      expect(built).toBe('#/session/sess-1')
+      window.location.hash = built
+      expect(parseHash()).toMatchObject({
+        sessionId: 'sess-1',
+        directory: undefined,
+        workbenchDirectory: undefined,
+      })
     })
   })
 })

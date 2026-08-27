@@ -62,7 +62,9 @@ export function parseHash(): RouteState {
   // 用 RegExp 构造,避开 regex literal 在源码里手写 / 转义容易出错
   const sessionMatch = path.match(new RegExp('^' + '#' + '/' + 'session' + '/' + '(.+)$'))
   if (sessionMatch) {
-    return { sessionId: sessionMatch[1], directory, workbenchDirectory: undefined }
+    // session URL 永不写 ?dir=,这里也不读 —— cwd 来自 session 元数据
+    // (DirectoryContext 在 routeSessionId 变化时调 getSession 反查)
+    return { sessionId: sessionMatch[1], directory: undefined, workbenchDirectory: undefined }
   }
 
   // 工作台独立路由: #/workbench 或 #/workbench?dir=...
@@ -86,8 +88,9 @@ export function buildHash(
     path = '#/workbench'
     dir = workbenchDirectory ?? undefined
   } else if (sessionId) {
+    // session URL 不写 ?dir= —— cwd 由后端 session 元数据持有,前端没必要重复一份
     path = '#/session/' + sessionId
-    dir = directory
+    dir = undefined
   } else {
     path = '#/'
     dir = directory

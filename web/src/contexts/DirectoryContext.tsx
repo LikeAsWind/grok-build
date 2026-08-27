@@ -2,8 +2,8 @@
 // DirectoryContext - 管理当前工作目录
 // ============================================
 
-import { useState, useCallback, useEffect, useMemo, type ReactNode } from 'react'
-import { type ApiPath } from '../api'
+import { useEffect, useState, useCallback, useMemo, type ReactNode } from 'react'
+import { type ApiPath, getSession } from '../api'
 import { useRouter } from '../hooks/useRouter'
 import { normalizeToForwardSlash, serverStorage } from '../utils'
 import { layoutStore, useLayoutStore } from '../store/layoutStore'
@@ -29,8 +29,8 @@ function readRecentProjects(): RecentProjects {
 }
 
 export function DirectoryProvider({ children }: { children: ReactNode }) {
-  // 从 URL 获取 directory（替代 localStorage）
-  const { directory: urlDirectory, setDirectory: setUrlDirectory } = useRouter()
+  // URL dir 只在 home/workbench 路由有意义;session 路由的 cwd 由下面 sessionDirectory 派生
+  const { directory: urlDirectory, sessionId: routeSessionId, setDirectory: setUrlDirectory } = useRouter()
 
   // 从 layoutStore 获取 sidebarExpanded
   const { sidebarExpanded } = useLayoutStore()
@@ -39,7 +39,31 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
 
   const [pathInfo, setPathInfo] = useState<ApiPath | null>(null)
 
-  // 服务器 ID 切换时切换 per-server 目录；local runtime URL 变化时只刷新 path info。
+  // session 路由下:从 session 元数据反查 cwd —— 这是 source of truth,不受 URL 影响
+  // home/workbench 路由下:sessionDirectory = undefined,fallback 到 urlDirectory
+  const [sessionDirectory, setSessionDirectory] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (!routeSessionId) {
+      setSessionDirectory(undefined)
+      return
+    }
+    // 先清掉旧值,避免切换 session 时短暂显示上一个 session 的 cwd
+    setSessionDirectory(undefined)
+    let cancelled = false
+    void getSession(routeSessionId)
+      .then(session => {
+        if (cancelled) return
+        setSessionDirectory(session?.directory || undefined)
+      })
+      .catch(() => {
+        if (!cancelled) setSessionDirectory(undefined)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [routeSessionId])
+
+  // 服务器 ID 切换时切换 per-server 目录;local runtime URL 变化时只刷新 path info。
   useEffect(() => {
     return serverStore.onServerChange((_, reason) => {
       if (reason === 'server-switch') {
@@ -47,18 +71,18 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         setUrlDirectory(undefined)
       }
       setPathInfo(null)
-      // getPath() 依赖已被 stub 的 OpenCodeUI SDK，且 pathInfo 无实际使用者——跳过
+      // getPath() 依赖已被 stub 的 OpenCodeUI SDK,且 pathInfo 无实际使用者——跳过
     })
   }, [setUrlDirectory])
 
-  // pathInfo 无实际使用者，不再加载（原 getPath() 依赖已废弃的 SDK）
+  // pathInfo 无实际使用者,不再加载(原 getPath() 依赖已废弃的 SDK)
 
   // 保存 recentProjects 到 per-server storage
   useEffect(() => {
     serverStorage.setJSON(STORAGE_KEY_RECENT, recentProjects)
   }, [recentProjects])
 
-  // 设置当前目录（更新 URL + 记录最近使用）
+  // 设置当前目录(更新 URL + 记录最近使用)—— 显式用户行为,只走 URL
   const setCurrentDirectory = useCallback(
     (directory: string | undefined) => {
       setUrlDirectory(directory)
@@ -69,7 +93,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     [setUrlDirectory],
   )
 
-  // 仅刷新目录的最近时间戳，不切换 currentDirectory
+  // 仅刷新目录的最近时间戳,不切换 currentDirectory
   const touchDirectory = useCallback((path: string) => {
     setRecentProjects(prev => ({ ...prev, [normalizeToForwardSlash(path)]: Date.now() }))
   }, [])
@@ -79,10 +103,13 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     layoutStore.setSidebarExpanded(expanded)
   }, [])
 
-  // 稳定化 Provider value，避免每次渲染创建新对象导致子组件不必要重渲染
+  // currentDirectory 派生:session 路由用 session 元数据,其他路由用 URL
+  const currentDirectory = sessionDirectory ?? urlDirectory
+
+  // 稳定化 Provider value,避免每次渲染创建新对象导致子组件不必要重渲染
   const value = useMemo<DirectoryContextValue>(
     () => ({
-      currentDirectory: urlDirectory,
+      currentDirectory,
       setCurrentDirectory,
       recentProjects,
       touchDirectory,
@@ -90,7 +117,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       sidebarExpanded,
       setSidebarExpanded,
     }),
-    [urlDirectory, setCurrentDirectory, recentProjects, touchDirectory, pathInfo, sidebarExpanded, setSidebarExpanded],
+    [currentDirectory, setCurrentDirectory, recentProjects, touchDirectory, pathInfo, sidebarExpanded, setSidebarExpanded],
   )
 
   return <DirectoryContext.Provider value={value}>{children}</DirectoryContext.Provider>
