@@ -122,6 +122,16 @@ let _serverCwd = ''
 let _modelState: AcpModelState | null = null
 let _initMeta: Record<string, unknown> = {}
 
+// acpLoadSession 的 cwd cache —— session 元数据是 cwd 的 source of truth,
+// 比 URL dir(可能错、可能缺、可能跟后端存的编码不一致)更可靠。
+// sid 是 UUID,基本不会跟历史 sid 撞,内存泄漏风险可忽略。
+const _sessionCwdCache = new Map<string, string>()
+
+/** 清空 acpLoadSession 的 cwd cache —— 切换后端 / 调试时调用,正常流程不需要 */
+export function clearAcpLoadSessionCwdCache(): void {
+  _sessionCwdCache.clear()
+}
+
 // ── 自动重连（意外断开时指数退避）────────────────────────────────
 let _reconnectAttempt = 0
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -1811,11 +1821,26 @@ export async function acpLoadSession(sessionId: string): Promise<void> {
   // 回放窗口：load 期间的 task_completed 立即按事件流顺序渲染（保历史位置），
   // 调用方（useSessionManager.loadSession）在回放 settle 后 finishAcpReplay。
   beginAcpReplay(sessionId)
-  // cwd 必须保持后端原生斜杠方向（Windows 反斜杠），不得强转——
-  // 否则 session/load 会因目录编码不匹配而找不到会话（Path not found）。
-  // 见 sessionCwd.ts 的根因注释。
-  const cwd = sessionCwdForWire(_serverCwd)
-  await client.loadSession(sessionId, cwd)
+
+  // cwd 是 session 元数据的 source of truth —— URL dir 不可信、TUI/Web 编码
+  // 不一致、用户可能手改,所以反查后端 x.ai/sessions/list 拿真实 cwd。
+  // 命中 cache 时零成本;冷启或后端迁移 session 时打一次 ext。
+  // 查不到(后端没这个 sid / ext 失败)兜底 _serverCwd —— 行为等同改动前。
+  let cwd: string | undefined = _sessionCwdCache.get(sessionId)
+  if (!cwd) {
+    try {
+      const list = (await acpExtRequest('x.ai/sessions/list')) as {
+        sessions?: Array<{ sessionId: string; cwd?: string }>
+      }
+      cwd = list.sessions?.find(s => s.sessionId === sessionId)?.cwd
+      if (cwd) _sessionCwdCache.set(sessionId, cwd)
+    } catch {
+      // 列表失败兜底 _serverCwd
+    }
+  }
+
+  // 统一斜杠方向(Windows 反斜杠归一为正斜杠),见 sessionCwd.ts 根因注释。
+  await client.loadSession(sessionId, sessionCwdForWire(cwd || _serverCwd))
 }
 
 /**
