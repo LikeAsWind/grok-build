@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { Sidebar } from './features/chat'
@@ -39,7 +39,6 @@ import { isTauri, isTauriMobile } from './utils/tauri'
 import { InternalDragLayer } from './components/InternalDragLayer'
 import { HomeDashboard } from './features/home/HomeDashboard'
 import { WorkbenchPage } from './features/workbench/WorkbenchPage'
-import { homeViewStore } from './store/homeViewStore'
 
 const SettingsDialog = lazy(() =>
   import('./features/settings/SettingsDialog').then(module => ({ default: module.SettingsDialog })),
@@ -62,8 +61,10 @@ function App() {
   const {
     sessionId: routeSessionId,
     directory: routeDirectory,
+    workbenchDirectory: routeWorkbenchDirectory,
     navigateToSession: navigateRouteToSession,
     navigateHome: navigateRouteHome,
+    navigateToWorkbench: navigateRouteToWorkbench,
     replaceSession,
   } = router
   const { currentDirectory, recentProjects, sidebarExpanded, setSidebarExpanded } = useDirectory()
@@ -166,8 +167,7 @@ function App() {
       paneLayoutStore.focusPane(paneId)
       paneLayoutStore.setPaneSession(paneId, null)
       navigateRouteHome()
-      // 回首页 = 回仪表盘。工作台是显式入口，不该在"退出会话"后残留
-      homeViewStore.setView('dashboard')
+      // navigateRouteHome 写回 #/?dir=... → 离开 workbench 路由(独立 URI),不需要再 setView
     },
     [navigateRouteHome],
   )
@@ -190,16 +190,17 @@ function App() {
   // 停留在某个项目的会话里进工作台时，默认展示该项目的工作台。
   // 必须在 navigatePaneHome 之前取——它会清掉 pane 的 session，
   // 之后 focusedDirectory 就退回全局目录了。
-  const [workbenchDirectory, setWorkbenchDirectory] = useState<string | undefined>(undefined)
+  // workbenchDirectory 直接从 URL hash 读，不用本地 useState — 刷新 / 收藏夹 /
+  // 跨标签同步都从 URL 恢复，不再需要手动同步。
+  // (保留占位 import 行为:handleOpenWorkbench 直接走 navigateRouteToWorkbench)
 
-  // 侧栏「工作台」：工作台占的是首页承载面，所以必须先离开当前会话
-  // （navigatePaneHome 会把 view 复位成 dashboard，故顺序在它之后）
+  // 侧栏「工作台」:走独立路由 #/workbench?dir=... 不与 session 复用 URL。
+  // 离开当前会话 → 写新 hash → WorkbenchPage 渲染。
   const handleOpenWorkbench = useCallback(() => {
     const paneId = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
-    setWorkbenchDirectory(focusedRouteDirectory || undefined)
     if (paneId) navigatePaneHome(paneId)
-    homeViewStore.setView('workbench')
-  }, [paneLayout.focusedPaneId, navigatePaneHome, focusedRouteDirectory])
+    navigateRouteToWorkbench(focusedRouteDirectory || undefined)
+  }, [paneLayout.focusedPaneId, navigatePaneHome, focusedRouteDirectory, navigateRouteToWorkbench])
 
   const handleEnterSplitMode = useCallback(() => {
     paneLayoutStore.enterSplitMode(paneLayout.focusedSessionId)
@@ -475,10 +476,9 @@ function App() {
 
   // 首页承载面：只在单 pane（非 split）且当前无 session 时展示——split 场景
   // 下多个 pane 各自可能有不同 session，"无 session"语义不适用。
-  // 仪表盘和 TAPD 工作台是这个位置上两个独立入口，由 homeViewStore 决定显示哪个。
   const showHomeSurface = !paneLayout.isSplit && paneLayout.focusedSessionId === null
-  const homeView = useSyncExternalStore(homeViewStore.subscribe, homeViewStore.getSnapshot)
-  const isWorkbenchActive = showHomeSurface && homeView === 'workbench'
+  // workbench 路由由 routeWorkbenchDirectory !== undefined 标记。
+  const isWorkbenchActive = showHomeSurface && routeWorkbenchDirectory !== undefined
 
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('servers')
@@ -911,8 +911,8 @@ function App() {
                   >
                     <div className={`flex-1 min-h-0 px-4 ${paneLayout.isSplit && !paneLayout.fullscreenPaneId ? 'py-2' : ''}`}>
                       {showHomeSurface ? (
-                        homeView === 'workbench' ? (
-                          <WorkbenchPage onOpenConfigSettings={() => openSettingsTab('config')} initialDirectory={workbenchDirectory} />
+                        routeWorkbenchDirectory !== undefined ? (
+                          <WorkbenchPage onOpenConfigSettings={() => openSettingsTab('config')} initialDirectory={routeWorkbenchDirectory} />
                         ) : (
                           <HomeDashboard />
                         )
@@ -984,8 +984,8 @@ function App() {
                   style={{ minWidth: `${CHAT_SURFACE_MIN_WIDTH}px` }}
                 >
                   {showHomeSurface ? (
-                    homeView === 'workbench' ? (
-                      <WorkbenchPage onOpenConfigSettings={() => openSettingsTab('config')} initialDirectory={workbenchDirectory} />
+                    routeWorkbenchDirectory !== undefined ? (
+                      <WorkbenchPage onOpenConfigSettings={() => openSettingsTab('config')} initialDirectory={routeWorkbenchDirectory} />
                     ) : (
                       <HomeDashboard />
                     )

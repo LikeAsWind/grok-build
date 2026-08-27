@@ -15,6 +15,8 @@ import { useIsMobile } from './useIsMobile'
 interface RouteState {
   sessionId: string | null
   directory: string | undefined
+  /** 工作台视图：选中的工作目录。存在 = 渲染 WorkbenchPage，不与 session 路由复用。 */
+  workbenchDirectory: string | undefined
 }
 
 type Listener = () => void
@@ -50,27 +52,48 @@ function parseHash(): RouteState {
 
   const sessionMatch = path.match(/^#\/session\/(.+)$/)
   if (sessionMatch) {
-    return { sessionId: sessionMatch[1], directory }
+    return { sessionId: sessionMatch[1], directory, workbenchDirectory: undefined }
   }
 
-  return { sessionId: null, directory }
+  // 工作台独立路由: #/workbench?dir=... 不与 session 路由共用
+  if (path === "#/workbench" || path === "#workbench") {
+    return { sessionId: null, directory, workbenchDirectory: directory }
+  }
+
+  return { sessionId: null, directory, workbenchDirectory: undefined }
 }
 
-function buildHash(sessionId: string | null, directory: string | undefined): string {
-  const path = sessionId ? `#/session/${sessionId}` : '#/'
-  if (directory) {
-    return `${path}?dir=${encodeURIComponent(directory)}`
+function buildHash(
+  sessionId: string | null,
+  directory: string | undefined,
+  workbenchDirectory?: string | undefined,
+): string {
+  let path: string
+  if (workbenchDirectory !== undefined) {
+    path = "#/workbench"
+  } else if (sessionId) {
+    path = `#/session/${sessionId}`
+  } else {
+    path = "#/"
+  }
+  const dir = workbenchDirectory ?? directory
+  if (dir) {
+    return `${path}?dir=${encodeURIComponent(dir)}`
   }
   return path
 }
 
 function isSameRoute(a: RouteState, b: RouteState): boolean {
-  return a.sessionId === b.sessionId && a.directory === b.directory
+  return (
+    a.sessionId === b.sessionId &&
+    a.directory === b.directory &&
+    a.workbenchDirectory === b.workbenchDirectory
+  )
 }
 
 function ensureSnapshot(): RouteState {
   if (typeof window === 'undefined') {
-    return { sessionId: null, directory: undefined }
+    return { sessionId: null, directory: undefined, workbenchDirectory: undefined }
   }
   if (routeSnapshot === null) {
     routeSnapshot = parseHash()
@@ -124,8 +147,9 @@ export function useRouter() {
   const navigateToSession = useCallback((sessionId: string, directory?: string) => {
     const currentRoute = getSnapshot()
     const dir = directory !== undefined ? normalizeToForwardSlash(directory) || undefined : currentRoute.directory
-    const next = { sessionId, directory: dir }
-    const newHash = buildHash(sessionId, dir)
+    // 切到 session 路由 = 离开 workbench，清掉 workbench 标记
+    const next: RouteState = { sessionId, directory: dir, workbenchDirectory: undefined }
+    const newHash = buildHash(sessionId, dir, undefined)
     if (isMobileRef.current) {
       window.history.replaceState(null, '', newHash)
     } else {
@@ -136,8 +160,21 @@ export function useRouter() {
 
   const navigateHome = useCallback(() => {
     const currentRoute = getSnapshot()
-    const next = { sessionId: null, directory: currentRoute.directory }
-    const newHash = buildHash(null, currentRoute.directory)
+    const next: RouteState = { sessionId: null, directory: currentRoute.directory, workbenchDirectory: undefined }
+    const newHash = buildHash(null, currentRoute.directory, undefined)
+    if (isMobileRef.current) {
+      window.history.replaceState(null, '', newHash)
+    } else {
+      window.location.hash = newHash
+    }
+    emitRoute(next)
+  }, [])
+
+  // 进入工作台：选中的 directory 写入 URL，不与 session 路由共用。directory 缺失时只换 view。
+  const navigateToWorkbench = useCallback((directory?: string) => {
+    const dir = directory ? normalizeToForwardSlash(directory) || undefined : undefined
+    const next: RouteState = { sessionId: null, directory: dir, workbenchDirectory: dir }
+    const newHash = buildHash(null, dir, dir)
     if (isMobileRef.current) {
       window.history.replaceState(null, '', newHash)
     } else {
@@ -151,13 +188,13 @@ export function useRouter() {
     const dir = directory !== undefined ? normalizeToForwardSlash(directory) || undefined : currentRoute.directory
     const newHash = buildHash(sessionId, dir)
     window.history.replaceState(null, '', newHash)
-    emitRoute({ sessionId, directory: dir })
+    emitRoute({ sessionId, directory: dir, workbenchDirectory: undefined })
   }, [])
 
   const setDirectory = useCallback((directory: string | undefined) => {
     const normalized = directory ? normalizeToForwardSlash(directory) : undefined
     const newHash = buildHash(null, normalized || undefined)
-    const next = { sessionId: null, directory: normalized || undefined }
+    const next: RouteState = { sessionId: null, directory: normalized || undefined, workbenchDirectory: undefined }
     if (normalized) {
       serverStorage.set(STORAGE_KEY_LAST_DIRECTORY, normalized)
     } else {
@@ -177,14 +214,16 @@ export function useRouter() {
       serverStorage.remove(STORAGE_KEY_LAST_DIRECTORY)
     }
     window.history.replaceState(null, '', newHash)
-    emitRoute({ sessionId: currentRoute.sessionId, directory: normalized || undefined })
+    emitRoute({ sessionId: currentRoute.sessionId, directory: normalized || undefined, workbenchDirectory: currentRoute.workbenchDirectory })
   }, [])
 
   return {
     sessionId: route.sessionId,
     directory: route.directory,
+    workbenchDirectory: route.workbenchDirectory,
     navigateToSession,
     navigateHome,
+    navigateToWorkbench,
     replaceSession,
     setDirectory,
     replaceDirectory,

@@ -39,6 +39,9 @@
   "emptyTitle": "No tasks",
   "emptyDescriptionUnbound": "Link a TAPD project to see pulled tasks here",
   "emptyDescriptionBound": "No tasks pulled yet — try Sync now",
+  "selectProjectPrompt": "Pick a working directory to load its TAPD workbench",
+  "selectProjectHint": "Switch directory from the selector above, or open a new chat",
+  "selectProjectPlaceholder": "Select a working directory",
   "searchPlaceholder": "Search task titles…",
   "allStates": "All states",
   "allTypes": "All types",
@@ -59,8 +62,6 @@
   "syncHistory": "Sync history",
   "syncHistoryEmpty": "No sync history yet",
   "errorTitle": "Sync error",
-  "noDirectoryTitle": "No working directory selected",
-  "noDirectoryDescription": "Start a new chat and pick a directory — TAPD tasks linked to it will show up here",
   "trigger": {
     "manual": "Manual",
     "scheduled": "Scheduled",

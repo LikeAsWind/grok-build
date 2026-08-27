@@ -8,8 +8,8 @@ import { ChevronDownIcon, FolderIcon } from '../../components/Icons'
 import { getDirectoryName } from '../../utils'
 
 export interface WorkbenchProjectSelectorProps {
-  /** 当前工作台展示的目录 */
-  directory: string
+  /** 当前工作台展示的目录；undefined = 还没选,显示"选择工作目录"占位 */
+  directory?: string
   /** 可切换的候选目录（含当前目录；调用方负责去重排序） */
   candidates: string[]
   onSelect: (directory: string) => void
@@ -34,12 +34,12 @@ export function WorkbenchProjectSelector({ directory, candidates, onSelect }: Wo
     return candidates.map(dir => ({ dir, name: getDirectoryName(dir) || dir }))
   }, [candidates])
 
-  const currentName = getDirectoryName(directory) || directory
+  const currentName = directory ? getDirectoryName(directory) || directory : t('selectProjectPlaceholder')
   // 只有一个候选时没有可切换的对象，退化成纯标题（不给假的下拉）
   const switchable = items.length > 1
 
   if (!switchable) {
-    return <h2 className="text-[length:var(--fs-heading-2)] font-semibold text-text-100 truncate">{currentName}</h2>
+    return <h2 className={`text-[length:var(--fs-heading-2)] font-semibold truncate ${directory ? 'text-text-100' : 'text-text-400'}`}>{currentName}</h2>
   }
 
   return (
