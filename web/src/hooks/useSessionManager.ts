@@ -148,6 +148,23 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
 
       const dir = directoryRef.current
 
+      // 元数据(title / directory / shareUrl)统一在 loadSession 入口反查一次,
+      // 不再依赖 snapshot fallback 那条分支 —— 否则 ACP replay 走通的会话
+      // (用户最常见的 case) 永远拿不到 title,Header 一直卡在"新对话"占位。
+      // fire-and-forget:isStale 守卫避免来回切 session 时旧 fetch 覆盖新状态。
+      void getSession(sid, dir)
+        .then(info => {
+          if (isStale() || !info) return
+          messageStore.updateSessionMetadata(sid, {
+            title: info.title,
+            directory: info.directory ?? dir,
+            shareUrl: info.share?.url,
+          })
+        })
+        .catch(() => {
+          // 元数据拉取失败不影响主加载流程,静默忽略
+        })
+
       // 检查是否已有消息（SSE 可能已经推送了）
       const existingState = messageStore.getSessionState(sid)
       const hasExistingMessages = existingState && existingState.messages.length > 0
