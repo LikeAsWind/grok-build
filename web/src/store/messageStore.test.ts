@@ -493,3 +493,21 @@ describe('injectSynthMessages 锚点定位', () => {
     expect(ids()).toEqual(['u1', 'a1', 'msg_tasknotif_t1', 'u2', 'a2', 'u3', 'a3'])
   })
 })
+describe('messageStore.clearMessages (web /clear backend hook)', () => {
+  it('clears messages for the given session only', () => {
+    messageStore.setMessages('session-A', [
+      createMessageWithParts('a1', 'first A'),
+      createMessageWithParts('a2', 'second A'),
+    ])
+    messageStore.setMessages('session-B', [
+      createMessageWithParts('b1', 'first B'),
+    ])
+    messageStore.clearMessages('session-A')
+    expect(messageStore.getVisibleMessages('session-A')).toEqual([])
+    // Other session untouched.
+    expect(messageStore.getVisibleMessages('session-B').map(m => m.info.id)).toEqual(['b1'])
+  })
+  it('is a no-op when the session does not exist', () => {
+    expect(() => messageStore.clearMessages('does-not-exist')).not.toThrow()
+  })
+})

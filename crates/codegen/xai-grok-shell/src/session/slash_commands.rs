@@ -300,6 +300,15 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
             }
         },
     },
+    BuiltinCommand {
+        name: "clear",
+        description: "Clear the visible chat messages for the current session",
+        argument_hint: None,
+        aliases: &[],
+        gate: BuiltinGate::AlwaysOn,
+        resolve: |_| BuiltinAction::Clear,
+    },
+
 ];
 /// Split a trailing `--budget <tokens>` flag off a `/goal` objective.
 ///
@@ -1239,6 +1248,9 @@ pub(super) enum BuiltinAction {
         name: String,
         input: String,
     },
+    /// Clear the visible chat messages for the current session.
+    Clear,
+
 }
 impl BuiltinAction {
     pub(crate) fn command_name(&self) -> &'static str {
@@ -1273,6 +1285,7 @@ impl BuiltinAction {
             BuiltinAction::DeepResearch { .. } => "deep-research",
             BuiltinAction::WorkflowManage { .. } => "workflow",
             BuiltinAction::WorkflowLaunch { .. } => "workflow",
+            BuiltinAction::Clear => "clear",
         }
     }
     pub(crate) fn args_provided(&self) -> bool {
@@ -1307,6 +1320,7 @@ impl BuiltinAction {
             BuiltinAction::DeepResearch { .. } => true,
             BuiltinAction::WorkflowManage { .. } => true,
             BuiltinAction::WorkflowLaunch { input, .. } => !input.is_empty(),
+            BuiltinAction::Clear => false,
         }
     }
 }
@@ -2437,6 +2451,28 @@ mod tests {
         assert!(matches!(
             resolve_builtin("flush", "some extra args"),
             Some(BuiltinAction::FlushMemory)
+        ));
+    }
+    #[test]
+    fn clear_is_advertised_always_on() {
+        let cmds = available_commands(&[], CommandAvailability::default(), &[]);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"clear"),
+            "/clear missing from default catalog; BUILTIN_COMMANDS should advertise it as AlwaysOn"
+        );
+        assert_eq!(BuiltinAction::Clear.command_name(), "clear");
+        assert!(!BuiltinAction::Clear.args_provided());
+    }
+    #[test]
+    fn clear_resolves_to_builtin_action() {
+        assert!(matches!(
+            resolve_builtin("clear", ""),
+            Some(BuiltinAction::Clear)
+        ));
+        assert!(matches!(
+            resolve_builtin("clear", "trailing args ignored"),
+            Some(BuiltinAction::Clear)
         ));
     }
     #[test]

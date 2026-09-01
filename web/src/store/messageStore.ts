@@ -360,6 +360,20 @@ class MessageStore {
     }
     return state
   }
+  /**
+   * Clear the visible messages and revert state for a session.
+   * Used by the `/clear` slash command from the backend.
+   * Does not touch the session id, streaming state, or other sessions.
+   * For removing the session entirely, use the existing `clearSession`.
+   */
+  clearMessages(sessionId: string): void {
+    const state = this.sessions.get(sessionId)
+    if (!state) return
+    state.messages = []
+    state.revertState = null
+    this.notify([sessionId])
+  }
+
 
   private evictOldSessions() {
     if (this.sessions.size < MAX_CACHED_SESSIONS) return

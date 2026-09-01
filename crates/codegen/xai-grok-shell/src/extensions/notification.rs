@@ -226,6 +226,22 @@ pub struct PromptUsageModel {
 /// One model call's token usage: the four Messages API `message.usage` fields
 /// (`input_tokens` is the uncached prompt portion) plus `reasoning_tokens`.
 /// Distinct from [`PromptUsageModel`], which sums the whole prompt.
+///
+/// # Wire format (snake_case, NOT camelCase)
+///
+/// This struct intentionally does NOT have `#[serde(rename_all = "camelCase")]`
+/// like `PromptUsageModel` does. Two reasons:
+/// 1. The TUI pager (`crates/codegen/xai-grok-pager/src/headless/reducer/messages/usage.rs`)
+///    is an in-tree consumer of the wire JSON and reads snake_case fields directly.
+///    Reading camelCase here would silently break the TUI's per-response cost/tokens
+///    rendering. Changing this is a coordinated wire-format change.
+/// 2. The Rust field names differ from `PromptUsageModel` (this has `cache_read_input_tokens`,
+///    `cache_creation_input_tokens`; PromptUsageModel has `cached_read_tokens`,
+///    `cache_creation_tokens`) so even with `rename_all` the field names would not unify.
+///
+/// **Maintenance rule**: when adding a field here, mirror the snake_case wire shape
+/// and update the matching frontend reader in `web/src/api/acpBridge.ts::response_completed`
+/// to read snake_case. Do NOT add `rename_all` without coordinating a TUI migration.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResponseUsage {
     #[serde(default)]
@@ -1119,6 +1135,15 @@ pub enum SessionUpdate {
     /// Catch-all for unrecognized session update types.
     /// Allows forward/backward compatibility when variants are added or removed.
     /// All fields from the unrecognized variant are discarded during deserialization.
+
+    /// Frontend-only signal: clear the visible chat messages for this session.
+    ///
+    /// Sent in response to the `/clear` slash command. Backend persists the
+    /// session normally (history is not deleted); the notification just tells
+    /// the web UI to wipe its in-memory `messageStore` view. The pager TUI
+    /// ignores this update and uses its own `SlashCommand::Clear` impl to
+    /// clear the scrollback.
+    ClearChat,
     #[serde(other)]
     Unknown,
 }
@@ -1188,6 +1213,7 @@ pub enum RetryState {
         #[serde(default)]
         is_rate_limited: bool,
     },
+
     /// A non-retryable error occurred (e.g., auth error, invalid params)
     Failed {
         /// Category of the error (e.g., "auth", "invalid_params", "server")

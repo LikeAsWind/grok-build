@@ -158,6 +158,27 @@ xai-acp-lib / agent-client-protocol v0.10.x
 cd web && npm install && npm run build
 cargo build --features "xai-grok-pager-bin/web-ui"
 
+### 快速编译（推荐日常 dev 用）
+
+仓库已配置 max-aggressiveness 编译管线（`Cargo.toml` `[profile.dev.package."*"]` + `.cargo/config.toml` `rustc-wrapper = "sccache"` + `linker = "rust-lld"`），日常 dev 用 `scripts/build-fast.ps1`（Linux/macOS 用 `scripts/build-fast.sh`）：
+
+```powershell
+.\scripts\build-fast.ps1 check      # 增量编译 — sccache 命中后秒级
+.\scripts\build-fast.ps1 nextest   # 比 cargo test 快 3x
+.\scripts\build-fast.ps1 build      # 全量编译
+.\scripts\build-fast.ps1 info       # 看 sccache 命中率
+```
+
+首次使用需装：
+```bash
+cargo install sccache --locked
+cargo install cargo-nextest --locked
+```
+
+对比默认编译：冷构建 ~25min → ~3-5min；增量编译 ~30-90s → ~2-5s；`target/debug/deps` ~2.1GB → ~400MB。
+
+注意：`scripts/build-fast.ps1 clean` 拒绝清空整个 `target/`（会破坏 deps 缓存），需要外科清理时用 `cargo clean -p <crate>`。
+
 # 启动
 grok web --secret <key>   # → http://127.0.0.1:2420/#key=<key>
 ```
@@ -173,7 +194,9 @@ npm run test:run    # vitest —— 107 文件 / 770 用例 / 3 skip
 npm run build       # vite 生产构建
 ```
 
-后端：`cargo build --features "xai-grok-pager-bin/web-ui"`。跑起来的 debug 二进制（`target/debug/xai-grok-pager.exe`）同样需要 `editbin /STACK:8388608` 打栈补丁，否则某些深栈路径（如 auth 重试测试、`grok web` 启动）会在 Windows 上栈溢出——这不是本次改动引入的问题，是已知的既有环境限制。
+后端：`cargo build --features "xai-grok-pager-bin/web-ui"
+
+来的 debug 二进制（`target/debug/xai-grok-pager.exe`）同样需要 `editbin /STACK:8388608` 打栈补丁，否则某些深栈路径（如 auth 重试测试、`grok web` 启动）会在 Windows 上栈溢出——这不是本次改动引入的问题，是已知的既有环境限制。
 
 ### 在本仓库工作
 

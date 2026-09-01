@@ -396,6 +396,30 @@ opt-level = 0
 lto = false
 incremental = true
 
+# 依赖编译：跳过 DWARF 生成 + 更激进的 codegen units。dev workspace 成员仍保留
+# `line-tables-only` 调试符号用于 panic backtrace。
+# 这是减少 `target/debug/deps` 体积 + 加速增量编译的最大单点改动。
+[profile.dev.package."*"]
+debug = false
+incremental = true
+codegen-units = 256
+opt-level = 0
+
+# 调试 profile：显式 opt-in 全量 DWARF + workspace 成员源码级断点。
+# 用法：cargo build --profile debugging
+# 平时 dev profile 走 deps-without-debug。
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+# Fast build profile used by scripts/build-fast.ps1 with sccache.
+# sccache refuses to wrap rustc when incremental compilation is enabled
+# (the incremental metadata breaks cache reuse across runs), so we disable
+# it here and inherit all other dev-profile optimizations.
+[profile.dev-fast]
+inherits = "dev"
+incremental = false
+
 [profile.bench]
 debug = true
 

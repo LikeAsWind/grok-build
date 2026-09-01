@@ -962,6 +962,12 @@ impl SessionActor {
                     .await;
                 ok_end_turn(0, None)
             }
+            BuiltinAction::Clear => {
+                // Frontend-only: tell the web UI to wipe its messageStore.
+                // Pager TUI ignores this notification and uses its own SlashCommand::Clear.
+                self.send_xai_notification(XaiSessionUpdate::ClearChat).await;
+                ok_end_turn(0, None)
+            }
         }
     }
 

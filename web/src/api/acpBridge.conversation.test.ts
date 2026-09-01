@@ -1312,4 +1312,21 @@ describe('Web 对话交互全量可用性', () => {
     expect(sessionUpdated).toHaveLength(1)
     expect((sessionUpdated[0] as { title: string }).title).toBe('新标题')
   })
+  it('clear_chat session update wipes messageStore for that session only', async () => {
+    const otherSid = 'conv-other-session'
+    // SID gets one user message + agent reply.
+    update({ sessionUpdate: 'user_message_chunk', content: textChunk('hi') })
+    update({ sessionUpdate: 'agent_message_chunk', content: textChunk('hello there') })
+    // otherSid gets its own pair so it has at least one visible message.
+    update({ sessionUpdate: 'user_message_chunk', content: textChunk('yo') }, otherSid)
+    update({ sessionUpdate: 'agent_message_chunk', content: textChunk('sup') }, otherSid)
+    expect(messageStore.getVisibleMessages(SID).length).toBeGreaterThan(0)
+    expect(messageStore.getVisibleMessages(otherSid).length).toBeGreaterThan(0)
+    update({ sessionUpdate: 'clear_chat' })
+    // Wait for the dynamic import in the handler to resolve.
+    await new Promise(r => setTimeout(r, 0))
+    expect(messageStore.getVisibleMessages(SID)).toEqual([])
+    // Other session is untouched.
+    expect(messageStore.getVisibleMessages(otherSid).length).toBeGreaterThan(0)
+  })
 })

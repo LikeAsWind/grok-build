@@ -13,7 +13,13 @@
 //! # Test read-only profile
 //! cargo run -p xai-grok-sandbox --example sandbox_smoke_test -- read-only
 //! ```
+//!
+//! Windows note: kernel enforcement (Landlock/Seatbelt) is unix-only, so the
+//! smoke test reports platform support as NO and skips the enforcement
+//! apply. The test helpers still exercise read/write paths to surface any
+//! obvious regressions on Windows.
 
+use std::io;
 use std::path::Path;
 use xai_grok_sandbox::{ProfileName, SandboxManager};
 
@@ -28,15 +34,22 @@ fn main() {
         std::process::exit(1);
     });
 
-    // Check platform support before applying
-    let support = SandboxManager::support_info();
+    // Platform support: only meaningful on unix (kernel sandbox exists there).
+    #[cfg(unix)]
+    let (is_supported, details) = {
+        let support = SandboxManager::support_info();
+        (support.is_supported, support.details)
+    };
+    #[cfg(not(unix))]
+    let (is_supported, details) = (false, "kernel sandbox unavailable on this platform".to_string());
+
     println!(
         "Platform support: {}",
-        if support.is_supported { "YES" } else { "NO" }
+        if is_supported { "YES" } else { "NO" }
     );
-    println!("Details: {}", support.details);
+    println!("Details: {details}");
 
-    if !support.is_supported {
+    if !is_supported {
         println!("\n⚠️  Sandbox not supported on this platform.");
         println!("   On macOS: Seatbelt should be available (10.5+)");
         println!("   On Linux: Landlock requires kernel ≥ 5.13");
@@ -100,7 +113,7 @@ fn main() {
         let _ = std::fs::remove_file(&outside);
     }
 
-    // Test 7: Read ~/.ssh (a custom profile's `deny` list could block this)
+    // Test 7: Read ~/.ssh (a custom profile's deny list could block this)
     if let Some(home) = dirs::home_dir() {
         let ssh = home.join(".ssh");
         if ssh.exists() {
@@ -128,10 +141,7 @@ fn test_read(label: &str, path: &Path) {
     if path.is_file() {
         match std::fs::read(path) {
             Ok(_) => println!("  ✅ {label}: OK (read)"),
-            Err(e)
-                if e.raw_os_error() == Some(libc::EACCES)
-                    || e.raw_os_error() == Some(libc::EPERM) =>
-            {
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
                 println!("  🔒 {label}: BLOCKED ({e})");
             }
             Err(e) => println!("  ❌ {label}: ERROR ({e})"),
@@ -144,7 +154,7 @@ fn test_read(label: &str, path: &Path) {
             println!("  ✅ {label}: OK ({count} entries)");
         }
         Err(e) => {
-            if e.raw_os_error() == Some(libc::EACCES) || e.raw_os_error() == Some(libc::EPERM) {
+            if e.kind() == io::ErrorKind::PermissionDenied {
                 println!("  🔒 {label}: BLOCKED ({e})");
             } else {
                 println!("  ❌ {label}: ERROR ({e})");
@@ -159,7 +169,7 @@ fn test_write(label: &str, path: &Path) {
             println!("  ✅ {label}: OK (written)");
         }
         Err(e) => {
-            if e.raw_os_error() == Some(libc::EACCES) || e.raw_os_error() == Some(libc::EPERM) {
+            if e.kind() == io::ErrorKind::PermissionDenied {
                 println!("  🔒 {label}: BLOCKED ({e})");
             } else {
                 println!("  ❌ {label}: ERROR ({e})");

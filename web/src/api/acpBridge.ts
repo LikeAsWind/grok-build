@@ -336,11 +336,19 @@ export function getCurrentAcpModelId(): string {
   return _modelState?.currentModelId ?? ''
 }
 
+/** 返回 session 当前 reasoning_effort：`undefined` = 未推送过；`null` = 显式清空；string = 当前值。*/
+export function getCurrentReasoningEffort(sessionId: string): string | null | undefined {
+  return sessionReasoningEfforts.get(sessionId)
+}
+
 // ── 事件注入辅助 ─────────────────────────────────────────────────
 
 const sessionDirs = new Map<string, string>()
 /** 每个会话当前生效的模型（session/new 响应初始化，set_model 后更新） */
 const sessionModelIds = new Map<string, string>()
+// 模型级 reasoning_effort 状态（model_changed 推送来的，“string | null” 二值：
+// string = 当前 effort；缺失/null = 清空。跟 sessionModelIds 一样跟着 session 存活。
+const sessionReasoningEfforts = new Map<string, string | null>()
 
 function emit(type: string, properties: Record<string, unknown>, sessionId?: string) {
   const directory = (sessionId && sessionDirs.get(sessionId)) || _serverCwd
@@ -1444,6 +1452,9 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       const usage = update.usage as Record<string, unknown> | undefined
       if (usage) {
         const assistantId = ensureAssistant(sessionId, turn)
+        // 字段是 snake_case（Rust ResponseUsage 没有 rename_all；TUI 也读 snake_case
+        // 不能轻易改 wire 格式——见后端 notification.rs::ResponseUsage doc）。
+        // 与上面 turn_completed 用的 PromptUsageModel camelCase 不同。
         const costTicks = typeof usage.cost_usd_ticks === 'number' ? usage.cost_usd_ticks : null
         emitPartUpdated(sessionId, assistantId, {
           id: `${assistantId}:step-finish:${Date.now()}`,
@@ -1653,6 +1664,20 @@ export function handleAcpSessionUpdate(params: Record<string, unknown>) {
       const id = ensureAssistant(sessionId, turn)
       breakActiveParts(turn)
       emitPartUpdated(sessionId, id, { id: `${id}:compaction`, type: 'compaction', status: 'cancelled' })
+      break
+    }
+    case 'clear_chat': {
+      // 后端 /clear 斜杠命令推送（XaiSessionUpdate::ClearChat variant）。
+      // 同步清空 messageStore 里这个 session 的可见消息；session id 保留，
+      // 持久化历史 backend 自己管（见后端 notification.rs::SessionUpdate::ClearChat 注释）。
+      void import('../store/messageStore').then(({ messageStore }) => {
+        messageStore.clearMessages(sessionId)
+      })
+      break
+    }
+    case 'config_option_update': {
+      // ACP 0.11.4 standard variant: dynamic plan/permission options.
+      // backend does not emit yet; placeholder for future routing.
       break
     }
     default:

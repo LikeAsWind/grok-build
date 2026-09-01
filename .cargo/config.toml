@@ -1,3 +1,15 @@
+# ---------------------------------------------------------------------------
+# Build perf: cache rustc invocations (first run writes, then hits -> seconds)
+# Install: cargo install sccache --locked
+# Set env:
+#   $env:RUSTC_WRAPPER = "C:\Users\yangzhitong\.cargo\bin\sccache.exe"
+#   $env:SCCACHE_CLIENT_SIDE = "1"          # sccache 0.17+ client-side mode
+#   $env:SCCACHE_DIR = "D:\sccache"        # SSD, separate from target/
+#   $env:CARGO_INCREMENTAL = "1"
+# Verify: run cargo build, then sccache -s shows hit rate
+# ---------------------------------------------------------------------------
+[build]
+rustc-wrapper = "sccache"
 # link-arg
 # https://pyo3.rs/v0.17.1/building_and_distribution.html#macos
 
@@ -32,7 +44,8 @@ rustflags = [
 ]
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "force-unwind-tables=yes"]
+# mold 比 lld 还快 30%（Linux only；Windows 不支持 PE/COFF）
+rustflags = ["-C", "force-unwind-tables=yes", "-C", "link-arg=-fuse-ld=mold"]
 
 [target.aarch64-unknown-linux-gnu]
 rustflags = ["-C", "target-cpu=neoverse-v2", "-C", "force-unwind-tables=yes"]
@@ -59,6 +72,8 @@ rustflags = [
 ]
 
 [target.x86_64-pc-windows-msvc]
+# rust-lld 比 MSVC link.exe 快 5-10x（随 Rust toolchain 自带，不用额外装）
+linker = "rust-lld"
 rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-msvc]
