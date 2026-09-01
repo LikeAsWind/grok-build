@@ -1253,6 +1253,209 @@ pub struct WorktreeConfigSection {
     #[serde(default)]
     pub auto_gc: crate::util::config::WorktreeAutoGcSettings,
 }
+
+/// TAPD workbench pipeline priority. Used to order queue dispatch and decide
+/// which tasks should always run through the adjudicate stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Priority {
+    Low,
+    Medium,
+    High,
+    Urgent,
+}
+
+/// Adjudicate stage mode for `[workbench.adjudicate]`. v1 implements Recorder only;
+/// Gatekeeper and AlwaysSkip are reserved enum variants per spec §17 D15.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdjudicateMode {
+    #[default]
+    Recorder,
+    Gatekeeper,
+    AlwaysSkip,
+}
+
+/// `[workbench]` section from config.toml.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchConfig {
+    pub enabled: bool,
+    pub keep_stage_files_after_done: bool,
+    pub auto_delete_merged_branches: bool,
+    pub worktree_gc_delay_secs: u64,
+    pub concurrency: WorkbenchConcurrencyConfig,
+    pub models: WorkbenchModelsConfig,
+    pub adjudicate: WorkbenchAdjudicateConfig,
+    pub notify: WorkbenchNotifyConfig,
+}
+
+impl Default for WorkbenchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            keep_stage_files_after_done: false,
+            auto_delete_merged_branches: false,
+            worktree_gc_delay_secs: 300,
+            concurrency: WorkbenchConcurrencyConfig::default(),
+            models: WorkbenchModelsConfig::default(),
+            adjudicate: WorkbenchAdjudicateConfig::default(),
+            notify: WorkbenchNotifyConfig::default(),
+        }
+    }
+}
+
+/// `[workbench.concurrency]` — dispatcher slot + queue thresholds.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchConcurrencyConfig {
+    pub global_max_active: usize,
+    pub worktree_pool_max: usize,
+    pub queue_alert_threshold: usize,
+    pub queue_stuck_alert_minutes: u64,
+}
+
+impl Default for WorkbenchConcurrencyConfig {
+    fn default() -> Self {
+        Self {
+            global_max_active: 5,
+            worktree_pool_max: 10,
+            queue_alert_threshold: 30,
+            queue_stuck_alert_minutes: 60,
+        }
+    }
+}
+
+/// `[workbench.models]` — per-stage model IDs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchModelsConfig {
+    pub planner_model: String,
+    pub adjudicator_model: String,
+    pub coder_model: String,
+    pub reviewer_model: String,
+}
+
+impl Default for WorkbenchModelsConfig {
+    fn default() -> Self {
+        Self {
+            planner_model: "opus-4.1".into(),
+            adjudicator_model: "sonnet-4.5".into(),
+            coder_model: "opus-4.1".into(),
+            reviewer_model: "sonnet-4.5".into(),
+        }
+    }
+}
+
+/// `[workbench.adjudicate]` — default mode + escalation rules.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchAdjudicateConfig {
+    pub default_mode: AdjudicateMode,
+    pub escalate_priority: Vec<Priority>,
+    pub escalate_min_acs: usize,
+}
+
+impl Default for WorkbenchAdjudicateConfig {
+    fn default() -> Self {
+        Self {
+            default_mode: AdjudicateMode::Recorder,
+            escalate_priority: vec![Priority::Urgent, Priority::High],
+            escalate_min_acs: 5,
+        }
+    }
+}
+
+/// `[workbench.notify]` — TAPD comment + Slack/Feishu webhook URLs.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchNotifyConfig {
+    pub tapd_comment: bool,
+    pub slack_webhook: String,
+    pub feishu_webhook: String,
+}
+
+/// `[gitlab]` section from config.toml. The token is read from an env var
+/// named by `token_env` — never stored in config (per spec §17 D14).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GitlabConfig {
+    pub url: String,
+    pub token_env: String,
+    pub default_assignees_self: bool,
+}
+
+impl Default for GitlabConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            token_env: "GITLAB_TOKEN".into(),
+            default_assignees_self: false,
+        }
+    }
+}
+
+impl GitlabConfig {
+    /// True if the workbench has a GitLab URL configured AND either no
+    /// candidate URL is supplied (general check) or the candidate matches
+    /// the configured URL (per-MR check).
+    pub fn is_configured_for_url(&self, candidate: &str) -> bool {
+        !self.url.is_empty() && (candidate.is_empty() || candidate == self.url)
+    }
+}
+
+#[cfg(test)]
+mod workbench_config_tests {
+    use super::*;
+
+    #[test]
+    fn workbench_config_defaults_when_absent() {
+        let toml = "";
+        let cfg: WorkbenchConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.enabled);
+        assert!(!cfg.keep_stage_files_after_done);
+        assert_eq!(cfg.worktree_gc_delay_secs, 300);
+    }
+
+    #[test]
+    fn workbench_concurrency_defaults_when_absent() {
+        let toml = "";
+        let cfg: WorkbenchConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.concurrency.global_max_active, 5);
+        assert_eq!(cfg.concurrency.worktree_pool_max, 10);
+        assert_eq!(cfg.concurrency.queue_alert_threshold, 30);
+        assert_eq!(cfg.concurrency.queue_stuck_alert_minutes, 60);
+    }
+
+    #[test]
+    fn workbench_models_default_to_known_ids() {
+        let cfg = WorkbenchConfig::default();
+        assert_eq!(cfg.models.planner_model, "opus-4.1");
+        assert_eq!(cfg.models.adjudicator_model, "sonnet-4.5");
+        assert_eq!(cfg.models.coder_model, "opus-4.1");
+        assert_eq!(cfg.models.reviewer_model, "sonnet-4.5");
+    }
+
+    #[test]
+    fn workbench_adjudicate_default_mode_is_recorder() {
+        let cfg = WorkbenchConfig::default();
+        assert_eq!(cfg.adjudicate.default_mode, AdjudicateMode::Recorder);
+        assert!(cfg.adjudicate.escalate_priority.contains(&Priority::Urgent));
+        assert!(cfg.adjudicate.escalate_priority.contains(&Priority::High));
+        assert_eq!(cfg.adjudicate.escalate_min_acs, 5);
+    }
+
+    #[test]
+    fn gitlab_config_requires_token_env_var() {
+        let cfg = GitlabConfig {
+            url: "https://gitlab.example.com".into(),
+            token_env: "GITLAB_TOKEN".into(),
+            default_assignees_self: false,
+        };
+        assert_eq!(cfg.token_env, "GITLAB_TOKEN");
+        assert!(cfg.is_configured_for_url(""));
+    }
+}
 /// `[sandbox]` section from config.toml.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
