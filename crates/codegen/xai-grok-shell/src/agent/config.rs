@@ -1,4 +1,4 @@
-use crate::agent::auth_method::ModelByok;
+﻿use crate::agent::auth_method::ModelByok;
 use crate::agent::model_providers::{
     ModelProviderConfig, auth_config_issues, model_provider_auth_name, parse_model_providers,
 };
@@ -1195,7 +1195,7 @@ impl TapdConfig {
 
 /// One `[tapd.projects.<key>]` entry: binds a working directory to a TAPD
 /// workspace, with optional entity-type and module filtering.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TapdProjectConfig {
     pub directory: String,
@@ -1218,7 +1218,22 @@ pub struct TapdProjectConfig {
     pub poll_interval_override_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    // Workbench pipeline (spec §10).
+    #[serde(default = "default_target_branch")]
+    pub target_branch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mr_reviewers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mr_assignees: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjudicate_mode: Option<AdjudicateMode>,
 }
+
+fn default_target_branch() -> String { "main".into() }
 
 fn default_order_desc() -> bool {
     true
@@ -1231,6 +1246,27 @@ fn is_order_desc(b: &bool) -> bool {
 impl TapdProjectConfig {
     pub fn is_enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
+    }
+}
+
+impl Default for TapdProjectConfig {
+    fn default() -> Self {
+        Self {
+            directory: String::new(),
+            workspace_id: String::new(),
+            entity_types: Vec::new(),
+            module_filter: Vec::new(),
+            status: None,
+            order_desc: true,
+            poll_interval_override_secs: None,
+            enabled: None,
+            target_branch: "main".into(),
+            test_command: None,
+            test_timeout_secs: None,
+            mr_reviewers: Vec::new(),
+            mr_assignees: Vec::new(),
+            adjudicate_mode: None,
+        }
     }
 }
 
@@ -1454,6 +1490,37 @@ mod workbench_config_tests {
         };
         assert_eq!(cfg.token_env, "GITLAB_TOKEN");
         assert!(cfg.is_configured_for_url(""));
+    }
+
+    #[test]
+    fn tapd_project_config_carries_workbench_fields() {
+        let toml = r#"
+        directory = "/repo"
+        workspace_id = "12345"
+        target_branch = "develop"
+        test_command = "cargo nextest run --workspace"
+        test_timeout_secs = 1800
+        mr_reviewers = ["alice", "bob"]
+        mr_assignees = []
+        adjudicate_mode = "recorder"
+        "#;
+        let cfg: TapdProjectConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.target_branch, "develop");
+        assert_eq!(cfg.test_command.as_deref(), Some("cargo nextest run --workspace"));
+        assert_eq!(cfg.test_timeout_secs, Some(1800));
+        assert_eq!(cfg.mr_reviewers, vec!["alice", "bob"]);
+        assert_eq!(cfg.adjudicate_mode, Some(AdjudicateMode::Recorder));
+    }
+
+    #[test]
+    fn tapd_project_config_workbench_fields_default_to_none_or_empty() {
+        let cfg = TapdProjectConfig::default();
+        assert_eq!(cfg.target_branch, "main");
+        assert!(cfg.test_command.is_none());
+        assert!(cfg.test_timeout_secs.is_none());
+        assert!(cfg.mr_reviewers.is_empty());
+        assert!(cfg.mr_assignees.is_empty());
+        assert!(cfg.adjudicate_mode.is_none());
     }
 }
 /// `[sandbox]` section from config.toml.
