@@ -479,3 +479,81 @@ mod tests {
         assert!(doc.has_open_questions());
     }
 }
+
+/// Normalize a TaskState loaded from disk after a backend restart.
+/// `Running` becomes `Pending` so the dispatcher re-claims the task and
+/// restarts the current stage. Terminal states are kept as-is.
+pub fn resume_state(s: TaskState) -> TaskState {
+    match s {
+        TaskState::Running { .. } => TaskState::Pending,
+        other => other,
+    }
+}
+
+/// Load the persisted TaskState from `<worktree>/.workbench/state.json`.
+/// Returns Ok(None) if the file does not exist.
+pub async fn load_state(worktree: &std::path::Path) -> anyhow::Result<Option<TaskState>> {
+    let p = worktree.join(".workbench").join("state.json");
+    if !p.exists() {
+        return Ok(None);
+    }
+    let s = tokio::fs::read_to_string(&p).await?;
+    let parsed: TaskState = serde_json::from_str(&s)?;
+    Ok(Some(resume_state(parsed)))
+}
+
+/// Persist the TaskState to `<worktree>/.workbench/state.json`.
+/// Pretty-printed for human inspection during debug.
+pub async fn save_state(worktree: &std::path::Path, state: &TaskState) -> anyhow::Result<()> {
+    let dir = worktree.join(".workbench");
+    tokio::fs::create_dir_all(&dir).await?;
+    let p = dir.join("state.json");
+    let s = serde_json::to_string_pretty(state)?;
+    tokio::fs::write(&p, s).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn save_then_load_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        let s = TaskState::Running { stage: Stage::Develop, attempt: 1, started_at: 1700000000 };
+        save_state(worktree, &s).await.unwrap();
+        let loaded = load_state(worktree).await.unwrap().unwrap();
+        match loaded {
+                TaskState::Pending => {} // resume normalized Running -> Pending
+                other => panic!("expected resume to normalize Running, got {:?}", other),
+            }
+    }
+
+    #[tokio::test]
+    async fn resume_preserves_terminal_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        let s = TaskState::Done { mr_url: "https://x".into(), finished_at: 1 };
+        save_state(worktree, &s).await.unwrap();
+        let loaded = load_state(worktree).await.unwrap().unwrap();
+        assert!(matches!(loaded, TaskState::Done { .. }));
+
+        let s = TaskState::BlockedForHuman { stage: Stage::Adjudicate, reason: "x".into(), payload: serde_json::json!({}) };
+        save_state(worktree, &s).await.unwrap();
+        let loaded = load_state(worktree).await.unwrap().unwrap();
+        assert!(matches!(loaded, TaskState::BlockedForHuman { .. }));
+
+        let s = TaskState::Dead { reason: "x".into() };
+        save_state(worktree, &s).await.unwrap();
+        let loaded = load_state(worktree).await.unwrap().unwrap();
+        assert!(matches!(loaded, TaskState::Dead { .. }));
+    }
+
+    #[tokio::test]
+    async fn load_returns_none_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let loaded = load_state(dir.path()).await.unwrap();
+        assert!(loaded.is_none());
+    }
+}
