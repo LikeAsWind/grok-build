@@ -4,6 +4,8 @@
 //! Auth follows spec §17 D14 — the GitLab token is read from an env var
 //! named by `GitlabConfig::token_env`, never stored in `config.toml`.
 
+use std::path::Path;
+
 use crate::agent::config::GitlabConfig;
 
 /// Response wrapper for `POST /projects/:id/merge_requests`. We capture the
@@ -23,6 +25,7 @@ impl GitlabCreateMrResponse {
             .and_then(|v| v.get("web_url").and_then(|u| u.as_str().map(|s| s.to_string())))
     }
 }
+
 #[derive(Debug)]
 pub struct GitlabClient {
     cfg: GitlabConfig,
@@ -84,6 +87,130 @@ impl GitlabClient {
     }
 }
 
+// Reviewer resolution + CODEOWNERS parser. Spec §11.1 — priority:
+//   1. [tapd.projects.<key>].mr_reviewers (config)
+//   2. TAPD task.owner
+//   3. .gitlab/CODEOWNERS (based on files changed)
+//   4. Empty fallback (UI surfaces the gap)
+
+/// Resolve reviewers per spec §11.1. Order: config reviewers → TAPD owner
+/// (if config empty) → CODEOWNERS matches (added, deduped).
+pub fn resolve_reviewers(
+    config_reviewers: &[String],
+    tapd_owner: Option<&str>,
+    codeowners: &[String],
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if !config_reviewers.is_empty() {
+        out.extend(config_reviewers.iter().cloned());
+    } else if let Some(o) = tapd_owner {
+        out.push(o.to_string());
+    }
+    for c in codeowners {
+        if !out.contains(c) {
+            out.push(c.clone());
+        }
+    }
+    if out.is_empty() {
+        if let Some(o) = tapd_owner {
+            out.push(o.to_string());
+        }
+    }
+    out
+}
+
+/// Resolve assignees per spec §11.1. Config takes precedence; otherwise
+/// TAPD owner. Empty if neither is configured.
+pub fn resolve_assignees(
+    config_assignees: &[String],
+    tapd_owner: Option<&str>,
+) -> Vec<String> {
+    if !config_assignees.is_empty() {
+        config_assignees.to_vec()
+    } else if let Some(o) = tapd_owner {
+        vec![o.to_string()]
+    } else {
+        vec![]
+    }
+}
+
+/// Minimal CODEOWNERS matcher: supports `*`, trailing `/`, and `*` wildcards.
+/// Returns the union of `@user` handles whose patterns match at least one
+/// of `changed_files`. Files are relative paths within the worktree.
+pub fn resolve_codeowners(worktree: &Path, changed_files: &[String]) -> Vec<String> {
+    let co = worktree.join(".gitlab").join("CODEOWNERS");
+    if !co.exists() {
+        return vec![];
+    }
+    let raw = match std::fs::read_to_string(&co) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (pattern, owners) = match line.split_once(' ') {
+            Some((p, o)) => (p, o),
+            None => continue,
+        };
+        if changed_files
+            .iter()
+            .any(|f| matches_pattern(pattern, f))
+        {
+            for o in owners.split_whitespace() {
+                if let Some(handle) = o.strip_prefix('@') {
+                    if !out.contains(&handle.to_string()) {
+                        out.push(handle.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn matches_pattern(pattern: &str, file: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(raw_dir) = pattern.strip_suffix("/") {
+        // CODEOWNERS dir patterns may be "src/" (relative) or "/src/" (repo-anchored).
+        // Match either, with or without the leading "./".
+        let dir = raw_dir.trim_start_matches("/");
+        return file.starts_with(dir)
+            || file.starts_with(&format!("./{dir}"));
+    }
+    if pattern.contains("*") {
+        let parts: Vec<&str> = pattern.split("*").collect();
+        if parts.is_empty() {
+            return true;
+        }
+        let mut idx = 0usize;
+        for (i, part) in parts.iter().enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+            if i == 0 {
+                if !file[idx..].starts_with(part) {
+                    return false;
+                }
+                idx += part.len();
+            } else if i == parts.len() - 1 {
+                return file[idx..].ends_with(part);
+            } else if let Some(p) = file[idx..].find(part) {
+                idx += p + part.len();
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+    file == pattern || file.ends_with(&format!("/{pattern}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,4 +258,78 @@ mod tests {
         };
         assert!(resp.mr_url().is_none());
     }
+
+    #[test]
+    fn resolver_uses_config_first() {
+        let cfg = vec!["alice".to_string(), "bob".to_string()];
+        let resolved = resolve_reviewers(&cfg, Some("carol"), &[]);
+        assert_eq!(resolved, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn resolver_falls_back_to_owner_when_config_empty() {
+        let resolved = resolve_reviewers(&[], Some("carol"), &[]);
+        assert_eq!(resolved, vec!["carol"]);
+    }
+
+    #[test]
+    fn resolver_appends_codeowners_deduped() {
+        let resolved = resolve_reviewers(&["alice".into()], None, &["bob".into(), "alice".into()]);
+        assert_eq!(resolved, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn resolver_empty_inputs_yields_empty() {
+        let resolved = resolve_reviewers(&[], None, &[]);
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn assignees_uses_config_first() {
+        let a = resolve_assignees(&["x".into()], Some("y"));
+        assert_eq!(a, vec!["x"]);
+    }
+
+    #[test]
+    fn assignees_falls_back_to_owner() {
+        let a = resolve_assignees(&[], Some("y"));
+        assert_eq!(a, vec!["y"]);
+    }
+
+    #[test]
+    fn codeowners_parses_simple_patterns() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".gitlab")).unwrap();
+        std::fs::write(
+            tmp.path().join(".gitlab/CODEOWNERS"),
+            "* @alice\n/src/ @bob @carol\n",
+        )
+        .unwrap();
+        let resolved = resolve_codeowners(tmp.path(), &["src/foo.rs".into()]);
+        assert!(resolved.contains(&"alice".to_string()));
+        assert!(resolved.contains(&"bob".to_string()));
+        assert!(resolved.contains(&"carol".to_string()));
+    }
+
+    #[test]
+    fn codeowners_missing_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = resolve_codeowners(tmp.path(), &["src/foo.rs".into()]);
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn codeowners_skips_comments_and_blanks() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".gitlab")).unwrap();
+        std::fs::write(
+            tmp.path().join(".gitlab/CODEOWNERS"),
+            "# top comment\n\n* @alice\n   # indented comment\n",
+        )
+        .unwrap();
+        let resolved = resolve_codeowners(tmp.path(), &["anything.rs".into()]);
+        assert_eq!(resolved, vec!["alice".to_string()]);
+    }
 }
+
+
