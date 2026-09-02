@@ -6,7 +6,9 @@
 //! to keep the dependency surface small (matches YAGNI per AGENTS.md).
 
 pub mod adjudicator;
+pub mod coder;
 pub mod planner;
 
 pub use adjudicator::*;
+pub use coder::*;
 pub use planner::*;
