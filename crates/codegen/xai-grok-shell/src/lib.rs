@@ -1,4 +1,4 @@
-#![allow(
+﻿#![allow(
     unused_imports,
     unused_variables,
     unused_mut,
@@ -38,6 +38,7 @@ pub mod remote;
 pub mod sampling;
 pub mod session;
 pub mod tapd;
+pub mod workbench;
 pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_support;
