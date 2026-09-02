@@ -625,6 +625,12 @@ export const KEYED_TABLES: KeyedTableDef[] = [
       arr('module_filter', '模块筛选', '留空 = 不筛选模块'),
       n('poll_interval_override_secs', '同步间隔覆盖（秒）', undefined, '0 或留空 = 使用全局默认间隔'),
       b('enabled', '启用', 'true'),
+      s('target_branch', '目标分支', undefined, 'main'),
+      s('test_command', '测试命令', '留空 = 不验证'),
+      n('test_timeout_secs', '测试超时（秒）'),
+      arr('mr_reviewers', 'MR 评审人'),
+      arr('mr_assignees', 'MR 指派人', '留空 = 使用 TAPD task.owner'),
+      e('adjudicate_mode', '裁断模式覆盖', ['recorder', 'gatekeeper', 'always_skip']),
     ],
   },
 ]
@@ -649,4 +655,5 @@ export function coveredTopLevelSections(): Set<string> {
   covered.add('grok_com_config')
   return covered
 }
+
 
