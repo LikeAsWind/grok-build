@@ -18,5 +18,7 @@
 //!   session event forwarder.
 
 pub mod dispatcher;
+pub mod state_machine;
 pub mod worktree_manager;
+
 
