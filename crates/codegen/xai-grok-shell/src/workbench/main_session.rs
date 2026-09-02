@@ -115,3 +115,56 @@ mod tests {
         assert!(prompt.contains("/tmp/wt"));
     }
 }
+
+/// Parse the adjudicator's verdict from a 1-design.md artifact.
+/// Returns `Err` if the frontmatter is missing, lacks `verdict`, or has an
+/// unknown verdict string. Used by the state machine to route after the
+/// adjudicator stage completes.
+pub fn parse_adjudicator_verdict(md: &str) -> anyhow::Result<crate::workbench::state_machine::AdjudicateVerdict> {
+    use crate::workbench::artifacts::ArtifactEnvelope;
+    let env = ArtifactEnvelope::parse(md)?;
+    let verdict = env
+        .frontmatter
+        .extra
+        .get("verdict")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing `verdict` frontmatter key"))?;
+    match verdict {
+        "proceed" => Ok(crate::workbench::state_machine::AdjudicateVerdict::Proceed),
+        "block_for_human" => Ok(crate::workbench::state_machine::AdjudicateVerdict::BlockForHuman),
+        other => anyhow::bail!("unknown verdict `{other}`"),
+    }
+}
+
+#[cfg(test)]
+mod adjudicator_parse_tests {
+    use super::*;
+    use crate::workbench::state_machine::AdjudicateVerdict;
+
+    #[test]
+    fn parse_proceed_verdict() {
+        let md = "---\nstage: brainstorm\ntask_id: TAPD-1\nattempt: 0\nadjudicated: true\nverdict: proceed\n---\n## Adjudication\n- auto-resolved: X\n";
+        let verdict = parse_adjudicator_verdict(md).unwrap();
+        assert_eq!(verdict, AdjudicateVerdict::Proceed);
+    }
+
+    #[test]
+    fn parse_block_verdict() {
+        let md = "---\nstage: brainstorm\ntask_id: TAPD-1\nattempt: 0\nadjudicated: true\nverdict: block_for_human\n---\n## Adjudication\n- needs_owner_decision: Q1\n";
+        let verdict = parse_adjudicator_verdict(md).unwrap();
+        assert_eq!(verdict, AdjudicateVerdict::BlockForHuman);
+    }
+
+    #[test]
+    fn verdict_parse_fails_when_missing() {
+        let md = "---\nstage: brainstorm\ntask_id: TAPD-1\nattempt: 0\nadjudicated: false\n---\nbody";
+        assert!(parse_adjudicator_verdict(md).is_err());
+    }
+
+    #[test]
+    fn verdict_parse_fails_on_unknown_value() {
+        let md = "---\nstage: brainstorm\ntask_id: TAPD-1\nattempt: 0\nverdict: maybe\n---\nbody";
+        let err = parse_adjudicator_verdict(md).unwrap_err();
+        assert!(err.to_string().contains("maybe"));
+    }
+}
