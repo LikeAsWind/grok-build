@@ -1,4 +1,4 @@
-﻿//! WorkbenchDispatcher + priority queue + slot accounting.
+//! WorkbenchDispatcher + priority queue + slot accounting.
 //!
 //! The dispatcher is the front door for new TAPD workbench tasks. It pulls
 //! pending tasks from the store, orders them by priority, and spawns main
@@ -10,6 +10,8 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use crate::agent::config::Priority;
 
@@ -126,7 +128,7 @@ pub enum DispatchEvent {
 }
 
 /// Snapshot of dispatcher pool utilization for health checks and UI.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HealthSnapshot {
     pub active: usize,
     pub queued: usize,
@@ -333,3 +335,4 @@ mod tests {
 
 
 }
+

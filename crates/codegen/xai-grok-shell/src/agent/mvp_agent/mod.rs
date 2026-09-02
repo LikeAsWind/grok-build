@@ -1,4 +1,4 @@
-﻿#![cfg_attr(rustfmt, rustfmt::skip)]
+#![cfg_attr(rustfmt, rustfmt::skip)]
 #![allow(unused_imports)]
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -993,7 +993,7 @@ pub struct MvpAgent {
     tapd_sync_manager: RefCell<Option<Arc<crate::tapd::sync::TapdSyncManager>>>,
     /// Workbench dispatcher. None until spawn_workbench_dispatcher runs
     /// (called after spawn_tapd_sync_manager).
-    workbench_dispatcher: RefCell<Option<Arc<crate::workbench::dispatcher::WorkbenchDispatcher>>>,
+    pub(crate) workbench_dispatcher: RefCell<Option<Arc<crate::workbench::dispatcher::WorkbenchDispatcher>>>,
     /// Test-only spy recording every session id whose cloud replica was
     /// finalized via `finalize_session_replica`. Lets the no-evict tests assert
     /// that `finalize()` does NOT fire on a mere client disconnect (only on a
@@ -2467,3 +2467,4 @@ mod replay_tests;
 mod tests;
 #[cfg(test)]
 mod prompt_response_meta_tests;
+

@@ -18,6 +18,7 @@ use super::{ExtResult, parse_params, to_ext_response};
 use crate::agent::MvpAgent;
 use crate::tapd::disk_config_source::DiskTapdConfigSource;
 use crate::tapd::store::{TapdStore, TaskListFilter};
+use crate::workbench::dispatcher::HealthSnapshot;
 use crate::tapd::sync::TapdConfigSource;
 
 pub mod tapd_methods {
@@ -25,6 +26,7 @@ pub mod tapd_methods {
     pub const TASKS_LIST: &str = "x.ai/tapd/tasks/list";
     pub const SYNC_TRIGGER: &str = "x.ai/tapd/sync/trigger";
     pub const SYNC_STATUS_NOTIFICATION: &str = "x.ai/tapd/sync_status";
+    pub const WORKBENCH_HEALTH: &str = "x.ai/tapd/workbench/health";
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +221,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         tapd_methods::STATUS => handle_status(agent, args).await,
         tapd_methods::TASKS_LIST => handle_tasks_list(agent, args).await,
         tapd_methods::SYNC_TRIGGER => handle_sync_trigger(agent, args).await,
+        tapd_methods::WORKBENCH_HEALTH => handle_workbench_health(agent, args).await,
         _ => Err(acp::Error::method_not_found()),
     }
 }
@@ -392,6 +395,14 @@ async fn handle_sync_trigger(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtRes
     to_ext_response(Ok(SyncTriggerResponse { ok: true }))
 }
 
+
+async fn handle_workbench_health(agent: &MvpAgent, _args: &acp::ExtRequest) -> ExtResult {
+    let snapshot = match agent.workbench_dispatcher.borrow().as_ref() {
+        Some(d) => d.health_snapshot(),
+        None => crate::workbench::dispatcher::HealthSnapshot::default(),
+    };
+    to_ext_response(Ok(snapshot))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,3 +431,6 @@ mod tests {
         );
     }
 }
+
+
+
