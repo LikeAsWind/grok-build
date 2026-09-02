@@ -193,6 +193,8 @@ siphasher = { workspace = true }
 windows = { workspace = true }
 
 [dev-dependencies]
+tempdir = "0.3"
+mockito = "1"
 criterion = { workspace = true }
 # Pre-main unified-log redirect (`test_support::redirect_unified_log_for_tests`).
 ctor = { workspace = true }
@@ -269,4 +271,5 @@ tar = { workspace = true }
 [[bin]]
 name = "chat-history-downgrade"
 path = "src/bin/chat-history-downgrade.rs"
+
 
