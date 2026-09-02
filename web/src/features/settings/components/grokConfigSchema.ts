@@ -539,6 +539,38 @@ export const CONFIG_GROUPS: ConfigGroupDef[] = [
       },
     ],
   },
+  {
+    id: 'workbench',
+    title: 'TAPD 工作台工作流',
+    sections: [
+      {
+        id: 'workbench',
+        title: '工作台开关',
+        desc: '将 Pending 状态的 TAPD 任务自动推进到 GitLab MR；关闭后只走原有同步流程',
+        fields: [
+          b('enabled', '启用', 'false', '关闭后只走原有 TAPD 同步流程；开启后会把 Pending 任务自动推进'),
+          b('keep_stage_files_after_done', '保留阶段文件', 'false', '默认完成后删除 .workbench/'),
+          n('worktree_gc_delay_secs', 'Worktree 清理延迟（秒）', '300', '完成后多久清理工作目录'),
+        ],
+      },
+    ],
+  },
+  {
+    id: 'gitlab',
+    title: 'GitLab MR 提交',
+    sections: [
+      {
+        id: 'gitlab',
+        title: 'GitLab 连接',
+        desc: 'Token 读取自环境变量（不在配置中存储）',
+        fields: [
+          s('url', 'GitLab URL', undefined, 'https://gitlab.example.com'),
+          s('token_env', 'Token 环境变量名', undefined, 'GITLAB_TOKEN'),
+          b('default_assignees_self', '创建者自动成为 Assignee', 'false'),
+        ],
+      },
+    ],
+  },
 ]
 
 // ── 动态键表（[section.<自定义名>]）─────────────────────────────
