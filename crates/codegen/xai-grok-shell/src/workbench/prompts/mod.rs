@@ -5,6 +5,8 @@
 //! plain string replacement on `{{var}}` placeholders — no template engine
 //! to keep the dependency surface small (matches YAGNI per AGENTS.md).
 
+pub mod adjudicator;
 pub mod planner;
 
+pub use adjudicator::*;
 pub use planner::*;
