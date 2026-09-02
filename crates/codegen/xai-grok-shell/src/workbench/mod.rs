@@ -20,12 +20,14 @@
 pub mod artifacts;
 pub mod dispatcher;
 pub mod main_session;
+pub mod orchestrator;
 pub mod notifications;
 pub mod prompts;
 pub mod runner;
 pub mod state_machine;
 pub mod submitter;
 pub mod worktree_manager;
+
 
 
 
