@@ -275,7 +275,15 @@ pub struct TapdSyncManager {
     config: Arc<dyn TapdConfigSource>,
     owner_id: String,
     manual_trigger_tx: mpsc::UnboundedSender<ManualTriggerRequest>,
-    status_tx: Arc<Mutex<Option<mpsc::UnboundedSender<SyncStatusEvent>>>>,
+    /// Subscribers for sync_status notifications. A Vec so multiple
+    /// sessions / web clients can listen concurrently; closed senders are
+    /// pruned during emit (see [`Self::emit`]).
+    status_tx: Arc<Mutex<Vec<mpsc::UnboundedSender<SyncStatusEvent>>>>,
+    /// Optional callback invoked after every successful sync completes.
+    /// Used by the workbench pipeline (see `crate::workbench`) to dispatch
+    /// newly-pending TAPD tasks as soon as they show up in the queue.
+    pub on_sync_complete: parking_lot::Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>,
+
 }
 
 struct ManualTriggerRequest {
@@ -293,7 +301,12 @@ pub struct SyncStatusEvent {
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
+// Wire values stay `"started"/"succeeded"/"failed"` because the variants
+// are single-word (camelCase ≡ snake_case for these); the camelCase attribute
+// keeps the convention consistent with the rest of the wire DTOs
+// (`WorkbenchStatusResponse`, `TaskDto`, etc.). New multi-word variants will
+// now serialize as camelCase automatically.
 pub enum SyncPhase {
     Started,
     Succeeded,
@@ -308,24 +321,37 @@ impl TapdSyncManager {
             config,
             owner_id: uuid::Uuid::now_v7().to_string(),
             manual_trigger_tx,
-            status_tx: Arc::new(Mutex::new(None)),
+            status_tx: Arc::new(Mutex::new(Vec::new())),
+            on_sync_complete: parking_lot::Mutex::new(None),
+
         });
         manager.clone().spawn_background_loop(manual_trigger_rx);
         manager
     }
 
-    /// Register a channel to receive [`SyncStatusEvent`]s. Only the most
-    /// recent subscriber is kept (mirrors the single persistent gateway
-    /// pattern in `agent::server` — one process, one active notification
-    /// sink at a time).
+    /// Subscribe to sync_status events. Multiple subscribers are supported
+    /// (one per active session/web client); each gets a clone of every
+    /// subsequent event. Senders that fail to deliver (closed receiver) are
+    /// silently pruned during emit so a disconnected client doesn't block
+    /// others or leak memory.
     pub async fn subscribe(&self, tx: mpsc::UnboundedSender<SyncStatusEvent>) {
-        *self.status_tx.lock().await = Some(tx);
+        self.status_tx.lock().await.push(tx);
     }
 
     async fn emit(&self, event: SyncStatusEvent) {
-        let guard = self.status_tx.lock().await;
-        if let Some(tx) = guard.as_ref() {
-            let _ = tx.send(event);
+        // Take a brief lock to swap in only the still-healthy senders,
+        // then drop the lock before we actually send — sending to a slow
+        // receiver must not stall the sync pipeline.
+        let alive = {
+            let mut guard = self.status_tx.lock().await;
+            guard.retain(|tx| !tx.is_closed());
+            guard.clone()
+        };
+        for tx in alive {
+            // UnboundedSender::send only fails when the receiver is dropped;
+            // we already filtered those above, but ignore the error anyway
+            // so a transient close-during-iter doesn't panic.
+            let _ = tx.send(event.clone());
         }
     }
 
@@ -492,10 +518,19 @@ impl TapdSyncManager {
                 }
             };
             self.emit(SyncStatusEvent {
-                directory,
+                directory: directory.clone(),
                 phase,
             })
             .await;
+
+            // Invoke the workbench dispatcher hook on successful syncs.
+            // Failures of the hook itself are logged but never propagated —
+            // a workbench dispatch bug must not destabilize the sync loop.
+            if matches!(phase, SyncPhase::Succeeded) {
+                if let Some(cb) = self.on_sync_complete.lock().as_ref() {
+                    cb(&directory);
+                }
+            }
         }
     }
 }

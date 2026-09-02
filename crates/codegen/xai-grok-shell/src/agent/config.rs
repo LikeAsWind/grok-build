@@ -1785,6 +1785,10 @@ pub struct Config {
     #[serde(default, skip_serializing)]
     pub tapd: TapdConfig,
     #[serde(default, skip_serializing)]
+    pub workbench: WorkbenchConfig,
+    #[serde(default, skip_serializing)]
+    pub gitlab: GitlabConfig,
+    #[serde(default, skip_serializing)]
     pub worktree_pool: WorktreePoolConfig,
     #[serde(default, skip_serializing)]
     pub sandbox: SandboxSettingsConfig,
@@ -2194,6 +2198,8 @@ impl Default for Config {
             relay: RelayConfig::default(),
             hub: HubConfig::default(),
             tapd: TapdConfig::default(),
+            workbench: WorkbenchConfig::default(),
+            gitlab: GitlabConfig::default(),
             worktree_pool: WorktreePoolConfig::default(),
             sandbox: SandboxSettingsConfig::default(),
             mcp_servers: std::collections::HashMap::new(),

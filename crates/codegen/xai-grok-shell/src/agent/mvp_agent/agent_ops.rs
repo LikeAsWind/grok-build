@@ -1,4 +1,4 @@
-#![cfg_attr(rustfmt, rustfmt::skip)]
+﻿#![cfg_attr(rustfmt, rustfmt::skip)]
 #![allow(unused_imports)]
 //! Inherent [`MvpAgent`] helpers (MCP/clients/gateway, settings/models, session ops, spawn).
 //! Co-located child of `mvp_agent` (`use super::*`).
@@ -110,6 +110,46 @@ impl MvpAgent {
         });
 
         *self.tapd_sync_manager.borrow_mut() = Some(manager);
+    }
+
+    /// Construct the workbench dispatcher and wire it as the
+    /// `on_sync_complete` hook on the TAPD sync manager. Idempotent —
+    /// calling twice replaces the previous dispatcher.
+    ///
+    /// Spec §12: TAPD sync completion = dispatch trigger. Each successful
+    /// sync fires `dispatcher.dispatch_pending()` so newly-pending tasks
+    /// start moving immediately, without a separate timer.
+    pub fn spawn_workbench_dispatcher(&self) {
+        let cfg = match self.cfg.try_borrow() {
+            Ok(cfg) => cfg.clone(),
+            Err(_) => return,
+        };
+        // Only wire up the dispatcher when workbench is enabled in config.
+        if !cfg.workbench.enabled {
+            return;
+        }
+        let (sink, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let dispatcher = std::sync::Arc::new(
+            crate::workbench::dispatcher::WorkbenchDispatcher::new(
+                self.tapd_store.clone(),
+                cfg.workbench.clone(),
+                sink,
+            ),
+        );
+        *self.workbench_dispatcher.borrow_mut() = Some(dispatcher.clone());
+
+        // Wire into the sync manager so each successful sync triggers a drain.
+        if let Some(manager) = self.tapd_sync_manager.borrow().as_ref() {
+            let dispatcher_for_cb = dispatcher.clone();
+            *manager.on_sync_complete.lock() = Some(std::sync::Arc::new(move |_directory: &str| {
+                let d = dispatcher_for_cb.clone();
+                tokio::task::spawn_local(async move {
+                    if let Err(e) = d.dispatch_pending().await {
+                        tracing::warn!("workbench dispatch failed: {e:#}");
+                    }
+                });
+            }));
+        }
     }
 
     pub fn reload_skills_all_sessions(&self) -> usize {
@@ -2557,6 +2597,7 @@ impl MvpAgent {
                 crate::tapd::store::db_path(&xai_grok_config::grok_home()),
             )),
             tapd_sync_manager: RefCell::new(None),
+            workbench_dispatcher: RefCell::new(None),
             #[cfg(test)]
             finalize_spy: RefCell::new(Vec::new()),
             #[cfg(test)]
