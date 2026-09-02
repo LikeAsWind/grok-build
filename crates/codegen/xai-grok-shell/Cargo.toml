@@ -55,6 +55,7 @@ reqwest-middleware = { workspace = true }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { workspace = true }
 serde_ignored = "0.1"
+serde_yaml = "0.9"
 serde_json = { workspace = true, features = ["preserve_order"] }
 similar = { workspace = true }
 thiserror = { workspace = true }
@@ -268,3 +269,4 @@ tar = { workspace = true }
 [[bin]]
 name = "chat-history-downgrade"
 path = "src/bin/chat-history-downgrade.rs"
+

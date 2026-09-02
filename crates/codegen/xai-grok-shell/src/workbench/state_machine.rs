@@ -17,6 +17,7 @@ pub enum Stage {
     Brainstorm,
     Adjudicate,
     Develop,
+    #[serde(alias = "review")]
     CodeReview,
     Verify,
     MrSubmit,

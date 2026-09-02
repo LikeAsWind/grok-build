@@ -17,8 +17,10 @@
 //! - [`main_session`] — main session actor: state machine driver + child
 //!   session event forwarder.
 
+pub mod artifacts;
 pub mod dispatcher;
 pub mod state_machine;
 pub mod worktree_manager;
+
 
 
