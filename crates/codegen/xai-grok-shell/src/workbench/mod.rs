@@ -19,8 +19,10 @@
 
 pub mod artifacts;
 pub mod dispatcher;
+pub mod prompts;
 pub mod state_machine;
 pub mod worktree_manager;
+
 
 
 
