@@ -1,4 +1,4 @@
-//! SQLite persistence for the TAPD workbench.
+﻿//! SQLite persistence for the TAPD workbench.
 //!
 //! Three tables, one file (`~/.grok/tapd/tapd.sqlite`):
 //! - `sync_cursor` — one row per (directory, entity_type) pair: workspace
@@ -281,6 +281,12 @@ impl TapdStore {
                 failed INTEGER NOT NULL DEFAULT 0,
                 error TEXT
             );
+            CREATE TABLE IF NOT EXISTS workbench_task_state (
+    tapd_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
             CREATE INDEX IF NOT EXISTS sync_runs_directory_idx ON sync_runs(directory, started_at DESC);
             ",
         )?;
@@ -698,8 +704,46 @@ impl TapdStore {
         }
     }
 
-    pub fn list_tasks(
-        &self,
+    /// Upsert the per-TAPD-task workbench state (used by the dispatcher and state machine).
+    /// `state` is an opaque string (e.g. "pending", "queued", "running:develop:0");
+    /// semantic interpretation lives in the workbench crate.
+    pub fn put_workbench_state(&self, tapd_id: &str, state: &str) -> rusqlite::Result<()> {
+        let conn = self.open()?;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO workbench_task_state (tapd_id, state, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(tapd_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at",
+            rusqlite::params![tapd_id, state, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_workbench_state(&self, tapd_id: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare("SELECT state FROM workbench_task_state WHERE tapd_id = ?1")?;
+        let mut rows = stmt.query(rusqlite::params![tapd_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Pending TAPD tasks that have no workbench state yet — these are the
+    /// candidates the dispatcher should claim on its next sweep.
+    pub fn list_pending_workbench_tasks(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT t.tapd_id, t.title
+             FROM tasks t
+             LEFT JOIN workbench_task_state w ON w.tapd_id = t.tapd_id
+             WHERE t.queue_state = 'pending' AND w.state IS NULL"
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    pub fn list_tasks(        &self,
         directory: &str,
         filter: &TaskListFilter,
     ) -> rusqlite::Result<Vec<TaskRow>> {
@@ -1338,5 +1382,21 @@ mod tests {
         store.try_acquire_lock("/a", "task", "owner", 300).unwrap();
         // Locking /a must not affect /b's ability to be locked.
         assert!(store.try_acquire_lock("/b", "task", "owner", 300).unwrap());
+    }
+
+    #[test]
+    fn workbench_state_round_trip() {
+        let (store, _dir) = store();
+        store.put_workbench_state("TAPD-1234", "pending").unwrap();
+        assert_eq!(
+            store.get_workbench_state("TAPD-1234").unwrap(),
+            Some("pending".into())
+        );
+        store.put_workbench_state("TAPD-1234", "running:develop:0").unwrap();
+        assert_eq!(
+            store.get_workbench_state("TAPD-1234").unwrap(),
+            Some("running:develop:0".into())
+        );
+        assert!(store.get_workbench_state("TAPD-9999").unwrap().is_none());
     }
 }
