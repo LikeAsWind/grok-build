@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SubtaskPart } from '../../../types/message'
 import { useChildSessions, type ChildSessionInfo } from '../../../store'
+import { deriveWorkbenchStage } from '../../sessions-hub/workbenchStageBadge'
 import { useSessionNavigation } from '../../../contexts/SessionNavigationContext'
 import { useDisclosureScrollLock } from '../../../hooks'
 import { UsersIcon, ChevronDownIcon, LayersIcon, TerminalIcon, ReturnIcon } from '../../../components/Icons'
@@ -29,6 +30,9 @@ export const SubtaskPartView = memo(function SubtaskPartView({ part }: SubtaskPa
   // 获取子 session 信息（如果已创建）
   // 注意：part.sessionID 是父 session，我们需要找到这个 subtask 创建的子 session
   // 子 session 的 parentID 应该等于 part.sessionID
+  // Optional workbench stage label (placeholder; v2 will read from notification store).
+  const _workbenchLabel = deriveWorkbenchStage({ kind: "pending" }).label;
+  void _workbenchLabel;
   const childSessions = useChildSessions(part.sessionID)
 
   // 找到匹配这个 subtask 的子 session
@@ -191,3 +195,6 @@ function findMatchingChildSession(childSessions: ChildSessionInfo[], part: Subta
   // 没有匹配的 agent，取最近创建的
   return childSessions.sort((a, b) => b.createdAt - a.createdAt)[0]
 }
+
+
+
