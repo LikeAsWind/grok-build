@@ -227,3 +227,73 @@ mod develop_parse_tests {
         assert!(matches!(parse_develop_verdict(md).unwrap(), DevelopVerdict::Fail(_)));
     }
 }
+
+/// Verdict produced by the Reviewer's `4-review.md` artifact.
+/// `Approved` requires zero critical AND fewer than 3 major.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReviewVerdict {
+    Approved,
+    NeedsChanges,
+}
+
+pub fn parse_review_verdict(md: &str) -> anyhow::Result<ReviewVerdict> {
+    use crate::workbench::artifacts::ArtifactEnvelope;
+    let env = ArtifactEnvelope::parse(md)?;
+    let v = env
+        .frontmatter
+        .extra
+        .get("verdict")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing verdict"))?;
+    let crit = env
+        .frontmatter
+        .extra
+        .get("critical_count")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let major = env
+        .frontmatter
+        .extra
+        .get("major_count")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    match v {
+        "approved" if crit == 0 && major < 3 => Ok(ReviewVerdict::Approved),
+        "needs_changes" => Ok(ReviewVerdict::NeedsChanges),
+        // A reviewer who wrote `approved` but reported critical/major counts
+        // above the threshold is treated as `needs_changes` — that's the
+        // spec's safety net against inconsistent verdicts.
+        "approved" => Ok(ReviewVerdict::NeedsChanges),
+        other => anyhow::bail!("unknown verdict `{other}`"),
+    }
+}
+
+#[cfg(test)]
+mod review_parse_tests {
+    use super::*;
+
+    #[test]
+    fn approved_with_zero_critical() {
+        let md = "---\nstage: review\ntask_id: TAPD-1\nattempt: 0\nverdict: approved\ncritical_count: 0\nmajor_count: 1\n---\nbody";
+        assert_eq!(parse_review_verdict(md).unwrap(), ReviewVerdict::Approved);
+    }
+
+    #[test]
+    fn needs_changes_with_one_critical() {
+        let md = "---\nstage: review\ntask_id: TAPD-1\nattempt: 0\nverdict: needs_changes\ncritical_count: 1\nmajor_count: 0\n---\nbody";
+        assert_eq!(parse_review_verdict(md).unwrap(), ReviewVerdict::NeedsChanges);
+    }
+
+    #[test]
+    fn needs_changes_with_three_majors() {
+        let md = "---\nstage: review\ntask_id: TAPD-1\nattempt: 0\nverdict: approved\ncritical_count: 0\nmajor_count: 3\n---\nbody";
+        // approved + 3 majors => safety net flips to NeedsChanges.
+        assert_eq!(parse_review_verdict(md).unwrap(), ReviewVerdict::NeedsChanges);
+    }
+
+    #[test]
+    fn review_verdict_missing_is_error() {
+        let md = "---\nstage: review\ntask_id: TAPD-1\nattempt: 0\n---\nbody";
+        assert!(parse_review_verdict(md).is_err());
+    }
+}
