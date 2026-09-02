@@ -333,3 +333,121 @@ mod tests {
 }
 
 
+
+
+// MR payload assembly + HTTP status classifier. Spec §6.6.
+
+use crate::workbench::state_machine::MrSubmitOutcome;
+
+pub fn format_mr_title(tapd_id: &str, title: &str) -> String {
+    format!("[{tapd_id}] {title}")
+}
+
+pub fn build_mr_payload(
+    tapd_id: &str,
+    title: &str,
+    description: &str,
+    acs: &[String],
+    source_branch: &str,
+    target_branch: &str,
+    assignees: &[String],
+    reviewers: &[String],
+) -> serde_json::Value {
+    let acs_block = if acs.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "`n`n## Acceptance Criteria`n{}",
+            acs.iter().map(|a| format!("- {a}")).collect::<Vec<_>>().join("`n")
+        )
+    };
+    serde_json::json!({
+        "source_branch": source_branch,
+        "target_branch": target_branch,
+        "title": format_mr_title(tapd_id, title),
+        "description": format!("{description}{acs_block}"),
+        "assignee_ids": assignees,
+        "reviewer_ids": reviewers,
+        "remove_source_branch": true,
+        "squash": false,
+    })
+}
+
+pub fn classify_response(r: GitlabCreateMrResponse) -> MrSubmitOutcome {
+    match r.status {
+        201 => MrSubmitOutcome::Ok,
+        409 => MrSubmitOutcome::Conflict,
+        401 | 403 => MrSubmitOutcome::AuthError,
+        500..=599 => MrSubmitOutcome::TransientError,
+        _ => MrSubmitOutcome::TransientError,
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn payload_includes_required_fields() {
+        let p = build_mr_payload(
+            "TAPD-1",
+            "Fix login",
+            "Fix broken login flow",
+            &["AC1".to_string()],
+            "tapd/TAPD-1-fix-login",
+            "main",
+            &["alice".to_string()],
+            &["bob".to_string()],
+        );
+        assert_eq!(p["source_branch"], "tapd/TAPD-1-fix-login");
+        assert_eq!(p["target_branch"], "main");
+        assert_eq!(p["title"], "[TAPD-1] Fix login");
+        assert_eq!(p["remove_source_branch"], true);
+        assert_eq!(p["squash"], false);
+        let desc = p["description"].as_str().unwrap();
+        assert!(desc.contains("AC1"));
+        assert_eq!(p["reviewer_ids"][0], "bob");
+        assert_eq!(p["assignee_ids"][0], "alice");
+    }
+
+    #[test]
+    fn payload_omits_acs_section_when_empty() {
+        let p = build_mr_payload("TAPD-1", "x", "desc", &[], "b", "main", &[], &[]);
+        let desc = p["description"].as_str().unwrap();
+        assert!(!desc.contains("Acceptance Criteria"));
+    }
+
+    #[test]
+    fn mr_title_prefix() {
+        assert_eq!(format_mr_title("TAPD-9", "Add foo"), "[TAPD-9] Add foo");
+    }
+
+    #[test]
+    fn submitter_classifies_201_as_ok() {
+        let outcome = classify_response(GitlabCreateMrResponse {
+            status: 201,
+            body: r#"{"web_url":"x"}"#.into(),
+        });
+        assert!(matches!(outcome, MrSubmitOutcome::Ok));
+    }
+
+    #[test]
+    fn submitter_classifies_409_as_conflict() {
+        let outcome = classify_response(GitlabCreateMrResponse { status: 409, body: "{}".into() });
+        assert!(matches!(outcome, MrSubmitOutcome::Conflict));
+    }
+
+    #[test]
+    fn submitter_classifies_401_as_auth_error() {
+        let outcome = classify_response(GitlabCreateMrResponse { status: 401, body: "{}".into() });
+        assert!(matches!(outcome, MrSubmitOutcome::AuthError));
+    }
+
+    #[test]
+    fn submitter_classifies_5xx_as_transient() {
+        let outcome = classify_response(GitlabCreateMrResponse { status: 503, body: "{}".into() });
+        assert!(matches!(outcome, MrSubmitOutcome::TransientError));
+    }
+}
+
+
