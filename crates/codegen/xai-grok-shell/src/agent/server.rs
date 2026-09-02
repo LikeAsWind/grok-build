@@ -498,6 +498,7 @@ async fn run_persistent_agent(
     );
     agent.models_manager.spawn_background_refresh();
     agent.spawn_tapd_sync_manager();
+    agent.spawn_workbench_dispatcher();
 
     let relay_dest: RelayDest = Rc::new(RefCell::new(None));
 
@@ -687,3 +688,4 @@ pub async fn run_agent_server(
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod server_tests;
+
