@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/Button'
 import { ExternalLinkIcon } from '../../components/Icons'
 import type { TapdTask } from '../../api/tapd'
 import { queueStateBadge } from './taskStatus'
+import { StageTimeline } from './StageTimeline'
 
 export interface TaskDetailDrawerProps {
   task: TapdTask | null
@@ -55,6 +56,14 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
           </div>
         </div>
       )}
+      {task && (
+        <div className="mt-4 pt-3 border-t border-border-200/40">
+          <h3 className="text-sm font-semibold mb-2">Pipeline</h3>
+          <StageTimeline current="brainstorm" />
+        </div>
+      )}
     </Dialog>
   )
 }
+
+
