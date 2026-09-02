@@ -168,3 +168,62 @@ mod adjudicator_parse_tests {
         assert!(err.to_string().contains("maybe"));
     }
 }
+
+/// Verdict produced by the Coder's `3-develop.md` artifact. Spec §6.3:
+/// `verdict: ok | fail`, with `reason` for failures.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DevelopVerdict {
+    Ok,
+    Fail(String),
+}
+
+pub fn parse_develop_verdict(md: &str) -> anyhow::Result<DevelopVerdict> {
+    use crate::workbench::artifacts::ArtifactEnvelope;
+    let env = ArtifactEnvelope::parse(md)?;
+    let v = env
+        .frontmatter
+        .extra
+        .get("verdict")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing verdict"))?;
+    match v {
+        "ok" => Ok(DevelopVerdict::Ok),
+        "fail" => {
+            let reason = env
+                .frontmatter
+                .extra
+                .get("reason")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(DevelopVerdict::Fail(reason))
+        }
+        other => anyhow::bail!("unknown verdict `{other}`"),
+    }
+}
+
+#[cfg(test)]
+mod develop_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_develop_ok() {
+        let md = "---\nstage: develop\ntask_id: TAPD-1\nattempt: 0\nverdict: ok\n---\nbody";
+        assert_eq!(parse_develop_verdict(md).unwrap(), DevelopVerdict::Ok);
+    }
+
+    #[test]
+    fn parse_develop_fail() {
+        let md = "---\nstage: develop\ntask_id: TAPD-1\nattempt: 0\nverdict: fail\nreason: compile error\n---\nbody";
+        match parse_develop_verdict(md).unwrap() {
+            DevelopVerdict::Fail(r) => assert!(r.contains("compile")),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_develop_fail_without_reason() {
+        let md = "---\nstage: develop\ntask_id: TAPD-1\nattempt: 0\nverdict: fail\n---\nbody";
+        assert!(matches!(parse_develop_verdict(md).unwrap(), DevelopVerdict::Fail(_)));
+    }
+}
