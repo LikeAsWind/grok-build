@@ -41,7 +41,15 @@ impl Stage {
 pub enum TaskState {
     Queued { priority: String },
     Pending,
-    Running { stage: Stage, attempt: u8, started_at: i64 },
+    Running {
+        stage: Stage,
+        attempt: u8,
+        started_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_error: Option<String>,
+    },
     BlockedForHuman {
         stage: Stage,
         reason: String,
@@ -156,12 +164,16 @@ pub fn next_after_planner(
             stage: Stage::Adjudicate,
             attempt: 0,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         }
     } else {
         TaskState::Running {
             stage: Stage::Develop,
             attempt: 0,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         }
     }
 }
@@ -173,6 +185,8 @@ pub fn next_after_adjudicate(verdict: AdjudicateVerdict) -> TaskState {
             stage: Stage::Develop,
             attempt: 0,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         },
         AdjudicateVerdict::BlockForHuman => TaskState::BlockedForHuman {
             stage: Stage::Adjudicate,
@@ -191,12 +205,16 @@ pub fn next_after_develop(ok: bool, attempt: u8) -> TaskState {
             stage: Stage::CodeReview,
             attempt: 0,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         }
     } else if retry_left(attempt, MAX) {
         TaskState::Running {
             stage: Stage::Develop,
             attempt: attempt + 1,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         }
     } else {
         TaskState::Dead {
@@ -213,6 +231,8 @@ pub fn next_after_review(verdict: ReviewVerdict, develop_attempt: u8) -> TaskSta
             stage: Stage::Verify,
             attempt: 0,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         },
         ReviewVerdict::NeedsChanges => {
             if retry_left(develop_attempt, MAX) {
@@ -220,6 +240,8 @@ pub fn next_after_review(verdict: ReviewVerdict, develop_attempt: u8) -> TaskSta
                     stage: Stage::Develop,
                     attempt: develop_attempt + 1,
                     started_at: now(),
+                    fallback_model: None,
+                    last_error: None,
                 }
             } else {
                 TaskState::BlockedForHuman {
@@ -242,12 +264,16 @@ pub fn next_after_verify(prev_develop_attempt: u8, exit_code: i32) -> TaskState 
             stage: Stage::MrSubmit,
             attempt: 0,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         }
     } else if retry_left(prev_develop_attempt, DEVELOP_MAX) {
         TaskState::Running {
             stage: Stage::Develop,
             attempt: prev_develop_attempt + 1,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         }
     } else {
         TaskState::BlockedForHuman {
@@ -275,6 +301,8 @@ pub fn next_after_mr_submit(attempt: u8, outcome: MrSubmitOutcome) -> TaskState 
             stage: Stage::MrSubmit,
             attempt: attempt + 1,
             started_at: now(),
+            fallback_model: None,
+            last_error: None,
         },
         MrSubmitOutcome::TransientError => TaskState::BlockedForHuman {
             stage: Stage::MrSubmit,
@@ -301,7 +329,7 @@ mod tests {
     #[test]
     fn planner_no_open_q_routes_to_develop() {
         let next = next_after_planner(
-            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0 },
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
             &design_without_open_q(),
             1, // Medium priority
             2,
@@ -312,7 +340,7 @@ mod tests {
     #[test]
     fn planner_open_q_urgent_routes_to_adjudicate() {
         let next = next_after_planner(
-            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0 },
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
             &design_with_open_q(),
             3, // Urgent
             2,
@@ -323,7 +351,7 @@ mod tests {
     #[test]
     fn planner_open_q_low_priority_few_acs_skips_adjudicate() {
         let next = next_after_planner(
-            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0 },
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
             &design_with_open_q(),
             0, // Low
             2,
@@ -334,7 +362,7 @@ mod tests {
     #[test]
     fn planner_open_q_five_acs_routes_to_adjudicate() {
         let next = next_after_planner(
-            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0 },
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
             &design_with_open_q(),
             0, // Low priority but 5 ACs
             5,
@@ -345,7 +373,7 @@ mod tests {
     #[test]
     fn planner_exhausts_after_three_retries_goes_dead() {
         let next = next_after_planner(
-            TaskState::Running { stage: Stage::Brainstorm, attempt: 3, started_at: 0 },
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 3, started_at: 0, fallback_model: None, last_error: None },
             &design_without_open_q(),
             1,
             2,
@@ -455,7 +483,7 @@ mod tests {
         assert!(TaskState::BlockedForHuman { stage: Stage::Adjudicate, reason: "x".into(), payload: serde_json::json!({}) }.is_terminal());
         assert!(TaskState::Dead { reason: "x".into() }.is_terminal());
         assert!(!TaskState::Pending.is_terminal());
-        assert!(!TaskState::Running { stage: Stage::Develop, attempt: 0, started_at: 0 }.is_terminal());
+        assert!(!TaskState::Running { stage: Stage::Develop, attempt: 0, started_at: 0, fallback_model: None, last_error: None }.is_terminal());
     }
 
     #[test]
@@ -477,6 +505,61 @@ mod tests {
         )
         .unwrap();
         assert!(doc.has_open_questions());
+    }
+
+    #[test]
+    fn running_carries_fallback_model_field() {
+        let s = TaskState::Running {
+            stage: Stage::Develop,
+            attempt: 1,
+            started_at: 0,
+            fallback_model: Some("gpt-5".into()),
+            last_error: None,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("fallback_model"));
+        assert!(json.contains("gpt-5"));
+        let back: TaskState = serde_json::from_str(&json).unwrap();
+        match back {
+            TaskState::Running { fallback_model, .. } => {
+                assert_eq!(fallback_model.as_deref(), Some("gpt-5"));
+            }
+            _ => panic!("expected Running"),
+        }
+    }
+
+    #[test]
+    fn running_round_trips_with_last_error() {
+        let s = TaskState::Running {
+            stage: Stage::CodeReview,
+            attempt: 0,
+            started_at: 1700000000,
+            fallback_model: None,
+            last_error: Some("503 from anthropic".into()),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: TaskState = serde_json::from_str(&json).unwrap();
+        match back {
+            TaskState::Running { last_error, .. } => {
+                assert_eq!(last_error.as_deref(), Some("503 from anthropic"));
+            }
+            _ => panic!("expected Running"),
+        }
+    }
+
+    #[test]
+    fn v1_shaped_state_json_deserializes_into_v2_running() {
+        // v1 state.json uses internally-tagged enum (`#[serde(tag = "kind")]`),
+        // so the actual on-disk shape is {"kind":"running",...}, not {"Running":{...}}.
+        let v1_json = r#"{"kind":"running","stage":"develop","attempt":0,"started_at":0}"#;
+        let s: TaskState = serde_json::from_str(v1_json).unwrap();
+        match s {
+            TaskState::Running { fallback_model, last_error, .. } => {
+                assert!(fallback_model.is_none());
+                assert!(last_error.is_none());
+            }
+            _ => panic!("expected Running"),
+        }
     }
 }
 
@@ -521,7 +604,7 @@ mod persistence_tests {
     async fn save_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let worktree = dir.path();
-        let s = TaskState::Running { stage: Stage::Develop, attempt: 1, started_at: 1700000000 };
+        let s = TaskState::Running { stage: Stage::Develop, attempt: 1, started_at: 1700000000, fallback_model: None, last_error: None };
         save_state(worktree, &s).await.unwrap();
         let loaded = load_state(worktree).await.unwrap().unwrap();
         match loaded {

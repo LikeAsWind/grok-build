@@ -81,7 +81,7 @@ fn full_state_machine_walk_to_done() {
     )
     .unwrap();
     let next = next_after_planner(
-        TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0 },
+        TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
         &design_clean,
         1,
         3,
@@ -94,7 +94,7 @@ fn full_state_machine_walk_to_done() {
     )
     .unwrap();
     let next = next_after_planner(
-        TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0 },
+        TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
         &design_with_q,
         3,
         2,

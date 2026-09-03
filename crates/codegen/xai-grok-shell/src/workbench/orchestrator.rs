@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn save_state_writes_json_to_worktree() {
         let tmp = tempdir::TempDir::new("orchestrator-state").unwrap();
-        let state = TaskState::Running { stage: Stage::Develop, attempt: 0, started_at: 0 };
+        let state = TaskState::Running { stage: Stage::Develop, attempt: 0, started_at: 0, fallback_model: None, last_error: None };
         save_state(tmp.path(), &state).unwrap();
         let json = std::fs::read_to_string(tmp.path().join(".workbench/state.json")).unwrap();
         assert!(json.contains("develop"), "json should contain develop: {}", json);
