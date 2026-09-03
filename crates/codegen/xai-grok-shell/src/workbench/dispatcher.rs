@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::config::Priority;
+use crate::agent::config::{GitlabConfig, Priority};
+use crate::workbench::orchestrator::{drive_task, OrchestratorInputs};
+use crate::workbench::submitter::GitlabClient;
 
 /// One pending task in the dispatcher's queue.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,6 +150,7 @@ pub struct WorkbenchDispatcher {
     queue: parking_lot::Mutex<WorkbenchQueue>,
     slots: parking_lot::Mutex<SlotAccountant>,
     sink: tokio::sync::mpsc::UnboundedSender<DispatchEvent>,
+    gitlab: Option<Arc<GitlabClient>>,
 }
 
 impl WorkbenchDispatcher {
@@ -155,6 +158,7 @@ impl WorkbenchDispatcher {
         store: Arc<crate::tapd::store::TapdStore>,
         cfg: crate::agent::config::WorkbenchConfig,
         sink: tokio::sync::mpsc::UnboundedSender<DispatchEvent>,
+        gitlab: Option<Arc<GitlabClient>>,
     ) -> Self {
         let slots = SlotAccountant::new(
             cfg.concurrency.global_max_active,
@@ -166,6 +170,7 @@ impl WorkbenchDispatcher {
             queue: parking_lot::Mutex::new(WorkbenchQueue::default()),
             slots: parking_lot::Mutex::new(slots),
             sink,
+            gitlab,
         }
     }
 
@@ -232,11 +237,44 @@ impl WorkbenchDispatcher {
         None
     }
 
-    /// Spawn the main session that runs the state machine. For now this
-    /// returns a placeholder UUID; the actual session creation wiring is
-    /// task 4.x.
-    async fn spawn_main_session(&self, _tapd_id: &str) -> anyhow::Result<String> {
-        Ok(uuid::Uuid::new_v4().to_string())
+
+    /// Drive one task through the full pipeline via the orchestrator.
+    /// v1: stubbed LLM stages (deterministic artifact writers). Real LLM
+    /// child-session calls are the next step. Returns the spawned session id.
+    async fn spawn_main_session(&self, tapd_id: &str) -> anyhow::Result<String> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let tapd_id_owned = tapd_id.to_string();
+        let store = self.store.clone();
+        let gitlab = self.gitlab.clone();
+        let session_id_for_blocking = session_id.clone();
+        tokio::task::spawn_blocking(move || -> String {
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt,
+                Err(_) => return session_id_for_blocking,
+            };
+            rt.block_on(async move {
+                if let Some(g) = gitlab {
+                    let inputs = OrchestratorInputs {
+                        tapd_id: tapd_id_owned.clone(),
+                        title: format!("Workbench task {}", tapd_id_owned),
+                        description: String::new(),
+                        acs: vec![],
+                        priority: 1,
+                        repo_root: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                        grok_home: xai_grok_config::grok_home(),
+                        base_branch: "main".into(),
+                        tapd_owner: None,
+                        mr_reviewers: vec![],
+                        mr_assignees: vec![],
+                        project_id: "1".into(),
+                    };
+                    let _ = drive_task(store.clone(), &g, inputs).await;
+                }
+            });
+            session_id_for_blocking
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("join error: {e}"))
     }
 
     pub fn health_snapshot(&self) -> HealthSnapshot {
@@ -325,7 +363,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(crate::tapd::store::TapdStore::new(dir.path().join("wb.sqlite")));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let dispatcher = WorkbenchDispatcher::new(store.clone(), WorkbenchConfig::default(), tx);
+        let dispatcher = WorkbenchDispatcher::new(store.clone(), WorkbenchConfig::default(), tx, None);
 
         dispatcher.dispatch_pending().await.unwrap();
 
@@ -335,4 +373,10 @@ mod tests {
 
 
 }
+
+
+
+
+
+
 

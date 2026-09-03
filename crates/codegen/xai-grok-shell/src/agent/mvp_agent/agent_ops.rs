@@ -1,4 +1,4 @@
-﻿#![cfg_attr(rustfmt, rustfmt::skip)]
+#![cfg_attr(rustfmt, rustfmt::skip)]
 #![allow(unused_imports)]
 //! Inherent [`MvpAgent`] helpers (MCP/clients/gateway, settings/models, session ops, spawn).
 //! Co-located child of `mvp_agent` (`use super::*`).
@@ -134,6 +134,7 @@ impl MvpAgent {
                 self.tapd_store.clone(),
                 cfg.workbench.clone(),
                 sink,
+                None,
             ),
         );
         *self.workbench_dispatcher.borrow_mut() = Some(dispatcher.clone());
@@ -4942,3 +4943,7 @@ impl Drop for LocalWorkspaceReapGuard {
         }
     }
 }
+
+
+
+
