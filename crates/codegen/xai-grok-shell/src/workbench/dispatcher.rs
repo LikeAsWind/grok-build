@@ -8,7 +8,7 @@
 //! Spec reference: §7 (state machine), §12 (burst control), §10 (config).
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -71,8 +71,13 @@ impl WorkbenchQueue {
 pub struct SlotAccountant {
     global_max_active: usize,
     worktree_pool_max: usize,
-    active: HashSet<String>,
-    worktree_users: HashSet<String>,
+    /// Per-project running-task counts (project_key -> count). Used to enforce
+    /// the optional `[tapd.projects.<key>].max_concurrent` cap (D3).
+    /// A project with no cap configured does not appear in this map.
+    project_counts: HashMap<String, u32>,
+    /// Reverse map task_id -> project_key, so `release` can decrement the
+    /// right per-project counter without the caller passing project_key twice.
+    task_projects: HashMap<String, String>,
 }
 
 impl SlotAccountant {
@@ -80,34 +85,54 @@ impl SlotAccountant {
         Self {
             global_max_active,
             worktree_pool_max,
-            active: HashSet::new(),
-            worktree_users: HashSet::new(),
+            project_counts: HashMap::new(),
+            task_projects: HashMap::new(),
         }
     }
 
-    pub fn try_claim(&mut self, task_id: &str) -> bool {
-        if self.active.len() >= self.global_max_active {
+    /// Claim a slot for `task_id` belonging to `project_key`. `project_cap`
+    /// is the per-project cap (None means "no cap"). The caller is responsible
+    /// for passing the canonical project key.
+    ///
+    /// v2 spec §8.2.1: only two global limits are enforced; per-project
+    /// cap is opt-in.
+    pub fn try_claim(&mut self, task_id: &str, project_key: &str, project_cap: Option<u32>) -> bool {
+        if self.project_counts.values().sum::<u32>() as usize >= self.global_max_active {
             return false;
         }
-        if self.worktree_users.len() >= self.worktree_pool_max {
+        if self.project_counts.len() >= self.worktree_pool_max {
             return false;
         }
-        self.active.insert(task_id.to_string());
-        self.worktree_users.insert(task_id.to_string());
+        if let Some(cap) = project_cap {
+            let current = self.project_counts.get(project_key).copied().unwrap_or(0);
+            if current >= cap {
+                return false;
+            }
+        }
+        *self.project_counts.entry(project_key.to_string()).or_insert(0) += 1;
+        self.task_projects.insert(task_id.to_string(), project_key.to_string());
         true
     }
 
     pub fn release(&mut self, task_id: &str) {
-        self.active.remove(task_id);
-        self.worktree_users.remove(task_id);
+        if let Some(project_key) = self.task_projects.remove(task_id) {
+            if let Some(count) = self.project_counts.get_mut(&project_key) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    self.project_counts.remove(&project_key);
+                }
+            }
+        }
     }
 
     pub fn active_count(&self) -> usize {
-        self.active.len()
+        self.project_counts.values().sum::<u32>() as usize
     }
 
     pub fn worktree_in_use(&self) -> usize {
-        self.worktree_users.len()
+        // One worktree per running task; task_projects tracks one entry per
+        // running task_id. project_counts.len() would give unique projects only.
+        self.task_projects.len()
     }
 
     pub fn global_max_active(&self) -> usize {
@@ -210,7 +235,7 @@ impl WorkbenchDispatcher {
                 Some(t) => t,
                 None => break,
             };
-            if !self.slots.lock().try_claim(&task.tapd_id) {
+            if !self.slots.lock().try_claim(&task.tapd_id, "unknown", None) {
                 let _ = self.sink.send(DispatchEvent::NoSlot);
                 break;
             }
@@ -326,28 +351,28 @@ mod tests {
     #[test]
     fn slot_accounting_blocks_when_at_limit() {
         let mut acc = SlotAccountant::new(2, 5);
-        assert!(acc.try_claim("proj-a"));
-        assert!(acc.try_claim("proj-b"));
-        assert!(!acc.try_claim("proj-c"));
-        acc.release("proj-a");
-        assert!(acc.try_claim("proj-c"));
+        assert!(acc.try_claim("TAPD-1", "proj-a", None));
+        assert!(acc.try_claim("TAPD-2", "proj-b", None));
+        assert!(!acc.try_claim("TAPD-3", "proj-c", None));
+        acc.release("TAPD-1");
+        assert!(acc.try_claim("TAPD-3", "proj-c", None));
     }
 
     #[test]
     fn slot_accounting_blocks_when_worktree_pool_exhausted() {
         let mut acc = SlotAccountant::new(5, 2);
-        assert!(acc.try_claim("proj-a"));
-        assert!(acc.try_claim("proj-b"));
-        assert!(!acc.try_claim("proj-c"));
+        assert!(acc.try_claim("TAPD-1", "proj-a", None));
+        assert!(acc.try_claim("TAPD-2", "proj-b", None));
+        assert!(!acc.try_claim("TAPD-3", "proj-c", None));
     }
 
     #[test]
     fn slot_accounting_release_returns_to_pool() {
         let mut acc = SlotAccountant::new(1, 1);
-        assert!(acc.try_claim("a"));
-        assert!(!acc.try_claim("b"));
-        acc.release("a");
-        assert!(acc.try_claim("b"));
+        assert!(acc.try_claim("TAPD-1", "a", None));
+        assert!(!acc.try_claim("TAPD-2", "b", None));
+        acc.release("TAPD-1");
+        assert!(acc.try_claim("TAPD-2", "b", None));
         assert_eq!(acc.active_count(), 1);
         assert_eq!(acc.worktree_in_use(), 1);
     }
@@ -371,7 +396,34 @@ mod tests {
         assert!(matches!(event, DispatchEvent::QueueEmpty));
     }
 
+    #[test]
+    fn slot_accountant_per_project_cap_enforced() {
+        let mut acc = SlotAccountant::new(10, 10);
+        assert!(acc.try_claim("TAPD-1", "proj-a", Some(2)));
+        assert!(acc.try_claim("TAPD-2", "proj-a", Some(2)));
+        assert!(!acc.try_claim("TAPD-3", "proj-a", Some(2)));
+        assert!(acc.try_claim("TAPD-4", "proj-b", None));
+    }
 
+    #[test]
+    fn slot_accountant_no_cap_means_unlimited_per_project() {
+        let mut acc = SlotAccountant::new(100, 100);
+        for i in 0..10 {
+            assert!(acc.try_claim(&format!("TAPD-{i}"), "proj-a", None));
+        }
+        assert_eq!(acc.active_count(), 10);
+        assert_eq!(acc.worktree_in_use(), 10);
+    }
+
+    #[test]
+    fn slot_accountant_release_decrements_per_project_count() {
+        let mut acc = SlotAccountant::new(10, 10);
+        acc.try_claim("TAPD-1", "proj-a", Some(2));
+        acc.try_claim("TAPD-2", "proj-a", Some(2));
+        assert!(!acc.try_claim("TAPD-3", "proj-a", Some(2)));
+        acc.release("TAPD-1");
+        assert!(acc.try_claim("TAPD-3", "proj-a", Some(2)));
+    }
 }
 
 
