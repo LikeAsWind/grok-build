@@ -312,6 +312,19 @@ pub fn next_after_mr_submit(attempt: u8, outcome: MrSubmitOutcome) -> TaskState 
     }
 }
 
+/// Restart a task from a given stage. Resets `attempt` to 0 and clears
+/// `fallback_model` + `last_error` (the prior chain's state is no longer
+/// relevant for the new chain). Used by `x.ai/workbench/replay` (D16).
+pub fn next_after_replay(stage: Stage, _old_attempt: u8) -> TaskState {
+    TaskState::Running {
+        stage,
+        attempt: 0,
+        started_at: now(),
+        fallback_model: None,
+        last_error: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +567,31 @@ mod tests {
         let v1_json = r#"{"kind":"running","stage":"develop","attempt":0,"started_at":0}"#;
         let s: TaskState = serde_json::from_str(v1_json).unwrap();
         match s {
+            TaskState::Running { fallback_model, last_error, .. } => {
+                assert!(fallback_model.is_none());
+                assert!(last_error.is_none());
+            }
+            _ => panic!("expected Running"),
+        }
+    }
+
+    #[test]
+    fn next_after_replay_routes_to_named_stage_with_attempt_zero() {
+        let next = next_after_replay(Stage::Develop, 0);
+        assert!(matches!(next, TaskState::Running { stage: Stage::Develop, attempt: 0, .. }));
+    }
+
+    #[test]
+    fn next_after_replay_resets_attempt_even_when_old_attempt_high() {
+        let next = next_after_replay(Stage::CodeReview, 5);
+        // Even if a prior run got to attempt 5, replay starts at attempt 0.
+        assert!(matches!(next, TaskState::Running { stage: Stage::CodeReview, attempt: 0, .. }));
+    }
+
+    #[test]
+    fn next_after_replay_clears_fallback_model_field() {
+        let next = next_after_replay(Stage::Verify, 2);
+        match next {
             TaskState::Running { fallback_model, last_error, .. } => {
                 assert!(fallback_model.is_none());
                 assert!(last_error.is_none());
