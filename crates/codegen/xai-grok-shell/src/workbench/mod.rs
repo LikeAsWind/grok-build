@@ -18,6 +18,7 @@
 //!   session event forwarder.
 
 pub mod artifacts;
+pub mod cron;
 pub mod dispatcher;
 pub mod intervention;
 pub mod main_session;
