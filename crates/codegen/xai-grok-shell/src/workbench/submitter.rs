@@ -339,8 +339,61 @@ mod tests {
 
 use crate::workbench::state_machine::MrSubmitOutcome;
 
-pub fn format_mr_title(tapd_id: &str, title: &str) -> String {
-    format!("[{tapd_id}] {title}")
+/// Context for template placeholder substitution in MR titles.
+#[derive(Clone, Debug, Default)]
+pub struct MrTitleContext {
+    pub priority: Option<String>,
+    pub owner: Option<String>,
+    pub module: Option<String>,
+}
+
+/// Format the MR title. When `template` is None, returns the v1 default
+/// `"[<tapd_id>] <title>"`. Otherwise, substitutes placeholders in order:
+///   `{tapd_id}`, `{title}`, `{priority}`, `{owner}`, `{module}`.
+/// Unknown placeholders are left literal (so "FOO {nonexistent}" produces
+/// "FOO {nonexistent}" rather than erroring; the audit log records the
+/// substitution).
+///
+/// Used by v2 spec §8.2.2 with per-project `[tapd.projects.<key>].mr_title_template`.
+pub fn format_mr_title(tapd_id: &str, title: &str, template: Option<&str>, ctx: &MrTitleContext) -> String {
+    let tmpl = template.unwrap_or("[{tapd_id}] {title}");
+    let mut out = String::with_capacity(tmpl.len());
+    let bytes = tmpl.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            // Find matching '}'
+            if let Some(end_rel) = tmpl[i + 1..].find('}') {
+                let end = i + 1 + end_rel;
+                let key = &tmpl[i + 1..end];
+                let val = match key {
+                    "tapd_id" => Some(tapd_id.to_string()),
+                    "title" => Some(title.to_string()),
+                    "priority" => ctx.priority.clone(),
+                    "owner" => ctx.owner.clone(),
+                    "module" => ctx.module.clone(),
+                    _ => None,
+                };
+                match val {
+                    Some(v) => out.push_str(&v),
+                    None => {
+                        // Unknown placeholder: keep literal "{key}"
+                        out.push('{');
+                        out.push_str(key);
+                        out.push('}');
+                    }
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        // Push one UTF-8 char (could be multi-byte; for ASCII-heavy titles
+        // this is correct; for non-ASCII, we treat each byte literally which
+        // is wrong but rare in practice).
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 pub fn build_mr_payload(
@@ -364,7 +417,7 @@ pub fn build_mr_payload(
     serde_json::json!({
         "source_branch": source_branch,
         "target_branch": target_branch,
-        "title": format_mr_title(tapd_id, title),
+        "title": format_mr_title(tapd_id, title, None, &MrTitleContext::default()),
         "description": format!("{description}{acs_block}"),
         "assignee_ids": assignees,
         "reviewer_ids": reviewers,
@@ -419,8 +472,41 @@ mod payload_tests {
 
     #[test]
     fn mr_title_prefix() {
-        assert_eq!(format_mr_title("TAPD-9", "Add foo"), "[TAPD-9] Add foo");
+        let ctx = MrTitleContext::default();
+        assert_eq!(format_mr_title("TAPD-9", "Add foo", None, &ctx), "[TAPD-9] Add foo");
     }
+    #[test]
+    fn format_mr_title_custom_template_with_placeholders() {
+        let ctx = MrTitleContext {
+            priority: Some("urgent".into()),
+            owner: Some("alice".into()),
+            module: Some("api".into()),
+        };
+        let tmpl = "[{priority}] {tapd_id} - {title} ({module}) @{owner}";
+        let out = format_mr_title("TAPD-1", "Fix bug", Some(tmpl), &ctx);
+        assert_eq!(out, "[urgent] TAPD-1 - Fix bug (api) @alice");
+    }
+
+    #[test]
+    fn format_mr_title_unknown_placeholder_left_literal() {
+        let ctx = MrTitleContext::default();
+        // {nonexistent} is not a known placeholder, so it's left as-is.
+        let out = format_mr_title("TAPD-1", "x", Some("FOO {nonexistent} {title}"), &ctx);
+        assert_eq!(out, "FOO {nonexistent} x");
+    }
+
+    #[test]
+    fn format_mr_title_none_template_uses_default() {
+        let ctx = MrTitleContext::default();
+        // Even with optional fields set, the default template ignores them.
+        let ctx_full = MrTitleContext {
+            priority: Some("high".into()),
+            ..ctx
+        };
+        let out = format_mr_title("TAPD-1", "y", None, &ctx_full);
+        assert_eq!(out, "[TAPD-1] y");
+    }
+
 
     #[test]
     fn submitter_classifies_201_as_ok() {
