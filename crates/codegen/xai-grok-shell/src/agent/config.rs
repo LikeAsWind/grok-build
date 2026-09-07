@@ -1231,6 +1231,11 @@ pub struct TapdProjectConfig {
     pub mr_assignees: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adjudicate_mode: Option<AdjudicateMode>,
+    /// v2 spec §7.2.2: opt-in. After MR create, if true AND the GitLab project
+    /// has `merge_when_pipeline_succeeds = true`, submitter issues a second
+    /// PUT to merge the MR with squash. Disabled by default (D10).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_merge: bool,
 }
 
 fn default_target_branch() -> String { "main".into() }

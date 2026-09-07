@@ -426,6 +426,46 @@ pub fn build_mr_payload(
     })
 }
 
+/// Outcome of polling a GitLab MR for merge status. Used by the auto-merge
+/// path to decide whether to transition the workbench task to \`Done\` or
+/// \`BlockedForHuman\`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Merged,
+    PipelineFailed,
+    Conflict,
+}
+
+/// Whether auto-merge should fire for this project. Per v2 spec §7.2.2,
+/// this is an opt-in per-project setting; the global default is off (D10).
+pub fn should_auto_merge(project_cfg: &TapdProjectConfig) -> bool {
+    project_cfg.auto_merge
+}
+
+/// Build the JSON body for the second PUT to merge an MR. Pure function
+/// so the policy is unit-testable without a GitLab server.
+pub fn auto_merge_body(squash: bool) -> serde_json::Value {
+    serde_json::json!({
+        "merge_when_pipeline_succeeds": true,
+        "squash": squash,
+    })
+}
+
+/// Classify the current state of an MR into a \`MergeOutcome\`. Pure
+/// function so it is unit-testable without a GitLab server.
+pub fn classify_merge_state(state: &str, pipeline_status: Option<&str>, merge_status: Option<&str>) -> MergeOutcome {
+    match state {
+        "merged" => MergeOutcome::Merged,
+        "closed" => MergeOutcome::Conflict,
+        "open" => match (pipeline_status, merge_status) {
+            (Some("failed"), _) => MergeOutcome::PipelineFailed,
+            (_, Some("conflict")) | (_, Some("cannot_be_merged")) => MergeOutcome::Conflict,
+            _ => MergeOutcome::PipelineFailed,
+        },
+        _ => MergeOutcome::PipelineFailed,
+    }
+}
+
 pub fn classify_response(r: GitlabCreateMrResponse) -> MrSubmitOutcome {
     match r.status {
         201 => MrSubmitOutcome::Ok,
@@ -533,6 +573,39 @@ mod payload_tests {
     fn submitter_classifies_5xx_as_transient() {
         let outcome = classify_response(GitlabCreateMrResponse { status: 503, body: "{}".into() });
         assert!(matches!(outcome, MrSubmitOutcome::TransientError));
+    }
+
+    #[test]
+    fn auto_merge_body_includes_pipeline_succeeds_and_squash() {
+        let body = auto_merge_body(true);
+        assert_eq!(body["merge_when_pipeline_succeeds"], true);
+        assert_eq!(body["squash"], true);
+    }
+
+    #[test]
+    fn classify_merge_state_merged_routes_to_done() {
+        assert_eq!(classify_merge_state("merged", None, None), MergeOutcome::Merged);
+    }
+
+    #[test]
+    fn classify_merge_state_open_with_failed_pipeline_routes_to_blocked() {
+        assert_eq!(
+            classify_merge_state("open", Some("failed"), None),
+            MergeOutcome::PipelineFailed
+        );
+        assert_eq!(
+            classify_merge_state("open", Some("success"), Some("conflict")),
+            MergeOutcome::Conflict
+        );
+    }
+
+    #[test]
+    fn should_auto_merge_defaults_false_and_reads_per_project() {
+        let cfg = TapdProjectConfig::default();
+        assert!(!should_auto_merge(&cfg));
+        let mut cfg2 = TapdProjectConfig::default();
+        cfg2.auto_merge = true;
+        assert!(should_auto_merge(&cfg2));
     }
 }
 
