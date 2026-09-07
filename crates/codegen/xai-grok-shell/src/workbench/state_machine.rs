@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::config::AdjudicateMode;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
@@ -129,6 +131,19 @@ impl DesignDoc {
         }
         body.lines().any(|l| l.trim_start().starts_with("- "))
     }
+
+    /// True if the design has any open question tagged `critical:` (used
+    /// by the `Gatekeeper` adjudicate mode to decide whether to block).
+    /// Convention: open-question lines start with `- critical: <text>`
+    /// or `- non_critical: <text>`; lines without a prefix are treated
+    /// as non-critical (Recorder blocks them, Gatekeeper does not).
+    pub fn has_critical_questions(&self) -> bool {
+        // Open questions tagged `critical:` are detected by scanning the design body.
+        // We treat any `- critical:` line as a critical question (per spec §7.2.4).
+        self.raw
+            .lines()
+            .any(|l: &str| l.trim_start().starts_with("- critical:"))
+    }
 }
 
 fn retry_left(attempt: u8, max: u8) -> bool {
@@ -147,6 +162,7 @@ pub fn next_after_planner(
     design: &DesignDoc,
     priority: i32, // 0=Low, 1=Medium, 2=High, 3=Urgent (see Priority enum)
     ac_count: usize,
+    mode: AdjudicateMode,
 ) -> TaskState {
     const MAX: u8 = 3;
     let attempt = match &current {
@@ -158,7 +174,19 @@ pub fn next_after_planner(
             reason: "brainstorm retries exhausted".into(),
         };
     }
-    let needs_adj = design.has_open_questions() && (priority >= 2 || ac_count >= 5);
+    // AdjudicateMode determines when the Adjudicate stage runs.
+    // - AlwaysSkip: skip Adjudicate entirely (Brainstorm -> Develop).
+    // - Gatekeeper: only block on questions tagged `critical:`.
+    // - Recorder: block on any open question (v1 behavior).
+    let needs_adj = match mode {
+        AdjudicateMode::AlwaysSkip => false,
+        AdjudicateMode::Gatekeeper => {
+            design.has_open_questions() && design.has_critical_questions()
+        }
+        AdjudicateMode::Recorder => {
+            design.has_open_questions() && (priority >= 2 || ac_count >= 5)
+        }
+    };
     if needs_adj {
         TaskState::Running {
             stage: Stage::Adjudicate,
@@ -346,6 +374,7 @@ mod tests {
             &design_without_open_q(),
             1, // Medium priority
             2,
+            AdjudicateMode::Recorder,
         );
         assert!(matches!(next, TaskState::Running { stage: Stage::Develop, .. }));
     }
@@ -357,6 +386,7 @@ mod tests {
             &design_with_open_q(),
             3, // Urgent
             2,
+            AdjudicateMode::Recorder,
         );
         assert!(matches!(next, TaskState::Running { stage: Stage::Adjudicate, .. }));
     }
@@ -368,6 +398,7 @@ mod tests {
             &design_with_open_q(),
             0, // Low
             2,
+            AdjudicateMode::Recorder,
         );
         assert!(matches!(next, TaskState::Running { stage: Stage::Develop, .. }));
     }
@@ -379,6 +410,7 @@ mod tests {
             &design_with_open_q(),
             0, // Low priority but 5 ACs
             5,
+            AdjudicateMode::Recorder,
         );
         assert!(matches!(next, TaskState::Running { stage: Stage::Adjudicate, .. }));
     }
@@ -390,6 +422,7 @@ mod tests {
             &design_without_open_q(),
             1,
             2,
+            AdjudicateMode::Recorder,
         );
         assert!(matches!(next, TaskState::Dead { .. }));
     }
@@ -599,40 +632,73 @@ mod tests {
             _ => panic!("expected Running"),
         }
     }
-}
 
-/// Normalize a TaskState loaded from disk after a backend restart.
-/// `Running` becomes `Pending` so the dispatcher re-claims the task and
-/// restarts the current stage. Terminal states are kept as-is.
-pub fn resume_state(s: TaskState) -> TaskState {
-    match s {
-        TaskState::Running { .. } => TaskState::Pending,
-        other => other,
+    #[test]
+    fn has_critical_questions_detects_critical_prefix() {
+        let doc = DesignDoc::parse(
+            "## Open questions\n- critical: needs_owner_decision: Q1\n- non_critical: just FYI\n",
+        ).unwrap();
+        assert!(doc.has_critical_questions());
     }
-}
 
-/// Load the persisted TaskState from `<worktree>/.workbench/state.json`.
-/// Returns Ok(None) if the file does not exist.
-pub async fn load_state(worktree: &std::path::Path) -> anyhow::Result<Option<TaskState>> {
-    let p = worktree.join(".workbench").join("state.json");
-    if !p.exists() {
-        return Ok(None);
+    #[test]
+    fn has_critical_questions_ignores_non_critical() {
+        let doc = DesignDoc::parse(
+            "## Open questions\n- non_critical: small thing\n- another small\n",
+        ).unwrap();
+        assert!(!doc.has_critical_questions());
     }
-    let s = tokio::fs::read_to_string(&p).await?;
-    let parsed: TaskState = serde_json::from_str(&s)?;
-    Ok(Some(resume_state(parsed)))
-}
 
-/// Persist the TaskState to `<worktree>/.workbench/state.json`.
-/// Pretty-printed for human inspection during debug.
-pub async fn save_state(worktree: &std::path::Path, state: &TaskState) -> anyhow::Result<()> {
-    let dir = worktree.join(".workbench");
-    tokio::fs::create_dir_all(&dir).await?;
-    let p = dir.join("state.json");
-    let s = serde_json::to_string_pretty(state)?;
-    tokio::fs::write(&p, s).await?;
-    Ok(())
-}
+    #[test]
+    fn next_after_planner_gatekeeper_passes_non_critical_questions() {
+        // Gatekeeper mode only blocks on `- critical:` questions; non-critical
+        // open questions skip Adjudicate even with high priority / many ACs.
+        let doc = DesignDoc::parse(
+            "## Open questions\n- non_critical: minor thing\n",
+        ).unwrap();
+        let next = next_after_planner(
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
+            &doc,
+            3, // Urgent
+            10,
+            AdjudicateMode::Gatekeeper,
+        );
+        assert!(matches!(next, TaskState::Running { stage: Stage::Develop, .. }));
+    }
+
+    #[test]
+    fn next_after_planner_always_skip_goes_straight_to_develop() {
+        // AlwaysSkip mode bypasses Adjudicate even with critical questions.
+        let doc = DesignDoc::parse(
+            "## Open questions\n- critical: needs_owner_decision: Q1\n",
+        ).unwrap();
+        let next = next_after_planner(
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
+            &doc,
+            3,
+            10,
+            AdjudicateMode::AlwaysSkip,
+        );
+        assert!(matches!(next, TaskState::Running { stage: Stage::Develop, .. }));
+    }
+
+    #[test]
+    fn next_after_planner_recorder_blocks_on_any_open_question() {
+        // Recorder (v1 behavior): blocks on any open question when priority
+        // is High OR ac_count >= 5. Here ac_count = 5 triggers it.
+        let doc = DesignDoc::parse(
+            "## Open questions\n- just a question\n",
+        ).unwrap();
+        let next = next_after_planner(
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
+            &doc,
+            1, // Medium priority
+            5,
+            AdjudicateMode::Recorder,
+        );
+        assert!(matches!(next, TaskState::Running { stage: Stage::Adjudicate, .. }));
+    }
+
 
 #[cfg(test)]
 mod persistence_tests {
@@ -678,3 +744,40 @@ mod persistence_tests {
         assert!(loaded.is_none());
     }
 }
+
+
+}
+
+/// Normalize a TaskState loaded from disk after a backend restart.
+/// `Running` becomes `Pending` so the dispatcher re-claims the task and
+/// restarts the current stage. Terminal states are kept as-is.
+pub fn resume_state(s: TaskState) -> TaskState {
+    match s {
+        TaskState::Running { .. } => TaskState::Pending,
+        other => other,
+    }
+}
+
+/// Load the persisted TaskState from `<worktree>/.workbench/state.json`.
+/// Returns Ok(None) if the file does not exist.
+pub async fn load_state(worktree: &std::path::Path) -> anyhow::Result<Option<TaskState>> {
+    let p = worktree.join(".workbench").join("state.json");
+    if !p.exists() {
+        return Ok(None);
+    }
+    let s = tokio::fs::read_to_string(&p).await?;
+    let parsed: TaskState = serde_json::from_str(&s)?;
+    Ok(Some(resume_state(parsed)))
+}
+
+/// Persist the TaskState to `<worktree>/.workbench/state.json`.
+/// Pretty-printed for human inspection during debug.
+pub async fn save_state(worktree: &std::path::Path, state: &TaskState) -> anyhow::Result<()> {
+    let dir = worktree.join(".workbench");
+    tokio::fs::create_dir_all(&dir).await?;
+    let p = dir.join("state.json");
+    let s = serde_json::to_string_pretty(state)?;
+    tokio::fs::write(&p, s).await?;
+    Ok(())
+}
+

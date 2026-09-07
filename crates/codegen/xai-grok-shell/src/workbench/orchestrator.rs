@@ -17,10 +17,11 @@ use std::sync::Arc;
 
 use crate::tapd::store::TapdStore;
 use crate::workbench::artifacts::{ArtifactEnvelope, artifact_path};
+use crate::agent::config::AdjudicateMode;
 use crate::workbench::state_machine::{
+    AdjudicateVerdict, DesignDoc, MrSubmitOutcome, ReviewVerdict, Stage, TaskState,
     next_after_adjudicate, next_after_develop, next_after_mr_submit, next_after_planner,
-    next_after_review, next_after_verify, AdjudicateVerdict, DesignDoc, MrSubmitOutcome,
-    ReviewVerdict, Stage, TaskState,
+    next_after_review, next_after_verify,
 };
 use crate::workbench::submitter::{
     build_mr_payload, classify_response, resolve_assignees, resolve_reviewers, GitlabClient,
@@ -191,7 +192,7 @@ pub async fn drive_task(
 
     // 1. Brainstorm
     let design = stub_planner(&wt_path, &inputs).await?;
-    state = next_after_planner(state, &design, inputs.priority, inputs.acs.len());
+    state = next_after_planner(state, &design, inputs.priority, inputs.acs.len(), AdjudicateMode::Recorder);
     save_state(&wt_path, &state)?;
 
     // 2. Adjudicate (only when needed)
