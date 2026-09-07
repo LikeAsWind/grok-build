@@ -19,6 +19,7 @@
 
 pub mod artifacts;
 pub mod dispatcher;
+pub mod intervention;
 pub mod main_session;
 pub mod orchestrator;
 pub mod notifications;
