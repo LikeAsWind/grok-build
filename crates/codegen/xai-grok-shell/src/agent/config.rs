@@ -1,4 +1,4 @@
-﻿use crate::agent::auth_method::ModelByok;
+use crate::agent::auth_method::ModelByok;
 use crate::agent::model_providers::{
     ModelProviderConfig, auth_config_issues, model_provider_auth_name, parse_model_providers,
 };
@@ -1367,18 +1367,26 @@ impl Default for WorkbenchConcurrencyConfig {
 #[serde(default)]
 pub struct WorkbenchModelsConfig {
     pub planner_model: String,
+    pub planner_fallback: Option<String>,
     pub adjudicator_model: String,
+    pub adjudicator_fallback: Option<String>,
     pub coder_model: String,
+    pub coder_fallback: Option<String>,
     pub reviewer_model: String,
+    pub reviewer_fallback: Option<String>,
 }
 
 impl Default for WorkbenchModelsConfig {
     fn default() -> Self {
         Self {
             planner_model: "opus-4.1".into(),
+            planner_fallback: None,
             adjudicator_model: "sonnet-4.5".into(),
+            adjudicator_fallback: None,
             coder_model: "opus-4.1".into(),
+            coder_fallback: None,
             reviewer_model: "sonnet-4.5".into(),
+            reviewer_fallback: None,
         }
     }
 }
@@ -1492,6 +1500,8 @@ mod workbench_config_tests {
         assert!(cfg.is_configured_for_url(""));
     }
 
+
+
     #[test]
     fn tapd_project_config_carries_workbench_fields() {
         let toml = r#"
@@ -1510,6 +1520,23 @@ mod workbench_config_tests {
         assert_eq!(cfg.test_timeout_secs, Some(1800));
         assert_eq!(cfg.mr_reviewers, vec!["alice", "bob"]);
         assert_eq!(cfg.adjudicate_mode, Some(AdjudicateMode::Recorder));
+    }
+
+    #[test]
+    fn workbench_models_inner_struct_parses_fallback() {
+        let toml = "planner_model = \"opus-4.1\"\nplanner_fallback = \"gpt-5\"";
+        let cfg: WorkbenchModelsConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.planner_fallback.as_deref(), Some("gpt-5"));
+        assert_eq!(cfg.coder_fallback, None);
+    }
+
+    #[test]
+    fn fallback_fields_default_to_none() {
+        let cfg = WorkbenchConfig::default();
+        assert!(cfg.models.planner_fallback.is_none());
+        assert!(cfg.models.adjudicator_fallback.is_none());
+        assert!(cfg.models.coder_fallback.is_none());
+        assert!(cfg.models.reviewer_fallback.is_none());
     }
 
     #[test]
@@ -13154,3 +13181,9 @@ default = "grok-4.5"
         );
     }
 }
+
+
+
+
+
+
