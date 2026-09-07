@@ -94,6 +94,24 @@ pub fn write_worktree_gitignore(worktree: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Return the worktree path for a task, creating an empty placeholder
+/// directory if none exists. Unlike `create_worktree` (which calls
+/// `git worktree add`), this function does NOT touch git. It is used
+/// during the `replay` path: the orchestrator calls `git fetch` +
+/// `git reset --hard origin/<branch>` in the returned path before
+/// driving the new run.
+///
+/// Used by v2 spec §6.2.4 (D8): opt-in per project via
+/// `[tapd.projects.<key>].reuse_worktree = true`.
+pub fn reuse_worktree(grok_home: &str, task_id: &str) -> std::io::Result<std::path::PathBuf> {
+    let path = worktree_path(grok_home, task_id);
+    if path.exists() {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +163,29 @@ mod tests {
     fn worktree_path_under_grok_home() {
         let p = worktree_path("/home/user/.grok", "TAPD-9");
         assert_eq!(p, PathBuf::from("/home/user/.grok/worktrees/TAPD-9"));
+    }
+
+    #[test]
+    fn reuse_worktree_returns_existing_path_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let grok_home = tmp.path();
+        let task_id = "TAPD-99";
+        let wt = worktree_path(grok_home.to_str().unwrap(), task_id);
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("marker.txt"), "from prior run").unwrap();
+
+        let returned = reuse_worktree(grok_home.to_str().unwrap(), task_id).unwrap();
+        assert_eq!(returned, wt);
+        // marker is preserved (we did not nuke the directory)
+        assert!(returned.join("marker.txt").exists());
+    }
+
+    #[test]
+    fn reuse_worktree_creates_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let grok_home = tmp.path();
+        let returned = reuse_worktree(grok_home.to_str().unwrap(), "TAPD-NEW").unwrap();
+        assert!(returned.exists());
     }
 }
 
