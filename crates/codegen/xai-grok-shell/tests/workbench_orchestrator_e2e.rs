@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use xai_grok_shell::agent::config::GitlabConfig;
 use xai_grok_shell::tapd::store::TapdStore;
+use xai_grok_shell::workbench::intervention::InterventionRegistry;
 use xai_grok_shell::workbench::orchestrator::{drive_task, OrchestratorInputs};
 use xai_grok_shell::workbench::state_machine::{Stage, TaskState};
 use xai_grok_shell::workbench::submitter::GitlabClient;
@@ -69,7 +70,7 @@ async fn orchestrator_drives_task_to_done() {
         mr_assignees: vec![],
         project_id: "123".into(),
     };
-    let result = drive_task(store.clone(), &gitlab, inputs)
+    let result = drive_task(store.clone(), &gitlab, inputs, None)
         .await
         .expect("drive_task should succeed");
 
@@ -158,10 +159,165 @@ async fn orchestrator_with_adjudicate_runs_full_path() {
         mr_assignees: vec![],
         project_id: "456".into(),
     };
-    let result = drive_task(store.clone(), &gitlab, inputs).await.unwrap();
+    let result = drive_task(store.clone(), &gitlab, inputs, None).await.unwrap();
     assert!(matches!(result.final_state, TaskState::Done { .. }));
     assert_eq!(result.mr_url.as_deref(), Some("https://gl.example/mr/2"));
     mr_mock.assert_async().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_cancel_during_develop_routes_to_dead() {
+    // 1. Real local git repo + initial commit (matches the other tests in this file).
+    let tmp = tempdir::TempDir::new("workbench-orch-e2e-cancel").unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "--initial-branch=main"]);
+    run_git(&repo, &["config", "user.email", "test@example.com"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    std::fs::write(repo.join("hello.txt"), "v0
+").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "initial"]);
+
+    // 2. Mock GitLab server (not strictly needed since cancel happens before MR
+    // submit, but the orchestrator currently calls create_merge_request at the
+    // very end; cancel fires during Develop so GitLab is never reached).
+    let server = mockito::Server::new_async().await;
+    let _mr_mock = server
+        .mock("POST", "/api/v4/projects/123/merge_requests")
+        .with_status(201)
+        .with_body(r#"{"web_url":"https://gl.example/mr/never"}"#)
+        .create_async()
+        .await;
+
+    // 3. Real TapdStore
+    let store = Arc::new(TapdStore::new(tmp.path().join("store.sqlite")));
+
+    // 4. GitLab client pointing at the mock
+    unsafe { std::env::set_var("WORKBENCH_TEST_GITLAB_TOKEN", "tok-cancel"); }
+    let gitlab = GitlabClient::new(&GitlabConfig {
+        url: server.url(),
+        token_env: "WORKBENCH_TEST_GITLAB_TOKEN".into(),
+        default_assignees_self: false,
+    }).unwrap();
+
+    // 5. Intervention registry; cancel the task BEFORE drive_task runs.
+    // (v1 stubs are synchronous, so a mid-stage cancel is not observable;
+    //  but the "before stub_planner" check still fires because the registry
+    //  is consulted at every stage boundary.)
+    let intervention = Arc::new(InterventionRegistry::new());
+    intervention.cancel("TAPD-1");
+
+    // 6. Drive the task
+    let inputs = OrchestratorInputs {
+        tapd_id: "TAPD-1".into(),
+        title: "Add greeting".into(),
+        description: "Add a greeting endpoint.".into(),
+        acs: vec!["GET /greet returns 200".into()],
+        priority: 1,
+        repo_root: repo.clone(),
+        grok_home: tmp.path().to_path_buf(),
+        base_branch: "main".into(),
+        tapd_owner: None,
+        mr_reviewers: vec![],
+        mr_assignees: vec![],
+        project_id: "123".into(),
+    };
+    let result = drive_task(store.clone(), &gitlab, inputs, Some(Arc::clone(&intervention)))
+        .await
+        .expect("drive_task should return Dead");
+
+    // 7. The task is killed before any stage runs (the pre-stub-planner
+    // cancel check fires).
+    assert!(
+        matches!(result.final_state, TaskState::Dead { ref reason } if reason == "user_cancelled"),
+        "expected Dead {{ reason: user_cancelled }}, got {:?}",
+        result.final_state
+    );
+    assert!(result.mr_url.is_none(), "cancel must skip the GitLab call");
+    assert_eq!(
+        store.get_workbench_state("TAPD-1").unwrap().as_deref(),
+        Some("dead"),
+        "store reflects Dead state"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_cancel_during_develop_routes_to_dead() {
+    // 1. Real local git repo + initial commit (matches the other tests in this file).
+    let tmp = tempdir::TempDir::new("workbench-orch-e2e-cancel").unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "--initial-branch=main"]);
+    run_git(&repo, &["config", "user.email", "test@example.com"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    std::fs::write(repo.join("hello.txt"), "v0
+").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "initial"]);
+
+    // 2. Mock GitLab server (cancel fires before MR submit, so the mock is
+    // declared for safety but should NOT be called).
+    let server = mockito::Server::new_async().await;
+    let _mr_mock = server
+        .mock("POST", "/api/v4/projects/123/merge_requests")
+        .with_status(201)
+        .with_body(r#"{"web_url":"https://gl.example/mr/never"}"#)
+        .create_async()
+        .await;
+
+    // 3. Real TapdStore
+    let store = Arc::new(TapdStore::new(tmp.path().join("store.sqlite")));
+
+    // 4. GitLab client pointing at the mock
+    unsafe { std::env::set_var("WORKBENCH_TEST_GITLAB_TOKEN", "tok-cancel"); }
+    let gitlab = GitlabClient::new(&GitlabConfig {
+        url: server.url(),
+        token_env: "WORKBENCH_TEST_GITLAB_TOKEN".into(),
+        default_assignees_self: false,
+    }).unwrap();
+
+    // 5. Intervention registry; cancel the task BEFORE drive_task runs.
+    // The "before stub_planner" cancel check fires on entry to the pipeline.
+    let intervention = Arc::new(InterventionRegistry::new());
+    intervention.cancel("TAPD-1");
+
+    // 6. Drive the task with the intervention registry attached.
+    let inputs = OrchestratorInputs {
+        tapd_id: "TAPD-1".into(),
+        title: "Add greeting".into(),
+        description: "Add a greeting endpoint.".into(),
+        acs: vec!["GET /greet returns 200".into()],
+        priority: 1,
+        repo_root: repo.clone(),
+        grok_home: tmp.path().to_path_buf(),
+        base_branch: "main".into(),
+        tapd_owner: None,
+        mr_reviewers: vec![],
+        mr_assignees: vec![],
+        project_id: "123".into(),
+    };
+    let result = drive_task(
+        store.clone(),
+        &gitlab,
+        inputs,
+        Some(Arc::clone(&intervention)),
+    )
+    .await
+    .expect("drive_task should return Dead");
+
+    // 7. The task is killed before any stage runs (the pre-stub-planner
+    // cancel check fires).
+    match &result.final_state {
+        TaskState::Dead { reason } => assert_eq!(reason, "user_cancelled"),
+        other => panic!("expected Dead {{ reason: user_cancelled }}, got {:?}", other),
+    }
+    assert!(result.mr_url.is_none(), "cancel must skip the GitLab call");
+    assert_eq!(
+        store.get_workbench_state("TAPD-1").unwrap().as_deref(),
+        Some("dead"),
+        "store reflects Dead state"
+    );
 }
 
 fn run_git(cwd: &std::path::Path, args: &[&str]) {

@@ -23,6 +23,7 @@ use crate::workbench::state_machine::{
     next_after_adjudicate, next_after_develop, next_after_mr_submit, next_after_planner,
     next_after_review, next_after_verify,
 };
+use crate::workbench::intervention::InterventionRegistry;
 use crate::workbench::submitter::{
     build_mr_payload, classify_response, resolve_assignees, resolve_reviewers, GitlabClient,
 };
@@ -177,7 +178,20 @@ pub async fn drive_task(
     store: Arc<TapdStore>,
     gitlab: &GitlabClient,
     inputs: OrchestratorInputs,
+    intervention: Option<Arc<InterventionRegistry>>,
 ) -> anyhow::Result<OrchestratorResult> {
+    // Helper: if the user has cancelled (or paused + cancelled) this task,
+    // short-circuit to `Dead { reason: "user_cancelled" }`. Checked between
+    // stages AND before each stub LLM call so we abort promptly (D2).
+    let check_cancel = || -> Option<TaskState> {
+        let reg = intervention.as_ref()?;
+        let token = reg.token(&inputs.tapd_id)?;
+        if token.is_cancelled() {
+            Some(TaskState::Dead { reason: "user_cancelled".into() })
+        } else {
+            None
+        }
+    };
     let branch = branch_name(&inputs.tapd_id, &inputs.title);
     let wt_path = worktree_path(inputs.grok_home.to_str().unwrap(), &inputs.tapd_id);
     crate::workbench::worktree_manager::create_worktree(
@@ -191,28 +205,48 @@ pub async fn drive_task(
     save_state(&wt_path, &state)?;
 
     // 1. Brainstorm
+    if let Some(dead_state) = check_cancel() {
+        save_state(&wt_path, &dead_state)?;
+        return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
+    }
     let design = stub_planner(&wt_path, &inputs).await?;
     state = next_after_planner(state, &design, inputs.priority, inputs.acs.len(), AdjudicateMode::Recorder);
     save_state(&wt_path, &state)?;
 
     // 2. Adjudicate (only when needed)
     if matches!(state, TaskState::Running { stage: Stage::Adjudicate, .. }) {
+        if let Some(dead_state) = check_cancel() {
+            save_state(&wt_path, &dead_state)?;
+            return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
+        }
         stub_adjudicator(&wt_path, &inputs).await?;
         state = next_after_adjudicate(AdjudicateVerdict::Proceed);
         save_state(&wt_path, &state)?;
     }
 
     // 3. Develop
+    if let Some(dead_state) = check_cancel() {
+        save_state(&wt_path, &dead_state)?;
+        return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
+    }
     stub_coder(&wt_path, &inputs).await?;
     state = next_after_develop(true, 0);
     save_state(&wt_path, &state)?;
 
     // 4. Code Review
+    if let Some(dead_state) = check_cancel() {
+        save_state(&wt_path, &dead_state)?;
+        return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
+    }
     stub_reviewer(&wt_path, &inputs).await?;
     state = next_after_review(ReviewVerdict::Approved, 0);
     save_state(&wt_path, &state)?;
 
     // 5. Verify (stub: pass)
+    if let Some(dead_state) = check_cancel() {
+        save_state(&wt_path, &dead_state)?;
+        return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
+    }
     stub_runner(&wt_path, &inputs).await?;
     state = next_after_verify(0, 0);
     save_state(&wt_path, &state)?;
@@ -230,6 +264,10 @@ pub async fn drive_task(
         &assignees,
         &reviewers,
     );
+    if let Some(dead_state) = check_cancel() {
+        save_state(&wt_path, &dead_state)?;
+        return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
+    }
     let mr_url = match gitlab.create_merge_request(&inputs.project_id, &payload).await {
         Ok(resp) => {
             let outcome = classify_response(crate::workbench::submitter::GitlabCreateMrResponse {

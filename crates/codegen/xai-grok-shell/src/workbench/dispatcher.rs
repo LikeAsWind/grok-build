@@ -293,7 +293,7 @@ impl WorkbenchDispatcher {
                         mr_assignees: vec![],
                         project_id: "1".into(),
                     };
-                    let _ = drive_task(store.clone(), &g, inputs).await;
+                    let _ = drive_task(store.clone(), &g, inputs, None).await;
                 }
             });
             session_id_for_blocking
