@@ -56,6 +56,30 @@ impl SyncStats {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TaskMetricRow {
+    pub task_id: String,
+    pub stage: String,
+    pub attempt: u8,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub model: Option<String>,
+    pub fallback_used: i64,
+    pub child_session_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MrCommentRow {
+    pub id: i64,
+    pub tapd_id: String,
+    pub mr_url: String,
+    pub author: String,
+    pub body: String,
+    pub received_at: i64,
+    pub consumed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncCursor {
     pub directory: String,
@@ -286,6 +310,29 @@ impl TapdStore {
     state TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+            CREATE TABLE IF NOT EXISTS workbench_task_metrics (
+                task_id          TEXT NOT NULL,
+                stage            TEXT NOT NULL,
+                attempt          INTEGER NOT NULL,
+                started_at       INTEGER NOT NULL,
+                finished_at      INTEGER,
+                duration_ms      INTEGER,
+                model            TEXT,
+                fallback_used    INTEGER NOT NULL DEFAULT 0,
+                child_session_id TEXT,
+                PRIMARY KEY (task_id, stage, attempt)
+            );
+
+            CREATE TABLE IF NOT EXISTS workbench_mr_comments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tapd_id     TEXT NOT NULL,
+                mr_url      TEXT NOT NULL,
+                author      TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                received_at INTEGER NOT NULL,
+                consumed    INTEGER NOT NULL DEFAULT 0
+            );
 
             CREATE INDEX IF NOT EXISTS sync_runs_directory_idx ON sync_runs(directory, started_at DESC);
             ",
@@ -969,6 +1016,100 @@ impl TapdStore {
         )?;
         Ok(updated)
     }
+    /// Upsert a per-(task, stage, attempt) metric row. `fallback_used` is
+    /// 0 or 1; the caller passes the int to keep the SQL i64.
+    pub fn record_task_metric(
+        &self,
+        task_id: &str,
+        stage: &str,
+        attempt: u8,
+        started_at: i64,
+        finished_at: i64,
+        model: &str,
+        fallback_used: i64,
+        child_session_id: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let conn = self.open()?;
+        let duration = finished_at - started_at;
+        conn.execute(
+            "INSERT INTO workbench_task_metrics
+             (task_id, stage, attempt, started_at, finished_at, duration_ms, model, fallback_used, child_session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(task_id, stage, attempt) DO UPDATE SET
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                duration_ms = excluded.duration_ms,
+                model = excluded.model,
+                fallback_used = excluded.fallback_used,
+                child_session_id = excluded.child_session_id",
+            rusqlite::params![task_id, stage, attempt, started_at, finished_at, duration, model, fallback_used, child_session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn task_metrics(&self, task_id: &str) -> rusqlite::Result<Vec<TaskMetricRow>> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT task_id, stage, attempt, started_at, finished_at, duration_ms, model, fallback_used, child_session_id
+             FROM workbench_task_metrics WHERE task_id = ?1 ORDER BY started_at ASC"
+        )?;
+        let rows = stmt.query_map(rusqlite::params![task_id], |row| {
+            Ok(TaskMetricRow {
+                task_id: row.get(0)?,
+                stage: row.get(1)?,
+                attempt: row.get(2)?,
+                started_at: row.get(3)?,
+                finished_at: row.get(4)?,
+                duration_ms: row.get(5)?,
+                model: row.get(6)?,
+                fallback_used: row.get(7)?,
+                child_session_id: row.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn insert_mr_comment(
+        &self,
+        tapd_id: &str,
+        mr_url: &str,
+        author: &str,
+        body: &str,
+    ) -> rusqlite::Result<()> {
+        let conn = self.open()?;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO workbench_mr_comments (tapd_id, mr_url, author, body, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![tapd_id, mr_url, author, body, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn unconsumed_mr_comments(&self, tapd_id: &str) -> rusqlite::Result<Vec<MrCommentRow>> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, tapd_id, mr_url, author, body, received_at, consumed
+             FROM workbench_mr_comments WHERE tapd_id = ?1 AND consumed = 0 ORDER BY received_at ASC"
+        )?;
+        let rows = stmt.query_map(rusqlite::params![tapd_id], |row| {
+            Ok(MrCommentRow {
+                id: row.get(0)?,
+                tapd_id: row.get(1)?,
+                mr_url: row.get(2)?,
+                author: row.get(3)?,
+                body: row.get(4)?,
+                received_at: row.get(5)?,
+                consumed: row.get::<_, i64>(6)? != 0,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn mark_mr_comment_consumed(&self, id: i64) -> rusqlite::Result<()> {
+        let conn = self.open()?;
+        conn.execute("UPDATE workbench_mr_comments SET consumed = 1 WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
+    }
 }
 
 fn row_to_cursor(row: &rusqlite::Row) -> rusqlite::Result<SyncCursor> {
@@ -1398,5 +1539,42 @@ mod tests {
             Some("running:develop:0".into())
         );
         assert!(store.get_workbench_state("TAPD-9999").unwrap().is_none());
+    }
+
+    #[test]
+    fn workbench_task_metrics_round_trip() {
+        let (store, _dir) = store();
+        store.record_task_metric(
+            "TAPD-1", "develop", 0, 100, 200, "opus-4.1", 0, Some("child-1")
+        ).unwrap();
+        let rows = store.task_metrics("TAPD-1").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].stage, "develop");
+        assert_eq!(rows[0].model.as_deref(), Some("opus-4.1"));
+        assert_eq!(rows[0].fallback_used, 0);
+        assert_eq!(rows[0].child_session_id.as_deref(), Some("child-1"));
+    }
+
+    #[test]
+    fn workbench_task_metrics_overwrites_same_stage_attempt() {
+        let (store, _dir) = store();
+        store.record_task_metric("TAPD-1", "verify", 0, 100, 150, "opus-4.1", 0, None).unwrap();
+        store.record_task_metric("TAPD-1", "verify", 0, 100, 300, "opus-4.1", 0, None).unwrap();
+        let rows = store.task_metrics("TAPD-1").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].finished_at, Some(300));
+    }
+
+    #[test]
+    fn mr_comment_round_trip() {
+        let (store, _dir) = store();
+        store.insert_mr_comment("TAPD-1", "https://gl/mr/1", "alice", "looks good").unwrap();
+        let unconsumed = store.unconsumed_mr_comments("TAPD-1").unwrap();
+        assert_eq!(unconsumed.len(), 1);
+        assert_eq!(unconsumed[0].author, "alice");
+        assert_eq!(unconsumed[0].body, "looks good");
+        store.mark_mr_comment_consumed(unconsumed[0].id).unwrap();
+        let after = store.unconsumed_mr_comments("TAPD-1").unwrap();
+        assert!(after.is_empty());
     }
 }
