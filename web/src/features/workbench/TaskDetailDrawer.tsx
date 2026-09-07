@@ -9,6 +9,16 @@ import { StageTimeline } from './StageTimeline'
 export interface TaskDetailDrawerProps {
   task: TapdTask | null
   onClose: () => void
+  /** v2 §7.2.1: open PauseDialog. Caller wires the actual pause ext request. */
+  onPause?: (tapdId: string) => void
+  /** v2 §7.2.1: trigger resume ext method directly. */
+  onResume?: (tapdId: string) => void
+  /** v2 §7.2.1: trigger cancel ext method directly. */
+  onCancel?: (tapdId: string) => void
+  /** v2 §9.2.3: open ReplayDialog. Caller wires replay + pre_approved. */
+  onReplay?: (tapdId: string, stage?: string) => void
+  /** True only when the task has a design doc to preview (enables pre_approve). */
+  hasDesignDoc?: boolean
 }
 
 function DetailRow({ label, value }: { label: string; value: string | null | undefined }) {
@@ -60,7 +70,35 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
         <div className="mt-4 pt-3 border-t border-border-200/40">
           <h3 className="text-sm font-semibold mb-2">Pipeline</h3>
           <StageTimeline current="brainstorm" />
-        </div>
+        {task && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              className="rounded border border-border-200/40 px-2 py-1 text-[length:var(--fs-xs)] text-text-200 hover:bg-bg-200"
+              onClick={() => onPause?.(task.tapdId)}
+            >
+              {t('pause')}
+            </button>
+            <button
+              className="rounded border border-border-200/40 px-2 py-1 text-[length:var(--fs-xs)] text-text-200 hover:bg-bg-200"
+              onClick={() => onResume?.(task.tapdId)}
+            >
+              {t('resume')}
+            </button>
+            <button
+              className="rounded border border-border-200/40 px-2 py-1 text-[length:var(--fs-xs)] text-text-200 hover:bg-bg-200"
+              onClick={() => onCancel?.(task.tapdId)}
+            >
+              {t('cancelTask')}
+            </button>
+            <button
+              className="rounded border border-border-200/40 px-2 py-1 text-[length:var(--fs-xs)] text-text-200 hover:bg-bg-200"
+              onClick={() => onReplay?.(task.tapdId, hasDesignDoc ? 'adjudicate' : 'develop')}
+            >
+              {t('replay')}
+            </button>
+          </div>
+        )}
+      </div>
       )}
     </Dialog>
   )
