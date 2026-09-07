@@ -123,6 +123,27 @@ export interface BrowseDirResult {
  * 浏览后端机器上的本地文件系统目录
  * 需要 server-key 认证（查询参数或 header）
  */
+// ── cron.yaml 读写（v2 spec §7.2.3）─────────────────────────────────
+//
+// Backend endpoints are not yet wired (ext method registration deferred to
+// M2.12 follow-up). The UI consumes these helpers so the API surface is
+// stable; calls will surface a backend error until the endpoint exists.
+
+export interface CronYamlFile {
+  /** Absolute path on the backend host (typically ~/.grok/cron.yaml). */
+  path: string
+  /** Raw YAML content. Empty string if file does not exist yet. */
+  content: string
+}
+
+export async function getCronYaml(): Promise<CronYamlFile> {
+  return (await acpExtRequest('x.ai/workbench/cron/get')) as CronYamlFile
+}
+
+export async function saveCronYaml(content: string): Promise<void> {
+  await acpExtRequest('x.ai/workbench/cron/save', { content })
+}
+
 export async function browseDirectory(dirPath: string): Promise<BrowseDirResult> {
   const secret = getAcpSecret()
   if (!secret) throw new Error('未连接后端')

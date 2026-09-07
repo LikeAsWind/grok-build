@@ -99,5 +99,19 @@
     "hoursIn": "in {{count}}h",
     "daysAgo": "{{count}}d ago",
     "daysIn": "in {{count}}d"
+  "cronSaveFailed": "Failed to save cron.yaml.",
+  "cronLoadFailed": "Failed to load cron.yaml from the backend.",
+  "cronSaved": "Saved.",
+  "cronSave": "Save",
+  "cronNoProjects": "No projects with cron schedules yet.",
+  "cronRemove": "Remove",
+  "cronPriorityFilter": "Priority filter (comma-separated)",
+  "cronStatusFilter": "TAPD status filter (comma-separated)",
+  "cronExpression": "Cron expression",
+  "cronAddSchedule": "Add schedule",
+  "cronSchedules": "Schedules",
+  "cronProjectKey": "Project key",
+  "cronSettingsDesc": "Per-project schedules that re-trigger the dispatcher on a cron tick.",
+  "cronSettingsTitle": "Cron schedules",
   }
 }

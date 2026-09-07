@@ -99,5 +99,19 @@
     "hoursIn": "{{count}} 小时后",
     "daysAgo": "{{count}} 天前",
     "daysIn": "{{count}} 天后"
+  "cronSaveFailed": "保存 cron.yaml 失败。",
+  "cronLoadFailed": "加载后端 cron.yaml 失败。",
+  "cronSaved": "已保存。",
+  "cronSave": "保存",
+  "cronNoProjects": "暂无带 cron 调度的项目。",
+  "cronRemove": "删除",
+  "cronPriorityFilter": "优先级过滤（逗号分隔）",
+  "cronStatusFilter": "TAPD 状态过滤（逗号分隔）",
+  "cronExpression": "Cron 表达式",
+  "cronAddSchedule": "添加规则",
+  "cronSchedules": "调度规则",
+  "cronProjectKey": "项目 key",
+  "cronSettingsDesc": "每个项目的 cron 调度规则，按分钟触发 dispatcher。",
+  "cronSettingsTitle": "Cron 调度",
   }
 }
