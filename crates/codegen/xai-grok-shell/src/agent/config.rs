@@ -1236,6 +1236,14 @@ pub struct TapdProjectConfig {
     /// PUT to merge the MR with squash. Disabled by default (D10).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_merge: bool,
+    /// v2 spec §7.2.6: TAPD status writeback on terminal Done state.
+    /// None means use the project default ("done").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tapd_status_on_done: Option<String>,
+    /// v2 spec §7.2.6: TAPD status writeback on terminal BlockedForHuman.
+    /// None means use the project default ("blocked").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tapd_status_on_blocked: Option<String>,
 }
 
 fn default_target_branch() -> String { "main".into() }
@@ -1249,6 +1257,30 @@ fn is_order_desc(b: &bool) -> bool {
 }
 
 impl TapdProjectConfig {
+    /// v2 spec §7.2.6: resolve the TAPD status to writeback for a terminal
+    /// state. Returns None for `Dead` (internal infrastructure failure;
+    /// no TAPD change per spec). Per-project overrides win over the global
+    /// defaults ("done" / "blocked").
+    pub fn writeback_status_for(&self, state: &crate::workbench::state_machine::TaskState) -> Option<String> {
+        use crate::workbench::state_machine::TaskState;
+        match state {
+            TaskState::Done { .. } => Some(self.tapd_status_on_done_str()),
+            TaskState::BlockedForHuman { .. } => Some(self.tapd_status_on_blocked_str()),
+            TaskState::Dead { .. } => None,
+            _ => None, // Running / Pending: not terminal
+        }
+    }
+
+    /// Resolve the Done status with per-project override (default "done").
+    pub fn tapd_status_on_done_str(&self) -> String {
+        self.tapd_status_on_done.clone().unwrap_or_else(|| "done".into())
+    }
+
+    /// Resolve the BlockedForHuman status with per-project override (default "blocked").
+    pub fn tapd_status_on_blocked_str(&self) -> String {
+        self.tapd_status_on_blocked.clone().unwrap_or_else(|| "blocked".into())
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
     }
@@ -1558,6 +1590,35 @@ mod workbench_config_tests {
         assert!(cfg.mr_reviewers.is_empty());
         assert!(cfg.mr_assignees.is_empty());
         assert!(cfg.adjudicate_mode.is_none());
+    }
+
+    #[test]
+    fn writeback_done_uses_default_status() {
+        // Default config: per-project override unset, fallback is "done".
+        let cfg = TapdProjectConfig::default();
+        let out = cfg.tapd_status_on_done_str();
+        assert_eq!(out, "done");
+    }
+
+    #[test]
+    fn writeback_blocked_uses_per_project_override() {
+        // Per-project opt-in wins over the global default.
+        let mut cfg = TapdProjectConfig::default();
+        cfg.tapd_status_on_blocked = Some("waiting_on_human".into());
+        assert_eq!(cfg.tapd_status_on_blocked_str(), "waiting_on_human");
+        // Done path still uses default.
+        assert_eq!(cfg.tapd_status_on_done_str(), "done");
+    }
+
+    #[test]
+    fn dead_state_does_not_trigger_writeback() {
+        // v2 spec §7.2.6: Dead is internal infrastructure failure; we do NOT
+        // flip the TAPD status. The helper returns None for Dead (no writeback).
+        use crate::workbench::state_machine::TaskState;
+        let cfg = TapdProjectConfig::default();
+        assert_eq!(cfg.writeback_status_for(&TaskState::Dead { reason: "x".into() }), None);
+        // But Done + BlockedForHuman do trigger writeback.
+        assert!(cfg.writeback_status_for(&TaskState::Done { mr_url: "u".into(), finished_at: 0 }).is_some());
     }
 }
 /// `[sandbox]` section from config.toml.
