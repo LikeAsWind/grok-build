@@ -1310,6 +1310,11 @@ pub enum AdjudicateMode {
     Recorder,
     Gatekeeper,
     AlwaysSkip,
+    /// After Brainstorm, always block for human approval regardless of
+    /// open questions. The UI shows the design in a preview pane; "Approve"
+    /// calls `x.ai/workbench/replay` with `pre_approved: true` which
+    /// skips the Adjudicate stage on resume.
+    HumanPreApprove,
 }
 
 /// `[workbench]` section from config.toml.

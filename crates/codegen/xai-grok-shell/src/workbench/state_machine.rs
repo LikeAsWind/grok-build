@@ -183,10 +183,20 @@ pub fn next_after_planner(
         AdjudicateMode::Gatekeeper => {
             design.has_open_questions() && design.has_critical_questions()
         }
+        AdjudicateMode::HumanPreApprove => true, // always block (handled below as BlockedForHuman)
         AdjudicateMode::Recorder => {
             design.has_open_questions() && (priority >= 2 || ac_count >= 5)
         }
     };
+    // HumanPreApprove short-circuits: regardless of `needs_adj`, route to
+    // BlockedForHuman so the UI can show the design in a preview pane.
+    if matches!(mode, AdjudicateMode::HumanPreApprove) {
+        return TaskState::BlockedForHuman {
+            stage: Stage::Adjudicate,
+            reason: "human_pre_approve_pending".into(),
+            payload: serde_json::json!({}),
+        };
+    }
     if needs_adj {
         TaskState::Running {
             stage: Stage::Adjudicate,
@@ -697,6 +707,29 @@ mod tests {
             AdjudicateMode::Recorder,
         );
         assert!(matches!(next, TaskState::Running { stage: Stage::Adjudicate, .. }));
+    }
+
+    #[test]
+    fn next_after_planner_human_pre_approve_always_blocks() {
+        // HumanPreApprove: regardless of open questions, route to
+        // BlockedForHuman (the UI shows the design in a preview pane;
+        // the user clicks "Approve" which triggers `x.ai/workbench/replay`
+        // with `pre_approved: true`, skipping the Adjudicate stage).
+        let doc = DesignDoc::parse("## Goal\nfix\n## Open questions\nNone.\n").unwrap();
+        let next = next_after_planner(
+            TaskState::Running { stage: Stage::Brainstorm, attempt: 0, started_at: 0, fallback_model: None, last_error: None },
+            &doc,
+            0, // Low priority
+            1, // Few ACs
+            AdjudicateMode::HumanPreApprove,
+        );
+        match next {
+            TaskState::BlockedForHuman { stage, reason, .. } => {
+                assert_eq!(stage, Stage::Adjudicate);
+                assert_eq!(reason, "human_pre_approve_pending");
+            }
+            _ => panic!("expected BlockedForHuman, got {:?}", next),
+        }
     }
 
 
