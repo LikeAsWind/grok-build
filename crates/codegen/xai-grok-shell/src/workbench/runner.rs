@@ -14,6 +14,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
+use serde_json;
+
 /// Pick a shell binary + flag for the current platform. Windows shells
 /// (`cmd.exe`) don't accept `-c`; Unix shells (`sh`) do.
 fn shell_for(cmd: &str) -> Command {
@@ -38,6 +40,57 @@ pub struct RunResult {
     pub stdout: String,
     pub stderr: String,
     pub duration_ms: u64,
+    /// Per-test events parsed from `cargo nextest --message-format json`.
+    /// Empty when nextest is not used (v1 default).
+    pub nextest_events: Vec<NextestEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NextestEventKind {
+    Started,
+    Passed,
+    Failed,
+    Skipped,
+}
+
+#[derive(Clone, Debug)]
+pub struct NextestEvent {
+    pub name: String,
+    pub kind: NextestEventKind,
+    pub message: Option<String>,
+}
+
+/// Detect whether `cargo-nextest` is on PATH. Uses `where` on Windows,
+/// `which` on unix. Tolerant: returns `false` on any IO / spawn error.
+pub fn is_nextest_available() -> bool {
+    let probe = if cfg!(windows) { "where" } else { "which" };
+    std::process::Command::new(probe)
+        .arg("cargo-nextest")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Parse a single line of `cargo nextest --message-format json` output.
+/// Returns `None` for non-test events (e.g. `run-started`) and for lines
+/// that aren't valid JSON.
+pub fn parse_nextest_line(line: &str) -> Option<NextestEvent> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let event = v.get("event")?.as_str()?;
+    let name = v.get("name")?.as_str()?.to_string();
+    let kind = match event {
+        "test-started" => NextestEventKind::Started,
+        "test-passed" => NextestEventKind::Passed,
+        "test-failed" => NextestEventKind::Failed,
+        "test-skipped" => NextestEventKind::Skipped,
+        _ => return None,
+    };
+    let message = v
+        .get("stdout")
+        .and_then(|s| s.get("message"))
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string());
+    Some(NextestEvent { name, kind, message })
 }
 
 /// Run a shell command, capture stdout + stderr + exit code. A future
@@ -77,6 +130,7 @@ pub fn run_and_capture(cmd: &str, cwd: &Path, timeout_secs: u64) -> std::io::Res
         stdout,
         stderr,
         duration_ms: started.elapsed().as_millis() as u64,
+        nextest_events: Vec::new(), // populated by callers when nextest is used
     })
 }
 
@@ -190,6 +244,7 @@ mod tests {
             stdout: "ok\n".into(),
             stderr: String::new(),
             duration_ms: 12,
+            nextest_events: vec![],
         };
         let p = stages.join("5-verify.md");
         write_artifact(&p, "TAPD-1", 0, &r).unwrap();
@@ -200,4 +255,36 @@ mod tests {
         assert!(raw.contains("verdict: pass"));
         assert!(raw.contains("```\necho ok\n```"));
     }
+
+    #[test]
+    fn nextest_available_detects_binary() {
+        // Just check the helper does not panic and returns a bool.
+        let _ = is_nextest_available();
+    }
+
+    #[test]
+    fn nextest_event_parses_test_passed() {
+        let line = r#"{"event":"test-passed","name":"tests::foo","elapsed_secs":0.012}"#;
+        let e = parse_nextest_line(line).expect("should parse");
+        assert_eq!(e.name, "tests::foo");
+        assert!(matches!(e.kind, NextestEventKind::Passed));
+    }
+
+    #[test]
+    fn nextest_event_parses_test_failed_with_message() {
+        let line = r#"{"event":"test-failed","name":"tests::bar","stdout":{"message":"boom"}}"#;
+        let e = parse_nextest_line(line).expect("should parse");
+        assert_eq!(e.name, "tests::bar");
+        assert!(matches!(e.kind, NextestEventKind::Failed));
+        if let NextestEventKind::Failed = e.kind {
+            assert_eq!(e.message.as_deref(), Some("boom"));
+        }
+    }
+
+    #[test]
+    fn nextest_event_ignores_unknown() {
+        assert!(parse_nextest_line("not json").is_none());
+        assert!(parse_nextest_line(r#"{"event":"run-started"}"#).is_none());
+    }
 }
+
