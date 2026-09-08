@@ -2,6 +2,14 @@
 //! Co-located `#[path]`-style child of `mvp_agent` (`use super::*`) so the `impl`
 //! block keeps access to `MvpAgent`'s private fields.
 use super::*;
+
+/// V2.5 stub: produce a canned (session_id, text) pair.
+/// See [`MvpAgent::create_stage_session`].
+pub(crate) fn stage_session_canned_output(_prompt: &str) -> (String, String) {
+    let session_id = format!("v25-stub-{}", uuid::Uuid::new_v4());
+    let text = "## Changes\n- V2.5 stub: real LLM deferred to V2.6\n## Self-check\n- [x] compiles\n".to_string();
+    (session_id, text)
+}
 /// Bound on close's wait for a prompt still in intake.
 pub(super) const CLOSE_INTAKE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Bound on close's wait for an in-flight attach.
@@ -39,6 +47,32 @@ impl CloseOutcome {
     }
 }
 impl MvpAgent {
+    /// V2.5 stub: open a short-lived ACP child session, send `prompt`,
+    /// stream the response, return `(session_id, full_text)`.
+    ///
+    /// **NOT YET WIRED to the real ACP layer.** `MvpAgent` acts as the
+    /// ACP server (responds to external `session/new`), not as a client.
+    /// The "real LLM" path requires a new internal subagent role wired
+    /// through `subagent_coordinator` / `task::coordinator` — see
+    /// `docs/superpowers/specs/2026-09-07-stub-to-real-llm-design.md` §11
+    /// Open Question #1 and the V2.6 follow-up plan.
+    ///
+    /// For V2.5 this returns a canned artifact body so `MvpAgentLlmStage`
+    /// compiles, the fallback path exercises, and metrics rows record
+    /// `fallback_used`. Manual smoke test (Task 4.4) will still fail
+    /// because no real diff is produced — that's the documented V2.5 gap.
+    pub async fn create_stage_session(
+        &self,
+        prompt: &str,
+    ) -> anyhow::Result<(String, String)> {
+        tracing::warn!(
+            prompt_bytes = prompt.len(),
+            "MvpAgent::create_stage_session: V2.5 stub. Real ACP integration deferred to V2.6. \
+             See docs/superpowers/specs/2026-09-07-stub-to-real-llm-design.md §11."
+        );
+        Ok(stage_session_canned_output(prompt))
+    }
+
     /// Ask a live session actor to shut down.
     pub(crate) fn request_session_shutdown(&self, id: &acp::SessionId) {
         if let Some(handle) = self.resident_handle(id) {
@@ -526,4 +560,18 @@ pub(crate) struct RegistrySnapshot {
     pub subagent_queued: usize,
     pub workspace_bindings: Option<usize>,
     pub workspace_activity_sessions: Option<usize>,
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stage_session_canned_output_round_trip() {
+        let (session_id, text) = stage_session_canned_output("ignored");
+        assert!(session_id.starts_with("v25-stub-"));
+        assert!(text.contains("## Self-check"));
+        assert!(text.contains("compiles"));
+    }
 }
