@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::config::{GitlabConfig, Priority};
+use crate::agent::config::{GitlabConfig, Priority};use crate::tapd::store::TapdStore;
 use crate::workbench::orchestrator::{drive_task, OrchestratorInputs};
 use crate::workbench::submitter::GitlabClient;
 
@@ -177,6 +177,7 @@ pub struct HealthSnapshot {
 /// session actor (separate concern; not owned here).
 pub struct WorkbenchDispatcher {
     store: Arc<crate::tapd::store::TapdStore>,
+    grok_home: std::path::PathBuf,
     cfg: crate::agent::config::WorkbenchConfig,
     queue: parking_lot::Mutex<WorkbenchQueue>,
     slots: parking_lot::Mutex<SlotAccountant>,
@@ -197,6 +198,7 @@ impl WorkbenchDispatcher {
         );
         Self {
             store,
+            grok_home: xai_grok_config::grok_home(),
             cfg,
             queue: parking_lot::Mutex::new(WorkbenchQueue::default()),
             slots: parking_lot::Mutex::new(slots),

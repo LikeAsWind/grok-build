@@ -424,16 +424,15 @@ async fn handle_workbench_metrics(agent: &MvpAgent, args: &acp::ExtRequest) -> E
     let since_ts = req.since_ts.unwrap_or(0);
     let dispatcher = match agent.workbench_dispatcher.borrow().as_ref() {
         Some(d) => d.clone(),
-        None => return to_ext_response(Ok(serde_json::json!({
-            return to_ext_response(Ok(default_metrics_summary(req.task_id, since_ts))),
+      None => return to_ext_response(Ok(default_metrics_summary(req.task_id, since_ts))),
     };
     let rows = tokio::task::spawn_blocking({
         let store = dispatcher.store_clone();
         let task_id = req.task_id.clone();
         move || -> anyhow::Result<Vec<crate::tapd::store::TaskMetricRow>> {
             match task_id {
-                Some(id) => store.task_metrics(&id),
-                None => store.all_task_metrics(),
+                Some(id) => Ok(store.task_metrics(&id)?),
+                None => Ok(store.all_task_metrics()?),
             }
         }
     })
@@ -463,7 +462,7 @@ async fn handle_workbench_timeline(agent: &MvpAgent, args: &acp::ExtRequest) -> 
     let req: Req = parse_params(args)?;
     let dispatcher = match agent.workbench_dispatcher.borrow().as_ref() {
         Some(d) => d.clone(),
-        None => return to_ext_response(Ok(serde_json::json!({"tapd_id": req.tapd_id, "events": []})),
+        None => return to_ext_response(Ok(serde_json::json!({"tapd_id": req.tapd_id, "events": []}))),
     };
     let events = tokio::task::spawn_blocking({
         let store = dispatcher.store_clone();

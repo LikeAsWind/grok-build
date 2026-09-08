@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::agent::config::GitlabConfig;
+use crate::agent::config::{GitlabConfig, TapdProjectConfig};
 
 /// Response wrapper for `POST /projects/:id/merge_requests`. We capture the
 /// raw body so the state machine / artifact writer can inspect the JSON

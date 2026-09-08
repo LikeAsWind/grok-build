@@ -1303,6 +1303,9 @@ impl Default for TapdProjectConfig {
             mr_reviewers: Vec::new(),
             mr_assignees: Vec::new(),
             adjudicate_mode: None,
+            auto_merge: false,
+            tapd_status_on_done: None,
+            tapd_status_on_blocked: None,
         }
     }
 }

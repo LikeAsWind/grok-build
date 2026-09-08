@@ -12,8 +12,9 @@
 //! from `TapdStore::task_metrics` and feeds them to `aggregate`.
 
 use crate::tapd::store::TaskMetricRow;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageAggregate {
     pub stage: String,
     pub p50_ms: i64,
@@ -22,7 +23,7 @@ pub struct StageAggregate {
     pub fallback_count: i64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Totals {
     pub done: i64,
     pub blocked: i64,
@@ -30,7 +31,7 @@ pub struct Totals {
     pub sample_size: i64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetricsSummary {
     pub project_key: Option<String>,
     pub since_ts: i64,

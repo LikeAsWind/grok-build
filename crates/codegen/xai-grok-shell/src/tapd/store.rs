@@ -1093,7 +1093,7 @@ impl TapdStore {
         rows.collect()
     }
 
-    pub fn insert_mr_comment((
+    pub fn insert_mr_comment(
         &self,
         tapd_id: &str,
         mr_url: &str,

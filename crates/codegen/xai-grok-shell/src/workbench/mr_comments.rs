@@ -36,19 +36,43 @@ pub fn external_comment_section(comment: &MrCommentRow) -> String {
 
 /// Pending comments for a task (unconsumed only). Thin wrapper over
 /// `TapdStore::unconsumed_mr_comments` for symmetry with the rest of the
-//! v2 workbench modules.
+/// v2 workbench modules.
 pub fn pending_for(store: &TapdStore, tapd_id: &str) -> rusqlite::Result<Vec<MrCommentRow>> {
     store.unconsumed_mr_comments(tapd_id)
 }
 
 /// Mark a comment consumed. Returns the number of rows affected (0 if
 /// the comment was already consumed, 1 if this call flipped it).
-pub fn consume(store: &TapdStore, comment_id: i64) -> rusqlite::Result<usize> {
+pub fn consume(store: &TapdStore, comment_id: i64) -> rusqlite::Result<()> {
     store.mark_mr_comment_consumed(comment_id)
 }
 
+/// Append a `## External comment` section to the task's `1-design.md` and
+/// mark the comment consumed (best-effort: a crash between the two
+/// operations leaves the comment pending; the next drain sweep retries).
+pub fn append_to_design_and_consume(
+    store: &TapdStore,
+    comment: &MrCommentRow,
+    design_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    let section = external_comment_section(comment);
+    if let Some(parent) = design_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(design_path)?;
+    writeln!(f, "
+{section}
+")?;
+    store.mark_mr_comment_consumed(comment.id)?;
+    Ok(())
+}
+
 /// Insert a comment. Thin wrapper for symmetry; the inbound HTTP handler
-//! calls this on POST /x.ai/workbench/mr_comment.
+/// calls this on POST /x.ai/workbench/mr_comment.
 pub fn record(store: &TapdStore, tapd_id: &str, mr_url: &str, author: &str, body: &str) -> rusqlite::Result<()> {
     store.insert_mr_comment(tapd_id, mr_url, author, body)
 }
