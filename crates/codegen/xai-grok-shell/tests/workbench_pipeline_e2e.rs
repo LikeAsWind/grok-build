@@ -15,7 +15,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use xai_grok_shell::tapd::store::{TapdStore, UpsertTaskInput};
+use xai_grok_shell::tapd::store::TapdStore;
 use xai_grok_shell::agent::config::AdjudicateMode;
 use xai_grok_shell::workbench::dispatcher::{HealthSnapshot, SlotAccountant, WorkbenchQueue};
 use xai_grok_shell::workbench::state_machine::{
