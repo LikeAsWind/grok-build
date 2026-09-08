@@ -20,6 +20,7 @@
     "title": "开始新对话",
     "description": "为此会话选择工作目录",
     "workingDirectory": "工作目录",
+    "recentDirectories": "最近目录",
     "enterAbsolutePath": "输入绝对路径...",
     "backToDirectoryList": "返回目录列表",
     "selectDirectory": "选择目录...",

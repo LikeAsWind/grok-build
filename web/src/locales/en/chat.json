@@ -20,6 +20,7 @@
     "title": "Start a new conversation",
     "description": "Choose a working directory for this session",
     "workingDirectory": "Working Directory",
+    "recentDirectories": "Recent directories",
     "enterAbsolutePath": "Enter absolute path...",
     "backToDirectoryList": "Back to directory list",
     "selectDirectory": "Select directory...",
