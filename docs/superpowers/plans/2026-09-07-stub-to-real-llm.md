@@ -13,7 +13,7 @@
 - Foundation, `LlmStage`, fake stage, config flag, prompt builders, orchestrator wiring, dispatcher fallback, parser tests, and fallback metrics are implemented.
 - `use_real_llm` remains opt-in but safely uses the canned V2.5 stage while the dispatcher is owned by a `Send + Sync` sync callback and `MvpAgent` remains LocalSet-bound.
 - Real ACP child-session wiring, real diffs, and manual smoke validation are V2.6 work; the V2.5 implementation must not be treated as live LLM execution.
-- Existing unrelated validation failures remain documented below: metrics unit fixtures panic on missing rows, and several integration test files have pre-existing compile errors.
+- Existing unrelated validation failures remain documented below: the full library suite has environment/authentication/folder-trust failures and stack overflows. Workbench-focused e2e tests and `cargo check --tests` pass.
 
 ### Task Status (2026-09-09)
 

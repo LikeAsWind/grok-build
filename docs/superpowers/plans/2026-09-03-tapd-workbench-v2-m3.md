@@ -1,6 +1,6 @@
 # TAPD Workbench Pipeline v2 — M3 Plan (Observability)
 
-> **Execution status (2026-09-09):** M3 implementation tasks are landed through `f0c96e2f`. The completion gate remains open because the repository has pre-existing metrics fixture failures and integration compile errors documented in the V2.5 plan; no tag or MR was created.
+> **Execution status (2026-09-09):** M3 implementation tasks are landed through `f0c96e2f`. Workbench-focused e2e tests and `cargo check --tests` pass after compatibility fixes. The completion gate remains open because the full library suite still has unrelated environment/authentication/folder-trust failures and stack overflows; no tag or MR was created.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
