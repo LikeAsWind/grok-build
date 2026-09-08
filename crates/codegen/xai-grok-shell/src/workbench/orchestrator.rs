@@ -321,6 +321,7 @@ pub async fn drive_task(
     // 1. Brainstorm
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
+        store.put_workbench_state(&inputs.tapd_id, "dead")?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
     let design = stub_planner(&wt_path, &inputs).await?;
@@ -331,6 +332,7 @@ pub async fn drive_task(
     if matches!(state, TaskState::Running { stage: Stage::Adjudicate, .. }) {
         if let Some(dead_state) = check_cancel() {
             save_state(&wt_path, &dead_state)?;
+            store.put_workbench_state(&inputs.tapd_id, "dead")?;
             return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
         }
         stub_adjudicator(&wt_path, &inputs).await?;
@@ -341,6 +343,7 @@ pub async fn drive_task(
     // 3. Develop — V2.5: real LLM call via trait injection + fallback loop.
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
+        store.put_workbench_state(&inputs.tapd_id, "dead")?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
     let mut develop_attempt: u8 = 0;
@@ -390,6 +393,7 @@ pub async fn drive_task(
                     None => {
                         let dead = TaskState::Dead { reason: format!("coder_failed: {e}") };
                         save_state(&wt_path, &dead)?;
+                        store.put_workbench_state(&inputs.tapd_id, "dead")?;
                         return Ok(OrchestratorResult {
                             final_state: dead,
                             branch,
@@ -410,6 +414,7 @@ pub async fn drive_task(
     // 4. Code Review — V2.5: same trait-injection + fallback pattern.
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
+        store.put_workbench_state(&inputs.tapd_id, "dead")?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
     let mut review_attempt: u8 = 0;
@@ -467,6 +472,7 @@ pub async fn drive_task(
                     None => {
                         let dead = TaskState::Dead { reason: format!("reviewer_failed: {e}") };
                         save_state(&wt_path, &dead)?;
+                        store.put_workbench_state(&inputs.tapd_id, "dead")?;
                         return Ok(OrchestratorResult {
                             final_state: dead,
                             branch,
@@ -490,6 +496,7 @@ pub async fn drive_task(
     // 5. Verify (stub: pass)
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
+        store.put_workbench_state(&inputs.tapd_id, "dead")?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
     stub_runner(&wt_path, &inputs).await?;
@@ -511,6 +518,7 @@ pub async fn drive_task(
     );
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
+        store.put_workbench_state(&inputs.tapd_id, "dead")?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
     let mr_url = match gitlab.create_merge_request(&inputs.project_id, &payload).await {
