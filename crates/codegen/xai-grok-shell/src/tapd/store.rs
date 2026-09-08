@@ -1069,7 +1069,31 @@ impl TapdStore {
         rows.collect()
     }
 
-    pub fn insert_mr_comment(
+    /// All metric rows across all task_ids. Used by the v2 metrics ext
+    /// method's "global" view.
+    pub fn all_task_metrics(&self) -> rusqlite::Result<Vec<TaskMetricRow>> {
+        let conn = self.open()?;
+        let mut stmt = conn.prepare(
+            "SELECT task_id, stage, attempt, started_at, finished_at, duration_ms, model, fallback_used, child_session_id
+             FROM workbench_task_metrics ORDER BY started_at ASC"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TaskMetricRow {
+                task_id: row.get(0)?,
+                stage: row.get(1)?,
+                attempt: row.get(2)?,
+                started_at: row.get(3)?,
+                finished_at: row.get(4)?,
+                duration_ms: row.get(5)?,
+                model: row.get(6)?,
+                fallback_used: row.get(7)?,
+                child_session_id: row.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn insert_mr_comment((
         &self,
         tapd_id: &str,
         mr_url: &str,

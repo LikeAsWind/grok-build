@@ -347,6 +347,12 @@ impl WorkbenchDispatcher {
         Ok(())
     }
 
+    /// Clone of the store Arc. Used by extensions to run blocking DAO
+    /// operations off the async runtime.
+    pub fn store_clone(&self) -> Arc<TapdStore> {
+        Arc::clone(&self.store)
+    }
+
     pub fn health_snapshot(&self) -> HealthSnapshot {
         HealthSnapshot {
             active: self.slots.lock().active_count(),

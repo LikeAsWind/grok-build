@@ -27,6 +27,7 @@ pub mod tapd_methods {
     pub const SYNC_TRIGGER: &str = "x.ai/tapd/sync/trigger";
     pub const SYNC_STATUS_NOTIFICATION: &str = "x.ai/tapd/sync_status";
     pub const WORKBENCH_HEALTH: &str = "x.ai/tapd/workbench/health";
+pub const WORKBENCH_METRICS: &str = "x.ai/workbench/metrics";
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +223,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         tapd_methods::TASKS_LIST => handle_tasks_list(agent, args).await,
         tapd_methods::SYNC_TRIGGER => handle_sync_trigger(agent, args).await,
         tapd_methods::WORKBENCH_HEALTH => handle_workbench_health(agent, args).await,
+        tapd_methods::WORKBENCH_METRICS => handle_workbench_metrics(agent, args).await,
         _ => Err(acp::Error::method_not_found()),
     }
 }
@@ -403,6 +405,50 @@ async fn handle_workbench_health(agent: &MvpAgent, _args: &acp::ExtRequest) -> E
     };
     to_ext_response(Ok(snapshot))
 }
+
+#[derive(serde::Deserialize)]
+struct MetricsRequest {
+    task_id: Option<String>,
+    since_ts: Option<i64>,
+}
+
+/// v2 spec §9.2.2: aggregate `workbench_task_metrics` rows into a per-stage
+/// summary (p50/p90/retry_count/fallback_count). Pulls rows from the
+/// `TapdStore::task_metrics` DAO (per-task); the front-end calls this with
+/// no project_key for the global view, or with one for the per-project
+/// dashboard.
+async fn handle_workbench_metrics(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    let req: MetricsRequest = parse_params(args)?;
+    let since_ts = req.since_ts.unwrap_or(0);
+    let dispatcher = match agent.workbench_dispatcher.borrow().as_ref() {
+        Some(d) => d.clone(),
+        None => return to_ext_response(Ok(serde_json::json!({
+            return to_ext_response(Ok(default_metrics_summary(req.task_id, since_ts))),
+    };
+    let rows = tokio::task::spawn_blocking({
+        let store = dispatcher.store_clone();
+        let task_id = req.task_id.clone();
+        move || -> anyhow::Result<Vec<crate::tapd::store::TaskMetricRow>> {
+            match task_id {
+                Some(id) => store.task_metrics(&id),
+                None => store.all_task_metrics(),
+            }
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("join error: {e}"))??;
+    let summary = crate::workbench::metrics::aggregate(&rows, since_ts);
+    to_ext_response(Ok(summary))
+}
+
+fn default_metrics_summary(task_id: Option<String>, since_ts: i64) -> serde_json::Value {
+    serde_json::json!({
+        "project_key": task_id,
+        "since_ts": since_ts,
+        "totals": { "done": 0, "blocked": 0, "dead": 0, "sample_size": 0 },
+        "stages": [],
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +476,22 @@ mod tests {
             "https://www.tapd.cn/123/prong/tasks/view/456"
         );
     }
+}
+
+#[test]
+fn metrics_request_parses_task_id_and_since_ts() {
+    let json = br#"{"task_id": "TAPD-1", "since_ts": 1700000000}"#;
+    let req: MetricsRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.task_id.as_deref(), Some("TAPD-1"));
+    assert_eq!(req.since_ts, Some(1700000000));
+}
+
+#[test]
+fn metrics_request_allows_missing_fields() {
+    let json = br#"{}"#;
+    let req: MetricsRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(req.task_id, None);
+    assert_eq!(req.since_ts, None);
 }
 
 
