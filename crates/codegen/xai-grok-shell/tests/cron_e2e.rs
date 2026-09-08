@@ -12,6 +12,7 @@
 //! that wiring is out of v2 M2.5 scope per the M2.5 plan §commit.
 
 use xai_grok_shell::workbench::cron::CronConfig;
+use chrono::TimeZone;
 
 #[test]
 fn cron_e2e_yaml_parse_then_matches_at_minute() {

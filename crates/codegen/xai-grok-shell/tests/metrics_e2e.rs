@@ -3,7 +3,6 @@
 //! Round-trips rows through `TapdStore::record_task_metric` (DAO) and then
 //! `metrics::aggregate` (pure aggregator). Verifies that the store and the
 //! aggregator agree on percentiles + retry/fallback counts.
-!
 use xai_grok_shell::tapd::store::TapdStore;
 use xai_grok_shell::workbench::metrics::{MetricsSummary, aggregate};
 
@@ -19,10 +18,10 @@ fn record_then_aggregate_round_trip() {
 
     // Three develop-stage rows on two task_ids; one attempt=2 (retry) and
     // one with fallback_used=1.
-    store.record_task_metric("TAPD-1", "develop", 0, 1_000, 1_100, Some("opus-4.1"), 0, Some("sess-A")).unwrap();
-    store.record_task_metric("TAPD-1", "develop", 1, 2_000, 2_300, Some("opus-4.1"), 0, Some("sess-B")).unwrap();
-    store.record_task_metric("TAPD-1", "develop", 2, 3_000, 3_600, Some("gpt-5"), 1, Some("sess-C")).unwrap();
-    store.record_task_metric("TAPD-2", "verify", 0, 4_000, 4_050, Some("opus-4.1"), 0, None).unwrap();
+    store.record_task_metric("TAPD-1", "develop", 0, 1_000, 1_100, "opus-4.1", 0, Some("sess-A")).unwrap();
+    store.record_task_metric("TAPD-1", "develop", 1, 2_000, 2_300, "opus-4.1", 0, Some("sess-B")).unwrap();
+    store.record_task_metric("TAPD-1", "develop", 2, 3_000, 3_600, "gpt-5", 1, Some("sess-C")).unwrap();
+    store.record_task_metric("TAPD-2", "verify", 0, 4_000, 4_050, "opus-4.1", 0, None).unwrap();
 
     // Pull rows for TAPD-1 only (per-task aggregate).
     let rows = store.task_metrics("TAPD-1").unwrap();
@@ -56,8 +55,8 @@ fn aggregate_handles_empty_db() {
 #[test]
 fn upsert_overwrites_same_stage_attempt() {
     let (_dir, store) = tmp_store();
-    store.record_task_metric("TAPD-1", "verify", 0, 1_000, 1_100, Some("opus-4.1"), 0, None).unwrap();
-    store.record_task_metric("TAPD-1", "verify", 0, 5_000, 5_400, Some("opus-4.1"), 0, None).unwrap();
+    store.record_task_metric("TAPD-1", "verify", 0, 1_000, 1_100, "opus-4.1", 0, None).unwrap();
+    store.record_task_metric("TAPD-1", "verify", 0, 5_000, 5_400, "opus-4.1", 0, None).unwrap();
 
     let rows = store.task_metrics("TAPD-1").unwrap();
     assert_eq!(rows.len(), 1, "UNIQUE(task_id, stage, attempt) collapses the upsert");

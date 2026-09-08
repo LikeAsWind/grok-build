@@ -54,7 +54,10 @@ pub fn aggregate(rows: &[TaskMetricRow], since_ts: i64) -> MetricsSummary {
         if row.started_at < since_ts {
             continue;
         }
-        let entry = stages.entry(row.stage.clone()).or_default();
+        let entry = stages.entry(row.stage.clone()).or_insert_with(|| StageAggregate {
+            stage: row.stage.clone(),
+            ..StageAggregate::default()
+        });
         if row.attempt > 0 {
             entry.retry_count += 1;
         }
@@ -71,7 +74,10 @@ pub fn aggregate(rows: &[TaskMetricRow], since_ts: i64) -> MetricsSummary {
     // 0.
     for (stage, mut durations) in all_durations {
         durations.sort_unstable();
-        let entry = stages.entry(stage.clone()).or_default();
+        let entry = stages.entry(stage.clone()).or_insert_with(|| StageAggregate {
+            stage: stage.clone(),
+            ..StageAggregate::default()
+        });
         entry.p50_ms = percentile(&durations, 0.50);
         entry.p90_ms = percentile(&durations, 0.90);
     }
