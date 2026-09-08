@@ -2,13 +2,13 @@
 //!
 //! Verifies the full InterventionRegistry state machine end-to-end:
 //!  - pause(task_id, reason) records a pause + reason; subsequent calls
-!    are idempotent.
+//!    are idempotent.
 //!  - cancel(task_id) flips the cancellation token; subsequent calls
-!    are idempotent.
+//!    are idempotent.
 //!  - resume(task_id) clears the entry; lookups return None afterwards.
 //!  - the token returned by `token(task_id)` is shared between pause + cancel,
-!    so a paused-then-cancelled task fires BOTH the orchestrator's "abort"
-!    path and any downstream watchers.
+//!    so a paused-then-cancelled task fires BOTH the orchestrator's "abort"
+//!    path and any downstream watchers.
 //!
 //! The dispatcher-level integration (`intervention::token` polled in
 //! `orchestrator::drive_task`) is covered separately by M2.2; here we

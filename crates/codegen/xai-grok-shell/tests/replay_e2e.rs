@@ -2,7 +2,7 @@
 //! resetting `attempt` to 0. Verifies the state-machine contract directly
 //! because the orchestrator-level replay pipeline is the same `next_after_replay`
 //! already covered by state_machine unit tests + this round-trip.
-!
+//!
 use xai_grok_shell::workbench::state_machine::{Stage, TaskState, next_after_replay};
 
 #[test]

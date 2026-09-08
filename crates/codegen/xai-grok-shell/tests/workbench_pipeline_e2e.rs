@@ -16,6 +16,7 @@ use std::path::Path;
 use std::process::Command;
 
 use xai_grok_shell::tapd::store::{TapdStore, UpsertTaskInput};
+use xai_grok_shell::agent::config::AdjudicateMode;
 use xai_grok_shell::workbench::dispatcher::{HealthSnapshot, SlotAccountant, WorkbenchQueue};
 use xai_grok_shell::workbench::state_machine::{
     next_after_adjudicate, next_after_develop, next_after_mr_submit, next_after_planner,
@@ -85,6 +86,7 @@ fn full_state_machine_walk_to_done() {
         &design_clean,
         1,
         3,
+        AdjudicateMode::Recorder,
     );
     assert!(matches!(next, TaskState::Running { stage: Stage::Develop, .. }));
 
@@ -98,6 +100,7 @@ fn full_state_machine_walk_to_done() {
         &design_with_q,
         3,
         2,
+        AdjudicateMode::Recorder,
     );
     assert!(matches!(next, TaskState::Running { stage: Stage::Adjudicate, .. }));
 
@@ -161,11 +164,11 @@ fn tapd_store_persists_workbench_state() {
 #[test]
 fn dispatcher_slot_accounting_round_trip() {
     let mut acc = SlotAccountant::new(2, 5);
-    assert!(acc.try_claim("a"));
-    assert!(acc.try_claim("b"));
-    assert!(!acc.try_claim("c"));
+    assert!(acc.try_claim("a", "project-a", None));
+    assert!(acc.try_claim("b", "project-b", None));
+    assert!(!acc.try_claim("c", "project-c", None));
     acc.release("a");
-    assert!(acc.try_claim("c"));
+    assert!(acc.try_claim("c", "project-c", None));
 }
 
 #[test]

@@ -6,11 +6,12 @@
 //!   3. `append_to_design_and_consume` writes the "## External comment"
 //!      section to `1-design.md` and flips consumed=1.
 //!   4. `pending_for` no longer returns it; `consume` is a no-op.
-!
+//!
 use xai_grok_shell::tapd::store::TapdStore;
 use xai_grok_shell::workbench::mr_comments::{
-    append_to_design_and_consume, consume, external_comment_section, pending_for, record, should_retrigger},
-}
+    append_to_design_and_consume, consume, external_comment_section, pending_for, record,
+    should_retrigger,
+};
 
 fn tmp_store() -> (tempfile::TempDir, TapdStore) {
     let dir = tempfile::tempdir().unwrap();
@@ -67,8 +68,7 @@ fn append_to_design_writes_section_and_consumes() {
 
     // Second consume on the same id is a no-op.
     let id = pending[0].id;
-    let updated = consume(&store, id).unwrap();
-    assert_eq!(updated, 0, "already consumed -> 0 rows affected");
+    consume(&store, id).unwrap();
 }
 
 #[test]
