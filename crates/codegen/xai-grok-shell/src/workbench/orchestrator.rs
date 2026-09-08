@@ -102,7 +102,22 @@ impl FakeLlmStageAlwaysOk {
 }
 
 use crate::agent::config::WorkbenchModelsConfig;
-use crate::workbench::llm_stage::{CodeInputs, PriorArtifact, ReviewInputs};
+use crate::workbench::llm_stage::{CodeInputs, DevelopVerdict, PriorArtifact, ReviewInputs};
+use crate::workbench::llm_stage::ReviewVerdict as LlmReviewVerdict;
+use crate::workbench::recovery::{decide_fallback, RoleFallback};
+fn coder_role(models: &WorkbenchModelsConfig) -> RoleFallback {
+    RoleFallback {
+        primary: models.coder_model.clone(),
+        fallback: models.coder_fallback.clone(),
+    }
+}
+
+fn reviewer_role(models: &WorkbenchModelsConfig) -> RoleFallback {
+    RoleFallback {
+        primary: models.reviewer_model.clone(),
+        fallback: models.reviewer_fallback.clone(),
+    }
+}
 
 /// Translate `OrchestratorInputs` + the design doc + retry context into
 /// `CodeInputs` for the LLMStage.
@@ -210,52 +225,6 @@ async fn stub_adjudicator(worktree: &Path, inputs: &OrchestratorInputs) -> anyho
     Ok(())
 }
 
-/// Stub: coder LLM call. Writes 3-develop.md with verdict: ok.
-async fn stub_coder(worktree: &Path, inputs: &OrchestratorInputs) -> anyhow::Result<()> {
-    let body = format!(
-        "## Changes\n- edited src/{slug}.rs\n## Self-check\n- [x] compiles\n",
-        slug = inputs.tapd_id.to_lowercase(),
-    );
-    let env = ArtifactEnvelope {
-        frontmatter: crate::workbench::artifacts::ArtifactFrontmatter {
-            stage: Stage::Develop,
-            task_id: inputs.tapd_id.clone(),
-            attempt: 0,
-            extra: [("verdict".to_string(), serde_yaml::Value::String("ok".into()))]
-                .into_iter()
-                .collect(),
-        },
-        body: body,
-    };
-    let path = worktree.join(artifact_path(3, "develop", 0));
-    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-    tokio::fs::write(&path, env.to_string()).await?;
-    Ok(())
-}
-
-/// Stub: reviewer LLM call. Always approves.
-async fn stub_reviewer(worktree: &Path, inputs: &OrchestratorInputs) -> anyhow::Result<()> {
-    let body = "## Findings\n(none)\n## Summary\nLGTM.\n";
-    let env = ArtifactEnvelope {
-        frontmatter: crate::workbench::artifacts::ArtifactFrontmatter {
-            stage: Stage::CodeReview,
-            task_id: inputs.tapd_id.clone(),
-            attempt: 0,
-            extra: [
-                ("verdict".to_string(), serde_yaml::Value::String("approved".into())),
-                ("critical_count".to_string(), serde_yaml::Value::Number(0.into())),
-                ("major_count".to_string(), serde_yaml::Value::Number(0.into())),
-            ]
-            .into_iter()
-            .collect(),
-        },
-        body: body.into(),
-    };
-    let path = worktree.join(artifact_path(4, "review", 0));
-    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-    tokio::fs::write(&path, env.to_string()).await?;
-    Ok(())
-}
 
 /// Stub: runner. Skips the test command (no test runner wired in v1) and
 /// returns exit 0. Writes 5-verify.md.
@@ -313,6 +282,7 @@ pub async fn drive_task(
     )?;
     let mut state = TaskState::Pending;
     save_state(&wt_path, &state)?;
+    let models = crate::agent::config::WorkbenchModelsConfig::default();
 
     // 1. Brainstorm
     if let Some(dead_state) = check_cancel() {
@@ -334,22 +304,153 @@ pub async fn drive_task(
         save_state(&wt_path, &state)?;
     }
 
-    // 3. Develop
+    // 3. Develop — V2.5: real LLM call via trait injection + fallback loop.
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
-    stub_coder(&wt_path, &inputs).await?;
-    state = next_after_develop(true, 0);
+    let mut develop_attempt: u8 = 0;
+    let mut develop_fallback_used = false;
+    let develop_out: crate::workbench::llm_stage::CodeOutputs = loop {
+        let started_at = chrono::Utc::now().timestamp_millis();
+        let mut code_inputs_inner = build_coder_inputs(&inputs, &models, develop_attempt, vec![]);
+        if develop_fallback_used {
+            if let Some(fb) = code_inputs_inner.fallback_model.clone() {
+                code_inputs_inner.primary_model = fb;
+            }
+        }
+        match inputs.llm_stage.code(&code_inputs_inner).await {
+            Ok(out) => {
+                let finished_at = chrono::Utc::now().timestamp_millis();
+                tokio::fs::create_dir_all(wt_path.join(".workbench/stages").as_path()).await?;
+                let env_body = out.artifact_body.clone();
+                tokio::fs::write(
+                    wt_path.join(artifact_path(3, "develop", develop_attempt)),
+                    env_body,
+                ).await?;
+                let _ = store.record_task_metric(
+                    &inputs.tapd_id,
+                    "develop",
+                    develop_attempt,
+                    started_at,
+                    finished_at,
+                    &out.model,
+                    if out.fallback_used { 1 } else { 0 },
+                    out.child_session_id.as_deref(),
+                );
+                break out;
+            }
+            Err(e) => {
+                tracing::warn!(tapd_id = %inputs.tapd_id, "coder attempt {} failed: {e}", develop_attempt);
+                let next_model = decide_fallback(
+                    &coder_role(&models),
+                    develop_attempt,
+                    develop_fallback_used,
+                );
+                match next_model {
+                    Some(m) => {
+                        develop_fallback_used = true;
+                        develop_attempt += 1;
+                        tracing::info!(tapd_id = %inputs.tapd_id, "developing fallback model {m}");
+                    }
+                    None => {
+                        let dead = TaskState::Dead { reason: format!("coder_failed: {e}") };
+                        save_state(&wt_path, &dead)?;
+                        return Ok(OrchestratorResult {
+                            final_state: dead,
+                            branch,
+                            worktree_path: wt_path,
+                            mr_url: None,
+                        });
+                    }
+                }
+            }
+        }
+    };
+    state = next_after_develop(
+        matches!(develop_out.verdict, DevelopVerdict::Approved),
+        develop_attempt,
+    );
     save_state(&wt_path, &state)?;
 
-    // 4. Code Review
+    // 4. Code Review — V2.5: same trait-injection + fallback pattern.
     if let Some(dead_state) = check_cancel() {
         save_state(&wt_path, &dead_state)?;
         return Ok(OrchestratorResult { final_state: dead_state, branch, worktree_path: wt_path, mr_url: None });
     }
-    stub_reviewer(&wt_path, &inputs).await?;
-    state = next_after_review(ReviewVerdict::Approved, 0);
+    let mut review_attempt: u8 = 0;
+    let mut review_fallback_used = false;
+    let review_out: crate::workbench::llm_stage::ReviewOutputs = loop {
+        let started_at = chrono::Utc::now().timestamp_millis();
+        let mut review_inputs_inner = build_reviewer_inputs(
+            &inputs,
+            &models,
+            "(none)",
+            "(none)",
+            None,
+            None,
+            review_attempt,
+        );
+        if review_fallback_used {
+            if let Some(fb) = review_inputs_inner.fallback_model.clone() {
+                review_inputs_inner.primary_model = fb;
+            }
+        }
+        match inputs.llm_stage.review(&review_inputs_inner).await {
+            Ok(out) => {
+                let finished_at = chrono::Utc::now().timestamp_millis();
+                tokio::fs::create_dir_all(wt_path.join(".workbench/stages").as_path()).await?;
+                let env_body = out.artifact_body.clone();
+                tokio::fs::write(
+                    wt_path.join(artifact_path(4, "review", review_attempt)),
+                    env_body,
+                ).await?;
+                let _ = store.record_task_metric(
+                    &inputs.tapd_id,
+                    "review",
+                    review_attempt,
+                    started_at,
+                    finished_at,
+                    &out.model,
+                    if out.fallback_used { 1 } else { 0 },
+                    out.child_session_id.as_deref(),
+                );
+                break out;
+            }
+            Err(e) => {
+                tracing::warn!(tapd_id = %inputs.tapd_id, "reviewer attempt {} failed: {e}", review_attempt);
+                let next_model = decide_fallback(
+                    &reviewer_role(&models),
+                    review_attempt,
+                    review_fallback_used,
+                );
+                match next_model {
+                    Some(m) => {
+                        review_fallback_used = true;
+                        review_attempt += 1;
+                        tracing::info!(tapd_id = %inputs.tapd_id, "reviewer fallback model {m}");
+                    }
+                    None => {
+                        let dead = TaskState::Dead { reason: format!("reviewer_failed: {e}") };
+                        save_state(&wt_path, &dead)?;
+                        return Ok(OrchestratorResult {
+                            final_state: dead,
+                            branch,
+                            worktree_path: wt_path,
+                            mr_url: None,
+                        });
+                    }
+                }
+            }
+        }
+    };
+    state = next_after_review(
+        match review_out.verdict {
+            LlmReviewVerdict::Approved => crate::workbench::state_machine::ReviewVerdict::Approved,
+            LlmReviewVerdict::NeedsChanges => crate::workbench::state_machine::ReviewVerdict::NeedsChanges,
+        },
+        review_attempt,
+    );
     save_state(&wt_path, &state)?;
 
     // 5. Verify (stub: pass)
