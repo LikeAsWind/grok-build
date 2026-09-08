@@ -23,6 +23,7 @@ pub mod dispatcher;
 pub mod intervention;
 pub mod main_session;
 pub mod metrics;
+pub mod mr_comments;
 pub mod orchestrator;
 pub mod notifications;
 pub mod prompts;
