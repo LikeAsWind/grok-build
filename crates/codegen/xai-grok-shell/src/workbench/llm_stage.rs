@@ -80,11 +80,11 @@ pub struct ReviewOutputs {
 // single-threaded architecture and the hard constraint that drive_task public
 // signature stays unchanged (Task 3.1).
 pub trait LlmStage {
-    fn code(&self, input: &CodeInputs) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + '_>
+    fn code<'a>(&'a self, input: &'a CodeInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + 'a>
     >;
-    fn review(&self, input: &ReviewInputs) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<ReviewOutputs>> + '_>
+    fn review<'a>(&'a self, input: &'a ReviewInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<ReviewOutputs>> + 'a>
     >;
 }
 
@@ -119,8 +119,8 @@ pub struct MvpAgentLlmStage {
 }
 
 impl LlmStage for MvpAgentLlmStage {
-    fn code(&self, input: &CodeInputs) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + '_>
+    fn code<'a>(&'a self, input: &'a CodeInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + 'a>
     > {
         let agent = self.agent.clone();
         let input = input.clone();
@@ -138,8 +138,8 @@ impl LlmStage for MvpAgentLlmStage {
         })
     }
 
-    fn review(&self, input: &ReviewInputs) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<ReviewOutputs>> + '_>
+    fn review<'a>(&'a self, input: &'a ReviewInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<ReviewOutputs>> + 'a>
     > {
         let agent = self.agent.clone();
         let input = input.clone();

@@ -69,6 +69,7 @@ async fn orchestrator_drives_task_to_done() {
         mr_reviewers: vec!["bob".into()],
         mr_assignees: vec![],
         project_id: "123".into(),
+        llm_stage: crate::workbench::test_helpers::FakeLlmStage::default().into_dyn(),
     };
     let result = drive_task(store.clone(), &gitlab, inputs, None)
         .await
@@ -158,6 +159,7 @@ async fn orchestrator_with_adjudicate_runs_full_path() {
         mr_reviewers: vec![],
         mr_assignees: vec![],
         project_id: "456".into(),
+        llm_stage: crate::workbench::test_helpers::FakeLlmStage::default().into_dyn(),
     };
     let result = drive_task(store.clone(), &gitlab, inputs, None).await.unwrap();
     assert!(matches!(result.final_state, TaskState::Done { .. }));
@@ -222,6 +224,7 @@ async fn user_cancel_during_develop_routes_to_dead() {
         mr_reviewers: vec![],
         mr_assignees: vec![],
         project_id: "123".into(),
+        llm_stage: crate::workbench::test_helpers::FakeLlmStage::default().into_dyn(),
     };
     let result = drive_task(store.clone(), &gitlab, inputs, Some(Arc::clone(&intervention)))
         .await
@@ -296,6 +299,7 @@ async fn user_cancel_during_develop_routes_to_dead() {
         mr_reviewers: vec![],
         mr_assignees: vec![],
         project_id: "123".into(),
+        llm_stage: crate::workbench::test_helpers::FakeLlmStage::default().into_dyn(),
     };
     let result = drive_task(
         store.clone(),

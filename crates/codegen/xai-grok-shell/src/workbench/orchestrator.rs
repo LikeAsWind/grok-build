@@ -43,6 +43,62 @@ pub struct OrchestratorInputs {
     pub mr_reviewers: Vec<String>,
     pub mr_assignees: Vec<String>,
     pub project_id: String,
+    /// V2.5: LLM stage injected via trait. Set to
+    /// `FakeLlmStageAlwaysOk::default_into_dyn()` for safe struct-literal
+    /// init, or use `.with_llm_stage(...)` after construction.
+    pub llm_stage: crate::workbench::llm_stage::DynLlmStage,
+}
+
+impl OrchestratorInputs {
+    /// Chainable constructor for the LLM stage.
+    pub fn with_llm_stage(
+        mut self,
+        llm_stage: crate::workbench::llm_stage::DynLlmStage,
+    ) -> Self {
+        self.llm_stage = llm_stage;
+        self
+    }
+}
+
+/// Minimal default `LlmStage` for struct-literal init. Returns Approved
+/// on every call without recording anything.
+pub struct FakeLlmStageAlwaysOk;
+impl crate::workbench::llm_stage::LlmStage for FakeLlmStageAlwaysOk {
+    fn code<'a>(&'a self, input: &'a crate::workbench::llm_stage::CodeInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<crate::workbench::llm_stage::CodeOutputs>> + 'a>
+    > {
+        let body = "## Changes\n- stub\n## Self-check\n- [x] ok\n".to_string();
+        Box::pin(async move {
+            Ok(crate::workbench::llm_stage::CodeOutputs {
+                artifact_body: body,
+                verdict: crate::workbench::llm_stage::DevelopVerdict::Approved,
+                model: input.primary_model.clone(),
+                fallback_used: false,
+                child_session_id: None,
+            })
+        })
+    }
+    fn review<'a>(&'a self, input: &'a crate::workbench::llm_stage::ReviewInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<crate::workbench::llm_stage::ReviewOutputs>> + 'a>
+    > {
+        let body = "## Findings\n(none)\n## Summary\nLGTM.\n".to_string();
+        Box::pin(async move {
+            Ok(crate::workbench::llm_stage::ReviewOutputs {
+                artifact_body: body,
+                verdict: crate::workbench::llm_stage::ReviewVerdict::Approved,
+                model: input.primary_model.clone(),
+                fallback_used: false,
+                child_session_id: None,
+            })
+        })
+    }
+}
+
+impl FakeLlmStageAlwaysOk {
+    /// Convenience: wrap self in `Arc<dyn LlmStage>` for struct-literal init.
+    pub fn default_into_dyn() -> crate::workbench::llm_stage::DynLlmStage {
+        std::sync::Arc::new(Self) as crate::workbench::llm_stage::DynLlmStage
+    }
 }
 
 use crate::agent::config::WorkbenchModelsConfig;
@@ -383,6 +439,7 @@ mod tests {
             mr_reviewers: vec![],
             mr_assignees: vec![],
             project_id: "1".into(),
+            llm_stage: FakeLlmStageAlwaysOk::default_into_dyn(),
         };
         let mut models = WorkbenchModelsConfig::default();
         models.coder_fallback = Some("sonnet-4.5".into());
@@ -409,6 +466,7 @@ mod tests {
             mr_reviewers: vec![],
             mr_assignees: vec![],
             project_id: "1".into(),
+            llm_stage: FakeLlmStageAlwaysOk::default_into_dyn(),
         };
         let models = WorkbenchModelsConfig::default();
         let ri = build_reviewer_inputs(

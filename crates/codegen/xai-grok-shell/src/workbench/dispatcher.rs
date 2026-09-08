@@ -305,6 +305,7 @@ impl WorkbenchDispatcher {
                         mr_reviewers: vec![],
                         mr_assignees: vec![],
                         project_id: "1".into(),
+                        llm_stage: crate::workbench::orchestrator::FakeLlmStageAlwaysOk::default_into_dyn(),
                     };
                     let _ = drive_task(store.clone(), &g, inputs, None).await;
                 }
