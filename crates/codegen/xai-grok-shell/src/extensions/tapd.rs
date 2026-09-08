@@ -28,6 +28,7 @@ pub mod tapd_methods {
     pub const SYNC_STATUS_NOTIFICATION: &str = "x.ai/tapd/sync_status";
     pub const WORKBENCH_HEALTH: &str = "x.ai/tapd/workbench/health";
 pub const WORKBENCH_METRICS: &str = "x.ai/workbench/metrics";
+pub const WORKBENCH_TIMELINE: &str = "x.ai/workbench/timeline";
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +225,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         tapd_methods::SYNC_TRIGGER => handle_sync_trigger(agent, args).await,
         tapd_methods::WORKBENCH_HEALTH => handle_workbench_health(agent, args).await,
         tapd_methods::WORKBENCH_METRICS => handle_workbench_metrics(agent, args).await,
+        tapd_methods::WORKBENCH_TIMELINE => handle_workbench_timeline(agent, args).await,
         _ => Err(acp::Error::method_not_found()),
     }
 }
@@ -448,6 +450,65 @@ fn default_metrics_summary(task_id: Option<String>, since_ts: i64) -> serde_json
         "totals": { "done": 0, "blocked": 0, "dead": 0, "sample_size": 0 },
         "stages": [],
     })
+}
+
+/// v2 spec §9.2.4: read the per-task event log. Joins `workbench_task_metrics`
+/// (one row per (stage, attempt)) with `workbench_task_state` text field
+/// (which encodes e.g. "running:<stage>:<attempt>") to build an ordered event list.
+async fn handle_workbench_timeline(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        tapd_id: String,
+    }
+    let req: Req = parse_params(args)?;
+    let dispatcher = match agent.workbench_dispatcher.borrow().as_ref() {
+        Some(d) => d.clone(),
+        None => return to_ext_response(Ok(serde_json::json!({"tapd_id": req.tapd_id, "events": []})),
+    };
+    let events = tokio::task::spawn_blocking({
+        let store = dispatcher.store_clone();
+        let tapd_id = req.tapd_id.clone();
+        move || -> anyhow::Result<serde_json::Value> {
+            let rows = store.task_metrics(&tapd_id)?;
+            let current_state = store.get_workbench_state(&tapd_id)?.unwrap_or_default();
+            let mut events: Vec<serde_json::Value> = Vec::with_capacity(rows.len() + 1);
+            events.push(serde_json::json!({"ts": 0, "kind": "pending"}));
+            for row in rows {
+                let kind = match row.finished_at {
+                    Some(_) => "stage_done",
+                    None => "running",
+                };
+                let mut evt = serde_json::json!({
+                    "ts": row.started_at,
+                    "kind": kind,
+                    "stage": row.stage,
+                    "attempt": row.attempt,
+                    "model": row.model,
+                });
+                if let Some(d) = row.duration_ms {
+                    evt["duration_ms"] = serde_json::json!(d);
+                }
+                if let Some(f) = row.finished_at {
+                    evt["finished_at"] = serde_json::json!(f);
+                }
+                if row.fallback_used != 0 {
+                    evt["fallback_used"] = serde_json::json!(true);
+                }
+                events.push(evt);
+            }
+            if !current_state.is_empty() {
+                events.push(serde_json::json!({
+                    "ts": chrono::Utc::now().timestamp(),
+                    "kind": "state",
+                    "state": current_state,
+                }));
+            }
+            Ok(serde_json::json!({"tapd_id": tapd_id, "events": events}))
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("join error: {e}"))??;
+    to_ext_response(Ok(events))
 }
 #[cfg(test)]
 mod tests {

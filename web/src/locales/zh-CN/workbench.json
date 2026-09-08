@@ -113,5 +113,7 @@
   "cronProjectKey": "项目 key",
   "cronSettingsDesc": "每个项目的 cron 调度规则，按分钟触发 dispatcher。",
   "cronSettingsTitle": "Cron 调度",
+  "timelineEmpty": "暂无事件。",
+  "timelineDrawerTitle": "任务时间线",
   }
 }

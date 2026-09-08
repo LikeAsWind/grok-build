@@ -113,5 +113,7 @@
   "cronProjectKey": "Project key",
   "cronSettingsDesc": "Per-project schedules that re-trigger the dispatcher on a cron tick.",
   "cronSettingsTitle": "Cron schedules",
+  "timelineEmpty": "No events yet.",
+  "timelineDrawerTitle": "Task timeline",
   }
 }

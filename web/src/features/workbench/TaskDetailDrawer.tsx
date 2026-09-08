@@ -11,6 +11,8 @@ export interface TaskDetailDrawerProps {
   onClose: () => void
   /** v2 §7.2.1: open PauseDialog. Caller wires the actual pause ext request. */
   onPause?: (tapdId: string) => void
+  /** v2 §9.2.4: open TimelineDrawer. Caller wires the timeline fetch. */
+  onShowTimeline?: (tapdId: string) => void
   /** v2 §7.2.1: trigger resume ext method directly. */
   onResume?: (tapdId: string) => void
   /** v2 §7.2.1: trigger cancel ext method directly. */
@@ -104,4 +106,5 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
   )
 }
 
+  "timeline": "Timeline",
 
