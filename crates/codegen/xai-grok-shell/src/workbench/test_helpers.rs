@@ -54,7 +54,7 @@ impl FakeLlmStage {
 
 impl LlmStage for FakeLlmStage {
     fn code(&self, input: &CodeInputs) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + Send + '_>
+        Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + '_>
     > {
         let input = input.clone();
         let resp = self.code_response.clone();
@@ -82,7 +82,7 @@ impl LlmStage for FakeLlmStage {
     }
 
     fn review(&self, input: &ReviewInputs) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<ReviewOutputs>> + Send + '_>
+        Box<dyn std::future::Future<Output = anyhow::Result<ReviewOutputs>> + '_>
     > {
         let input = input.clone();
         let resp = self.review_response.clone();

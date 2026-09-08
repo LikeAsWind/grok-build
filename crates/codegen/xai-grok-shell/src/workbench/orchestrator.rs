@@ -45,6 +45,60 @@ pub struct OrchestratorInputs {
     pub project_id: String,
 }
 
+use crate::agent::config::WorkbenchModelsConfig;
+use crate::workbench::llm_stage::{CodeInputs, PriorArtifact, ReviewInputs};
+
+/// Translate `OrchestratorInputs` + the design doc + retry context into
+/// `CodeInputs` for the LLMStage.
+pub fn build_coder_inputs(
+    inputs: &OrchestratorInputs,
+    models: &WorkbenchModelsConfig,
+    attempt: u8,
+    prior_artifacts: Vec<PriorArtifact>,
+) -> CodeInputs {
+    CodeInputs {
+        task_id: inputs.tapd_id.clone(),
+        title: inputs.title.clone(),
+        description: inputs.description.clone(),
+        acs: inputs.acs.clone(),
+        worktree_path: worktree_path(
+            inputs.grok_home.to_str().unwrap(),
+            &inputs.tapd_id,
+        ),
+        project_config_yaml: String::new(),
+        prior_artifacts,
+        attempt,
+        primary_model: models.coder_model.clone(),
+        fallback_model: models.coder_fallback.clone(),
+    }
+}
+
+/// Translate `OrchestratorInputs` + design excerpt + diff into `ReviewInputs`.
+pub fn build_reviewer_inputs(
+    inputs: &OrchestratorInputs,
+    models: &WorkbenchModelsConfig,
+    design_excerpt: &str,
+    diff: &str,
+    prior_review: Option<String>,
+    prior_verify: Option<String>,
+    attempt: u8,
+) -> ReviewInputs {
+    ReviewInputs {
+        task_id: inputs.tapd_id.clone(),
+        worktree_path: worktree_path(
+            inputs.grok_home.to_str().unwrap(),
+            &inputs.tapd_id,
+        ),
+        design_excerpt: design_excerpt.to_string(),
+        diff: diff.to_string(),
+        prior_review,
+        prior_verify,
+        attempt,
+        primary_model: models.reviewer_model.clone(),
+        fallback_model: models.reviewer_fallback.clone(),
+    }
+}
+
 /// Result of a single orchestration pass.
 pub struct OrchestratorResult {
     pub final_state: TaskState,
@@ -313,6 +367,57 @@ fn save_state(worktree: &Path, state: &TaskState) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_coder_inputs_carries_attempt_and_model() {
+        let oi = OrchestratorInputs {
+            tapd_id: "TAPD-1".into(),
+            title: "t".into(),
+            description: "d".into(),
+            acs: vec!["ac1".into()],
+            priority: 1,
+            repo_root: std::path::PathBuf::from("/r"),
+            grok_home: std::path::PathBuf::from("/g"),
+            base_branch: "main".into(),
+            tapd_owner: None,
+            mr_reviewers: vec![],
+            mr_assignees: vec![],
+            project_id: "1".into(),
+        };
+        let mut models = WorkbenchModelsConfig::default();
+        models.coder_fallback = Some("sonnet-4.5".into());
+        let ci = build_coder_inputs(&oi, &models, 1, vec![]);
+        assert_eq!(ci.task_id, "TAPD-1");
+        assert_eq!(ci.attempt, 1);
+        assert_eq!(ci.primary_model, models.coder_model);
+        assert_eq!(ci.fallback_model.as_deref(), Some("sonnet-4.5"));
+        assert!(ci.worktree_path.ends_with("TAPD-1"));
+    }
+
+    #[test]
+    fn build_reviewer_inputs_carries_diff() {
+        let oi = OrchestratorInputs {
+            tapd_id: "TAPD-2".into(),
+            title: "t".into(),
+            description: "d".into(),
+            acs: vec![],
+            priority: 1,
+            repo_root: std::path::PathBuf::from("/r"),
+            grok_home: std::path::PathBuf::from("/g"),
+            base_branch: "main".into(),
+            tapd_owner: None,
+            mr_reviewers: vec![],
+            mr_assignees: vec![],
+            project_id: "1".into(),
+        };
+        let models = WorkbenchModelsConfig::default();
+        let ri = build_reviewer_inputs(
+            &oi, &models, "## Goal\nx", "+ new line", None, None, 0,
+        );
+        assert_eq!(ri.diff, "+ new line");
+        assert_eq!(ri.design_excerpt, "## Goal\nx");
+        assert_eq!(ri.primary_model, models.reviewer_model);
+    }
 
     #[test]
     fn save_state_writes_json_to_worktree() {
