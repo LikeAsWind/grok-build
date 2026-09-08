@@ -99,6 +99,26 @@ mod tests {
         // Compile-only: ensure the trait + types can be referenced as DynLlmStage.
         fn _accepts_dyn(_l: DynLlmStage) {}
     }
+
+    #[test]
+    fn parse_reviewer_verdict_approves_lgtm() {
+        assert_eq!(
+            parse_reviewer_verdict("## Findings\n(none)\n## Summary\nLGTM.\n"),
+            ReviewVerdict::Approved,
+        );
+        assert_eq!(
+            parse_reviewer_verdict("## Findings\n- major: foo"),
+            ReviewVerdict::NeedsChanges,
+        );
+    }
+
+    #[test]
+    fn parse_coder_verdict_approves_self_checked() {
+        assert_eq!(
+            parse_coder_verdict("## Changes\n- x\n## Self-check\n- [x] compiles\n"),
+            DevelopVerdict::Approved,
+        );
+    }
 }
 
 

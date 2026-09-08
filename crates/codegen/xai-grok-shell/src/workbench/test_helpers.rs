@@ -164,4 +164,31 @@ mod tests {
         }).await;
         assert!(res.is_err());
     }
+
+    #[tokio::test]
+    async fn fake_records_review_call_with_attempt_and_model() {
+        let fake = FakeLlmStage::default();
+        let _ = fake.review(&ReviewInputs {
+            task_id: "TAPD-1".into(),
+            worktree_path: "/tmp/wt".into(),
+            design_excerpt: "## Goal\nx".into(),
+            diff: "+ new line".into(),
+            prior_review: None,
+            prior_verify: None,
+            attempt: 2,
+            primary_model: "sonnet-4.5".into(),
+            fallback_model: Some("opus-4.1".into()),
+        }).await.unwrap();
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].stage, "review");
+        assert_eq!(calls[0].attempt, 2);
+        assert_eq!(calls[0].primary_model, "sonnet-4.5");
+    }
+
+    #[test]
+    fn fake_default_returns_approved_marker() {
+        assert!(default_review_body().contains("LGTM"));
+        assert!(default_code_body().contains("compiles"));
+    }
 }
