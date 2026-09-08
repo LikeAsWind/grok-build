@@ -2,11 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the deterministic `stub_coder` / `stub_reviewer` calls inside `drive_task` with real ACP child-session calls for the coder and reviewer stages, while keeping `stub_planner`, `stub_adjudicator`, and `stub_runner` unchanged. After this plan lands, MRs contain real diffs (not the empty placeholder commit), and the V2 reliability machinery (`recovery::decide_fallback`, retry budgets, `workbench_task_metrics.fallback_used`) actually executes against real outcomes. Per `docs/superpowers/specs/2026-09-07-stub-to-real-llm-design.md`.
+**Goal:** Replace the deterministic `stub_coder` / `stub_reviewer` calls inside `drive_task` with an `LlmStage` boundary and exercise the real fallback and metrics paths. Per the selected B rollout, ACP child-session injection remains a V2.6 task; V2.5 must stay safe with canned stage output until that injection is available.
 
-**Architecture:** `drive_task` gains a generic `LlmStage` trait injected through a private `Arc<dyn LlmStage>` field on `OrchestratorInputs` (public signature stays unchanged). Production wires `MvpAgentLlmStage` (real `agent_client_protocol` via a new `MvpAgent::create_stage_session` helper); tests wire `FakeLlmStage` (canned artifact bodies, internal call log, optional `fail_code`/`fail_review` flags). Rollout is gated by a new `WorkbenchConfig.use_real_llm: bool` (default `false`); flipping the flag switches the dispatcher from `FakeLlmStage` to `MvpAgentLlmStage` without recompiling.
+**Architecture:** `drive_task` gains a generic `LlmStage` trait injected through `OrchestratorInputs`. Tests use `FakeLlmStage`; the production dispatcher uses a safe canned implementation in V2.5 and logs a warning if `use_real_llm` is enabled. `MvpAgentLlmStage` and `MvpAgent::create_stage_session` are prepared for V2.6, but are not wired into the current cross-thread dispatcher.
 
 **Tech Stack:** Rust (tokio, agent_client_protocol, anyhow, serde, tracing, rusqlite, async-trait), TOML config. No new top-level dependencies (per spec §4 soft constraint).
+
+## Execution Status (B Rollout)
+
+- Foundation, `LlmStage`, fake stage, config flag, prompt builders, orchestrator wiring, dispatcher fallback, parser tests, and fallback metrics are implemented.
+- `use_real_llm` remains opt-in but safely uses the canned V2.5 stage while the dispatcher is owned by a `Send + Sync` sync callback and `MvpAgent` remains LocalSet-bound.
+- Real ACP child-session wiring, real diffs, and manual smoke validation are V2.6 work; the V2.5 implementation must not be treated as live LLM execution.
+- Existing unrelated validation failures remain documented below: metrics unit fixtures panic on missing rows, and several integration test files have pre-existing compile errors.
 
 **Hard constraints** (from spec §4, must not be violated):
 
@@ -1492,7 +1499,7 @@ After all 13 tasks land, V2.5 is **done**. Before tagging, verify:
 
 ---
 
-# Milestone V2.5 is done.
-# V2.6 (planner / adjudicator / runner) and V3 (live-rollout flag removal)
-# will be added to a separate plan file after V2.5 has been validated
-# against production traffic.
+# V2.5 implementation work in this plan is complete for the selected B scope.
+# Remaining gates are validation-only: the full crate suite has pre-existing
+# failures, and real ACP smoke testing is explicitly deferred to V2.6.
+# V2.6 will wire MvpAgentLlmStage into the LocalSet-owned agent lifecycle.
