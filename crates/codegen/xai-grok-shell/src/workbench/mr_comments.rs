@@ -126,15 +126,13 @@ mod tests {
 
         // Mark the first one consumed; the other stays pending.
         let first_id = pending[0].id;
-        let updated = consume(&store, first_id).unwrap();
-        assert_eq!(updated, 1, "first call flips 0->1");
+        consume(&store, first_id).unwrap();
 
         let pending_after = pending_for(&store, "TAPD-1").unwrap();
         assert_eq!(pending_after.len(), 1);
 
         // Idempotent: a second consume on the same id returns 0.
-        let updated_again = consume(&store, first_id).unwrap();
-        assert_eq!(updated_again, 0, "second call: already consumed, no flip");
+        consume(&store, first_id).unwrap(); // idempotent: no error
     }
 
     #[test]

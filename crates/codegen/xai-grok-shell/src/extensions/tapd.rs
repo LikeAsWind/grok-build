@@ -408,7 +408,7 @@ async fn handle_workbench_health(agent: &MvpAgent, _args: &acp::ExtRequest) -> E
     to_ext_response(Ok(snapshot))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct MetricsRequest {
     task_id: Option<String>,
     since_ts: Option<i64>,
@@ -540,7 +540,7 @@ mod tests {
 
 #[test]
 fn metrics_request_parses_task_id_and_since_ts() {
-    let json = br#"{"task_id": "TAPD-1", "since_ts": 1700000000}"#;
+    let json = r#"{"task_id": "TAPD-1", "since_ts": 1700000000}"#;
     let req: MetricsRequest = serde_json::from_str(json).unwrap();
     assert_eq!(req.task_id.as_deref(), Some("TAPD-1"));
     assert_eq!(req.since_ts, Some(1700000000));
@@ -548,7 +548,7 @@ fn metrics_request_parses_task_id_and_since_ts() {
 
 #[test]
 fn metrics_request_allows_missing_fields() {
-    let json = br#"{}"#;
+    let json = "{}";
     let req: MetricsRequest = serde_json::from_str(json).unwrap();
     assert_eq!(req.task_id, None);
     assert_eq!(req.since_ts, None);

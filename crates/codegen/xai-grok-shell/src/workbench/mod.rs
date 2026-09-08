@@ -22,6 +22,10 @@ pub mod cron;
 pub mod dispatcher;
 pub mod intervention;
 pub mod llm_stage;
+
+#[cfg(test)]
+pub mod test_helpers;
+
 pub mod main_session;
 pub mod metrics;
 pub mod mr_comments;
