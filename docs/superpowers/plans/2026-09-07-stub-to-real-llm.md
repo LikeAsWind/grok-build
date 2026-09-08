@@ -15,6 +15,18 @@
 - Real ACP child-session wiring, real diffs, and manual smoke validation are V2.6 work; the V2.5 implementation must not be treated as live LLM execution.
 - Existing unrelated validation failures remain documented below: metrics unit fixtures panic on missing rows, and several integration test files have pre-existing compile errors.
 
+### Task Status (2026-09-09)
+
+| Task | Status | Notes |
+|---|---|---|
+| 1.1-1.3 | Done | Trait, fake stage, and opt-in config are implemented. |
+| 2.1-2.3 | B-scope done | ACP wrapper and stage adapter are present as V2.5 stubs; real child-session wiring is deferred. |
+| 3.1-3.3 | Done | Orchestrator fallback path and dispatcher selection are implemented; `use_real_llm=true` safely falls back to canned execution. |
+| 4.1-4.3 | Done | E2E, parser, fake-stage, recovery, and metrics coverage added and targeted checks pass. |
+| 4.4 | Deferred | Requires a human-run real ACP smoke test after V2.6 wiring. |
+
+The unchecked task-by-task recipe below is retained as the original implementation history. The table above is the authoritative status for the selected B rollout.
+
 **Hard constraints** (from spec §4, must not be violated):
 
 - `pub async fn drive_task(...)` signature unchanged.

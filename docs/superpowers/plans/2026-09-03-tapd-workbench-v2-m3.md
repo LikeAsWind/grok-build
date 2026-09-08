@@ -1,5 +1,7 @@
 # TAPD Workbench Pipeline v2 — M3 Plan (Observability)
 
+> **Execution status (2026-09-09):** M3 implementation tasks are landed through `f0c96e2f`. The completion gate remains open because the repository has pre-existing metrics fixture failures and integration compile errors documented in the V2.5 plan; no tag or MR was created.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add v2 Theme 4 (Observability) per `docs/superpowers/specs/2026-09-03-tapd-workbench-v2-design.md` §9. Builds on M2 (tagged `v2-m2-control`). Purely additive: events + on-demand pull, no new event-log table.

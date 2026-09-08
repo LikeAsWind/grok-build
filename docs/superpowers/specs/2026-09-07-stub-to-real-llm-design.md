@@ -1,6 +1,6 @@
 # V2.5: Stub → Real LLM — Design Spec
 
-> Status: **Draft (awaiting user review)**
+> Status: **V2.5 B rollout implemented; real ACP wiring deferred to V2.6**
 > Date: 2026-09-07
 > Owner: workbench subsystem
 > Predecessor: `docs/superpowers/specs/2026-09-03-tapd-workbench-v2-design.md` (V2, shipped)
@@ -321,7 +321,8 @@ Replace planner / adjudicator / runner stubs; remove the feature flag once the o
 4. **Approach = A** (trait injection with FakeLlmStage). 2026-09-07.
 5. **Hard constraint: v1 public API unchanged.** 2026-09-07.
 6. **Default rollout: `use_real_llm = false` until manual smoke-test passes.** 2026-09-07.
-7. **No new dependencies.** 2026-09-07.
+7. **V2.5 B rollout boundary:** the current dispatcher is `Send + Sync` while `MvpAgent` is LocalSet-bound, so V2.5 keeps the canned stage and defers real ACP child-session injection to V2.6. 2026-09-09.
+8. **No new dependencies.** 2026-09-07.
 
 ---
 
@@ -344,4 +345,3 @@ Replace planner / adjudicator / runner stubs; remove the feature flag once the o
 2. **Internal consistency:** Architecture (§5) matches the Data Flow (§6). Components (§7) reference the same trait. Error Handling (§8) covers the cases the Architecture mentions.
 3. **Scope check:** One vertical slice (coder + reviewer), one new trait, one real impl, one fake. Fits in a single implementation plan.
 4. **Ambiguity check:** "primary_model" / "fallback_model" are pulled from `WorkbenchModelsConfig` (existing M1.2 field). "ACP child session" means `agent_client_protocol::SessionId` (existing type).
-
