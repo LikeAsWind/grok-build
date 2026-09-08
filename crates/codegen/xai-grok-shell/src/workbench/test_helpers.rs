@@ -58,7 +58,7 @@ impl LlmStage for FakeLlmStage {
     > {
         let input = input.clone();
         let resp = self.code_response.clone();
-        let fail = self.fail_code;
+        let fail = self.fail_code && input.attempt == 0;
         self.calls.lock().unwrap().push(RecordedCall {
             stage: "code",
             task_id: input.task_id.clone(),
@@ -86,7 +86,7 @@ impl LlmStage for FakeLlmStage {
     > {
         let input = input.clone();
         let resp = self.review_response.clone();
-        let fail = self.fail_review;
+        let fail = self.fail_review && input.attempt == 0;
         self.calls.lock().unwrap().push(RecordedCall {
             stage: "review",
             task_id: input.task_id.clone(),

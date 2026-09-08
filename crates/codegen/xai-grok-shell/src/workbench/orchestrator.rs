@@ -335,7 +335,7 @@ pub async fn drive_task(
                     started_at,
                     finished_at,
                     &out.model,
-                    if out.fallback_used { 1 } else { 0 },
+                    if develop_fallback_used || out.fallback_used { 1 } else { 0 },
                     out.child_session_id.as_deref(),
                 );
                 break out;
@@ -412,7 +412,7 @@ pub async fn drive_task(
                     started_at,
                     finished_at,
                     &out.model,
-                    if out.fallback_used { 1 } else { 0 },
+                    if review_fallback_used || out.fallback_used { 1 } else { 0 },
                     out.child_session_id.as_deref(),
                 );
                 break out;
