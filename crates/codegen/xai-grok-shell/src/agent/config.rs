@@ -1369,6 +1369,10 @@ pub struct WorkbenchConfig {
     pub models: WorkbenchModelsConfig,
     pub adjudicate: WorkbenchAdjudicateConfig,
     pub notify: WorkbenchNotifyConfig,
+    /// V2.5: when true, the dispatcher wires `MvpAgentLlmStage` (real ACP);
+    /// when false (default), wires `FakeLlmStage` so v1/v2 behavior is preserved.
+    #[serde(default)]
+    pub use_real_llm: bool,
 }
 
 impl Default for WorkbenchConfig {
@@ -1382,6 +1386,7 @@ impl Default for WorkbenchConfig {
             models: WorkbenchModelsConfig::default(),
             adjudicate: WorkbenchAdjudicateConfig::default(),
             notify: WorkbenchNotifyConfig::default(),
+            use_real_llm: false,
         }
     }
 }
