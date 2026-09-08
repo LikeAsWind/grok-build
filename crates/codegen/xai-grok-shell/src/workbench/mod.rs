@@ -21,6 +21,7 @@ pub mod artifacts;
 pub mod cron;
 pub mod dispatcher;
 pub mod intervention;
+pub mod llm_stage;
 pub mod main_session;
 pub mod metrics;
 pub mod mr_comments;
