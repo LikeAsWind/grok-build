@@ -63,6 +63,12 @@ impl WorkbenchQueue {
     pub fn is_empty(&self) -> bool {
         self.heap.is_empty()
     }
+
+    /// Iterate queued tasks without removing them. Order is heap-internal, not
+    /// FIFO or priority -- use `pop` for the dispatched order.
+    pub fn iter_pending(&self) -> impl Iterator<Item = (usize, &PendingTask)> {
+        self.heap.iter().enumerate()
+    }
 }
 
 /// Tracks the dispatcher's two resource pools: active main sessions and
@@ -247,6 +253,11 @@ impl WorkbenchDispatcher {
             });
         }
 
+        // Re-trigger v2 §9.2.1: drain pending MR comments into the task's 1-design.md.
+        if let Err(e) = self.drain_mr_comment_retriggers() {
+            tracing::warn!("drain_mr_comment_retriggers failed: {e}");
+        }
+
         // 4. Emit a health snapshot so consumers can update UI
         let snap = self.health_snapshot();
         let snap = self.health_snapshot();
@@ -300,6 +311,40 @@ impl WorkbenchDispatcher {
         })
         .await
         .map_err(|e| anyhow::anyhow!("join error: {e}"))
+    }
+
+    /// v2 §9.2.1: drain pending MR comments by appending them to the task's
+    /// `1-design.md` and marking them consumed. Best-effort: errors are logged
+    /// but do not abort the dispatch loop.
+    fn drain_mr_comment_retriggers(&self) -> anyhow::Result<()> {
+        use crate::workbench::mr_comments::{append_to_design_and_consume, pending_for};
+        // Snapshot the queued tapd_ids (under lock) then drop the lock before I/O.
+        let tapd_ids: Vec<String> = {
+            let q = self.queue.lock();
+            q.iter_pending().map(|(_, t)| t.tapd_id.clone()).collect()
+        };
+        for tapd_id in tapd_ids {
+            let pending = match pending_for(&self.store, &tapd_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(tapd_id, "pending_for failed: {e}");
+                    continue;
+                }
+            };
+            for comment in pending {
+                let design_path = self
+                    .grok_home
+                    .join("worktrees")
+                    .join(&tapd_id)
+                    .join(".workbench")
+                    .join("stages")
+                    .join("1-design.md");
+                if let Err(e) = append_to_design_and_consume(&self.store, &comment, &design_path) {
+                    tracing::warn!(tapd_id, comment_id = comment.id, "retrigger append failed: {e}");
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn health_snapshot(&self) -> HealthSnapshot {
