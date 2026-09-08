@@ -17,13 +17,16 @@ use crate::agent::config::{GitlabConfig, Priority};use crate::tapd::store::Tapd
 use crate::workbench::orchestrator::{drive_task, OrchestratorInputs};
 use crate::workbench::submitter::GitlabClient;
 
-fn stage_for_config(use_real_llm: bool) -> crate::workbench::llm_stage::DynLlmStage {
+fn stage_for_config(
+    use_real_llm: bool,
+    models: crate::agent::config::WorkbenchModelsConfig,
+) -> crate::workbench::llm_stage::DynLlmStage {
     if use_real_llm {
         tracing::warn!(
             "workbench.use_real_llm is enabled, but V2.6 ACP injection is not available; using the safe V2.5 canned stage"
         );
     }
-    crate::workbench::orchestrator::FakeLlmStageAlwaysOk::default_into_dyn()
+    crate::workbench::orchestrator::FakeLlmStageAlwaysOk::into_dyn_with_models(models)
 }
 
 /// One pending task in the dispatcher's queue.
@@ -294,6 +297,7 @@ impl WorkbenchDispatcher {
         let store = self.store.clone();
         let gitlab = self.gitlab.clone();
         let use_real_llm = self.cfg.use_real_llm;
+        let models = self.cfg.models.clone();
         let session_id_for_blocking = session_id.clone();
         tokio::task::spawn_blocking(move || -> String {
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
@@ -317,7 +321,7 @@ impl WorkbenchDispatcher {
                         project_id: "1".into(),
                         llm_stage: crate::workbench::orchestrator::FakeLlmStageAlwaysOk::default_into_dyn(),
                     }
-                    .with_llm_stage(stage_for_config(use_real_llm));
+                    .with_llm_stage(stage_for_config(use_real_llm, models));
                     let _ = drive_task(store.clone(), &g, inputs, None).await;
                 }
             });

@@ -80,6 +80,10 @@ pub struct ReviewOutputs {
 // single-threaded architecture and the hard constraint that drive_task public
 // signature stays unchanged (Task 3.1).
 pub trait LlmStage {
+    fn models(&self) -> crate::agent::config::WorkbenchModelsConfig {
+        crate::agent::config::WorkbenchModelsConfig::default()
+    }
+
     fn code<'a>(&'a self, input: &'a CodeInputs) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = anyhow::Result<CodeOutputs>> + 'a>
     >;

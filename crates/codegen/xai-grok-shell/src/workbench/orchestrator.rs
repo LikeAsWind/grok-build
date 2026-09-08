@@ -99,6 +99,40 @@ impl FakeLlmStageAlwaysOk {
     pub fn default_into_dyn() -> crate::workbench::llm_stage::DynLlmStage {
         std::sync::Arc::new(Self) as crate::workbench::llm_stage::DynLlmStage
     }
+
+    pub fn into_dyn_with_models(
+        models: WorkbenchModelsConfig,
+    ) -> crate::workbench::llm_stage::DynLlmStage {
+        std::sync::Arc::new(ConfiguredFakeLlmStage { models })
+    }
+}
+
+struct ConfiguredFakeLlmStage {
+    models: WorkbenchModelsConfig,
+}
+
+impl crate::workbench::llm_stage::LlmStage for ConfiguredFakeLlmStage {
+    fn models(&self) -> WorkbenchModelsConfig {
+        self.models.clone()
+    }
+
+    fn code<'a>(&'a self, input: &'a crate::workbench::llm_stage::CodeInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<crate::workbench::llm_stage::CodeOutputs>> + 'a>
+    > {
+        <FakeLlmStageAlwaysOk as crate::workbench::llm_stage::LlmStage>::code(
+            &FakeLlmStageAlwaysOk,
+            input,
+        )
+    }
+
+    fn review<'a>(&'a self, input: &'a crate::workbench::llm_stage::ReviewInputs) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<crate::workbench::llm_stage::ReviewOutputs>> + 'a>
+    > {
+        <FakeLlmStageAlwaysOk as crate::workbench::llm_stage::LlmStage>::review(
+            &FakeLlmStageAlwaysOk,
+            input,
+        )
+    }
 }
 
 use crate::agent::config::WorkbenchModelsConfig;
@@ -282,7 +316,7 @@ pub async fn drive_task(
     )?;
     let mut state = TaskState::Pending;
     save_state(&wt_path, &state)?;
-    let models = crate::agent::config::WorkbenchModelsConfig::default();
+    let models = inputs.llm_stage.models();
 
     // 1. Brainstorm
     if let Some(dead_state) = check_cancel() {
