@@ -12,7 +12,6 @@ import { useTranslation } from 'react-i18next'
 import { Dialog } from '../../components/ui/Dialog'
 import { Button } from '../../components/ui/Button'
 import { acpExtRequest } from '../../api/acpBridge'
-import { handleError } from '../../utils'
 
 const STAGES = [
   'brainstorm', 'adjudicate', 'develop', 'code_review', 'verify', 'mr_submit',
@@ -52,12 +51,12 @@ export function ReplayDialog({
         tapd_id: tapdId,
         replay_from: stage,
         reason: reason.trim() || null,
-        ...(allowPreApprove ? { pre_approved: preApprove } : {}),
+        ...(allowPreApprove && preApprove ? { pre_approved: true } : {}),
       })
       onReplayed?.(stage)
       onClose()
     } catch (e) {
-      setError(handleError(e).message)
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSubmitting(false)
     }
@@ -82,7 +81,7 @@ export function ReplayDialog({
             {STAGES.map((s) => (
               <option key={s} value={s}>
                 {t(`replayStage_${s}`)}
-              </option>,
+              </option>
             ))}
           </select>
         </label>

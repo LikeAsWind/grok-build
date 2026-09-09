@@ -25,7 +25,7 @@ vi.mock('../../components/ui/Dialog', () => ({
 
 vi.mock('../../components/ui/Button', () => ({
   Button: ({ children, onClick, disabled }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean }) => (
-    <button onClick={onClick} disabled={disabled}>{children}</button>,
+    <button onClick={onClick} disabled={disabled}>{children}</button>
   ),
 }))
 
@@ -66,16 +66,20 @@ describe('ReplayDialog', () => {
   })
 
   it('hides pre_approve checkbox unless allowPreApprove + stage=adjudicate', () => {
-    const { rerender } = render(<ReplayDialog isOpen tapdId="TAPD-1" onClose={vi.fn()} />)
     // Default: allowPreApprove=false -> no checkbox
+    const noPreApprove = render(<ReplayDialog isOpen tapdId="TAPD-1" onClose={vi.fn()} />)
     expect(screen.queryByText('replayDialogPreApprove')).toBeNull()
+    noPreApprove.unmount()
 
     // allowPreApprove=true but stage=develop -> still no checkbox
-    rerender(<ReplayDialog isOpen tapdId="TAPD-1" allowPreApprove onClose={vi.fn()} />)
+    const wrongStage = render(<ReplayDialog isOpen tapdId="TAPD-1" allowPreApprove onClose={vi.fn()} />)
     expect(screen.queryByText('replayDialogPreApprove')).toBeNull()
+    wrongStage.unmount()
 
-    // allowPreApprove=true AND stage=adjudicate -> checkbox appears
-    rerender(<ReplayDialog isOpen tapdId="TAPD-1" allowPreApprove defaultStage="adjudicate" onClose={vi.fn()} />)
+    // allowPreApprove=true AND stage=adjudicate -> checkbox appears. Must be a
+    // fresh mount: `stage` is seeded by useState(defaultStage), which only
+    // evaluates once, so a rerender would keep the original 'develop'.
+    render(<ReplayDialog isOpen tapdId="TAPD-1" allowPreApprove defaultStage="adjudicate" onClose={vi.fn()} />)
     expect(screen.getByText('replayDialogPreApprove')).toBeInTheDocument()
   })
 

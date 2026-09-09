@@ -22,7 +22,7 @@ vi.mock('../../components/ui/Dialog', () => ({
 
 vi.mock('../../components/ui/Button', () => ({
   Button: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
-    <button onClick={onClick}>{children}</button>,
+    <button onClick={onClick}>{children}</button>
   ),
 }));
 

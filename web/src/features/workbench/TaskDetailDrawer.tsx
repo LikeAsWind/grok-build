@@ -33,7 +33,16 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
   )
 }
 
-export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
+export function TaskDetailDrawer({
+  task,
+  onClose,
+  onPause,
+  onShowTimeline,
+  onResume,
+  onCancel,
+  onReplay,
+  hasDesignDoc,
+}: TaskDetailDrawerProps) {
   const { t } = useTranslation('workbench')
   const badge = task ? queueStateBadge(task.queueState) : null
 
@@ -72,7 +81,6 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
         <div className="mt-4 pt-3 border-t border-border-200/40">
           <h3 className="text-sm font-semibold mb-2">Pipeline</h3>
           <StageTimeline current="brainstorm" />
-        {task && (
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               className="rounded border border-border-200/40 px-2 py-1 text-[length:var(--fs-xs)] text-text-200 hover:bg-bg-200"
@@ -98,13 +106,15 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
             >
               {t('replay')}
             </button>
+            <button
+              className="rounded border border-border-200/40 px-2 py-1 text-[length:var(--fs-xs)] text-text-200 hover:bg-bg-200"
+              onClick={() => onShowTimeline?.(task.tapdId)}
+            >
+              {t('timeline')}
+            </button>
           </div>
-        )}
-      </div>
+        </div>
       )}
     </Dialog>
   )
 }
-
-  "timeline": "Timeline",
-

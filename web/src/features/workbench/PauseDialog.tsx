@@ -11,7 +11,6 @@ import { useTranslation } from 'react-i18next'
 import { Dialog } from '../../components/ui/Dialog'
 import { Button } from '../../components/ui/Button'
 import { acpExtRequest } from '../../api/acpBridge'
-import { handleError } from '../../utils'
 
 export interface PauseDialogProps {
   isOpen: boolean
@@ -37,7 +36,7 @@ export function PauseDialog({ isOpen, tapdId, onClose, onPaused }: PauseDialogPr
       onPaused?.()
       onClose()
     } catch (e) {
-      setError(handleError(e).message)
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSubmitting(false)
     }

@@ -6,13 +6,17 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CronSettingsPanel } from './CronSettingsPanel'
 
-const { getCronYamlMock, saveCronYamlMock } = vi.hoisted(() => ({
+const { getCronYamlMock, saveCronYamlMock, tMock } = vi.hoisted(() => ({
   getCronYamlMock: vi.fn(),
   saveCronYamlMock: vi.fn(),
+  // Stable identity: the panel's fetch effect depends on [t] (repo convention),
+  // and the real react-i18next returns a stable t. A fresh arrow per render
+  // would re-run the effect forever.
+  tMock: (key: string) => key,
 }))
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: tMock }),
 }))
 
 vi.mock('../../api/grokConfig', () => ({
@@ -71,12 +75,13 @@ describe('CronSettingsPanel', () => {
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
     await waitFor(() => expect(saveCronYamlMock).toHaveBeenCalledTimes(1));
-    // Body shape: { content: string }
-    const call = saveCronYamlMock.mock.calls[0][0] as { content: string };
-    expect(typeof call.content).toBe('string');
-    expect(call.content).toContain('0 0 17 * * MON *');
+    // saveCronYaml(content: string) -- the { content } envelope is built inside
+    // the helper, so the first argument here is the raw YAML string.
+    const content = saveCronYamlMock.mock.calls[0][0] as string;
+    expect(typeof content).toBe('string');
+    expect(content).toContain('0 0 17 * * MON *');
     // Original YAML is unchanged, so the new content should differ from it.
-    expect(call.content).not.toBe(YAML);
+    expect(content).not.toBe(YAML);
   });
 
   it('shows error if saveCronYaml rejects', async () => {
@@ -94,6 +99,5 @@ describe('CronSettingsPanel', () => {
     getCronYamlMock.mockRejectedValueOnce(new Error('load failed'));
     render(<CronSettingsPanel />);
     await waitFor(() => expect(screen.getByText('load failed')).toBeInTheDocument());
- .catch(() => {/* expected error UI state */});
   });
 })

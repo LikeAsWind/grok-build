@@ -7,7 +7,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getCronYaml, saveCronYaml } from '../../api/grokConfig'
-import { handleError } from '../../utils'
 
 interface CronSchedule {
   cron: string
@@ -61,7 +60,7 @@ function parseCronYaml(content: string): ProjectSchedule[] {
     if (!line.trim()) continue;
     const indent = line.length - line.trimStart().length;
     if (indent === 0 && line.startsWith('projects:')) continue;
-    if (indent === 2 && line.startsWith('- key:')) {
+    if (indent === 2 && line.trim().startsWith('- key:')) {
       flushSchedule();
       const m = line.match(/^\s*- key:\s*(.+)$/);
       const key = m ? m[1].trim().replace(/^['"]|['"]$/g, '') : '';
@@ -117,11 +116,12 @@ export function CronSettingsPanel() {
         setOriginal(file.content);
         setProjects(parseCronYaml(file.content));
       })
-      .catch((e) => setError(handleError(e).message || t('cronLoadFailed')));
+      .catch((e) => setError((e instanceof Error ? e.message : String(e)) || t('cronLoadFailed')))
       .finally(() => setLoading(false));
   }, [t]);
 
-  const dirty = serializeCronYaml(projects) !== original;
+  // parseCronYaml is lossy (comments, quoting, spacing), so a string compare reports phantom dirt.
+  const dirty = JSON.stringify(projects) !== JSON.stringify(parseCronYaml(original));
 
   const handleSave = async () => {
     setSaving(true);
@@ -132,7 +132,7 @@ export function CronSettingsPanel() {
       setOriginal(content);
       setSavedAt(Date.now());
     } catch (e) {
-      setError(handleError(e).message || t('cronSaveFailed'));
+      setError((e instanceof Error ? e.message : String(e)) || t('cronSaveFailed'));
     } finally {
       setSaving(false);
     }

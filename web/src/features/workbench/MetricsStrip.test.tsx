@@ -18,8 +18,9 @@ describe('MetricsStrip', () => {
     ]} max_ms={1000} />);
     expect(screen.getByText('develop')).toBeInTheDocument();
     expect(screen.getByText('verify')).toBeInTheDocument();
-    expect(screen.getByText('p50')).toBeInTheDocument();
-    expect(screen.getByText('p90')).toBeInTheDocument();
+    // One p50/p90 label pair per stage column.
+    expect(screen.getAllByText('p50')).toHaveLength(2);
+    expect(screen.getAllByText('p90')).toHaveLength(2);
   });
 
   it('scales bars so the largest p90 reads as ~100%', () => {

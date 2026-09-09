@@ -10,7 +10,6 @@ import { useTranslation } from 'react-i18next'
 import { Dialog } from '../../components/ui/Dialog'
 import { Button } from '../../components/ui/Button'
 import { acpExtRequest } from '../../api/acpBridge'
-import { handleError } from '../../utils'
 
 interface TimelineEvent {
   ts: number;
@@ -50,7 +49,7 @@ export function TimelineDrawer({ isOpen, tapdId, onClose }: TimelineDrawerProps)
         const data = resp as TimelineResponse;
         setEvents(data.events ?? []);
       })
-      .catch((e) => setError(handleError(e).message));
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, [isOpen, tapdId]);
 

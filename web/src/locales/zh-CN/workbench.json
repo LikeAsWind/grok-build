@@ -99,6 +99,7 @@
     "hoursIn": "{{count}} 小时后",
     "daysAgo": "{{count}} 天前",
     "daysIn": "{{count}} 天后"
+  },
   "cronSaveFailed": "保存 cron.yaml 失败。",
   "cronLoadFailed": "加载后端 cron.yaml 失败。",
   "cronSaved": "已保存。",
@@ -115,5 +116,5 @@
   "cronSettingsTitle": "Cron 调度",
   "timelineEmpty": "暂无事件。",
   "timelineDrawerTitle": "任务时间线",
-  }
+  "timeline": "时间线"
 }

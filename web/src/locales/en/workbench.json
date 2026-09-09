@@ -99,6 +99,7 @@
     "hoursIn": "in {{count}}h",
     "daysAgo": "{{count}}d ago",
     "daysIn": "in {{count}}d"
+  },
   "cronSaveFailed": "Failed to save cron.yaml.",
   "cronLoadFailed": "Failed to load cron.yaml from the backend.",
   "cronSaved": "Saved.",
@@ -115,5 +116,5 @@
   "cronSettingsTitle": "Cron schedules",
   "timelineEmpty": "No events yet.",
   "timelineDrawerTitle": "Task timeline",
-  }
+  "timeline": "Timeline"
 }
